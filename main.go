@@ -1,150 +1,242 @@
 package main
 
 import (
-  "context"
-  "fmt"
-  "time"
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-  "github.com/andreimerlescu/figtree/v2"
+	"github.com/andreimerlescu/figtree/v2"
 )
 
 const (
-  defaultHit string = "http://localhost:8080/about"
-  defaultWith int64 = 369
-  defaultUsing int64 = 17
-  defaultUntil time.Duration = 144 * time.Second
-  defaultRamp time.Duration = 12 * time.Minute
-  defaultBoost int = 1
-)
+	// Entry point defaults
+	defaultHit        string        = "http://localhost:8080/"
+	defaultTerrain    int64         = 50
+	defaultPack       int64         = 50
+	defaultLimit      int           = 100
+	defaultUntil      time.Duration = 30 * time.Second
+	defaultRamp       time.Duration = 5 * time.Minute
+	defaultCrawl      bool          = false
+	defaultCrawlDepth int           = 3
 
-type (
-  application struct {
-    ctx context.Context
-    figs figtree.Plant
-  }
+	// Save location defaults
+	defaultSaveTo string = "."
+
+	// Dashboard
+	defaultDashboardPort int = 4000
+
+	// Version
+	version = "1.0.0"
+
+	// Sanity thresholds for boot warnings
+	warnTotalLemmings  int64 = 100_000
+	warnTotalGoroutines int64 = 10_000
 )
 
 func main() {
-  app := application{
-    ctx: context.Background(),
-  }
-  app.figs = figtree.Grow()
-  // lemmings -hit <endpoint> -with <quantity> -using <concurrency> -until 3s -ramp 5m -boost -1
-  // lemmings -h http://localhost:8080/about -w 10000 -u 100 -u 3s -r 5m -b -1
-  
-  // existing figtree usage
-  app.figs.NewString("hit", defaultHit, "URL lemmings access")
-          .WithAlias("hit", "h")
-          .WithValidator("hit", figtree.AssureStringNotEmpty)
-          .WithValidator("hit", figtree.AssureStringHasPrefix("http"))
-  app.figs.NewInt64("with", defaultWith, "Number of lemmings per channel")
-          .WithAlias("with", "w")
-          .WithValidator("with", figtree.AssureInt64InRange(1,1_000_000))
-  app.figs.NewInt64("using", defaultUsing, "Number of channels to send lemmings into")
-          .WithAlias("using", "u")
-          .WithValidator("using", figtree.AssureInt64InRange(1,1_000_000))
-  app.figs.NewDuration("until", defaultFor, "Duration of lemming visit per hit")
-          .WithAlias("until", "f")
-          .WithValidator("until", figtree.AssureDurationGreaterThan(0.0))
-          .WithValidator("until", figtree.AssureDurationLessThan(time.Hour))
-  app.figs.NewDuration("ramp", defaultRamp, "Time it takes to get to 50% concurrency")
-          .WithAlias("ramp", "r")
-          .WithValidator("ramp", figtree.AssureDurationGreaterThan(0.0))    
-          .WithValidator("ramp", figtree.AssureDurationLessThan(time.Hour))
-  app.figs.NewInt("boost", defaultBoost, "Threads to use for concurrency")
-          .WithAlias("boost", "b")
-          .WithValidator("boost", figtree.AssureIntInRange(-1,1_000))
-  app.figs.NewBool("crawl", defaultCrawl, "When true, crawl up to -crawl-depth links deep")
-          .WithAlias("crawl", "c")
-  app.figs.NewBool("crawl-depth", defaultCrawlDepth, "How many links deep to crawl")
-          .WithAlias("crawl-depth", "cd")
-          .WithValidator("crawl-depth", figtree.AssureIntInRange(1,100))
-  
-  if len(app.figs.Problems()) > 0 {
-    for _, problem := range app.figs.Problems() {
-      fmt.Println(problem)
-    }
-  }
+	// Root context with signal cancellation
+	ctx, cancel := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer cancel()
 
-  if err := app.figs.Load(); err != nil {
-    fmt.Fatalln(err)
-  }
+	// ── CLI Configuration via figtree ──────────────────────
 
-  if err := app.Start(); err != nil {
-    log.Fatalln(err)
-  }
+	figs := figtree.Grow()
 
+	// Target
+	figs.NewString("hit", defaultHit, "Origin URL for lemmings to traverse").
+		WithAlias("hit", "h").
+		WithValidator("hit", figtree.AssureStringNotEmpty).
+		WithValidator("hit", figtree.AssureStringHasPrefix("http"))
+
+	// Concurrency shape
+	figs.NewInt64("terrain", defaultTerrain, "Number of terrain goroutine groups (states)").
+		WithAlias("terrain", "t").
+		WithValidator("terrain", figtree.AssureInt64InRange(1, 10_000))
+
+	figs.NewInt64("pack", defaultPack, "Number of lemmings per terrain group (cities)").
+		WithAlias("pack", "p").
+		WithValidator("pack", figtree.AssureInt64InRange(1, 100_000))
+
+	figs.NewInt("limit", defaultLimit,
+		"Semaphore ceiling for concurrent goroutines. -1 disables the ceiling entirely (dangerous)").
+		WithAlias("limit", "l").
+		WithValidator("limit", figtree.AssureIntInRange(-1, 1_000_000))
+
+	// Timing
+	figs.NewDuration("until", defaultUntil, "How long each lemming lives").
+		WithAlias("until", "u").
+		WithValidator("until", figtree.AssureDurationGreaterThan(0)).
+		WithValidator("until", figtree.AssureDurationLessThan(24*time.Hour))
+
+	figs.NewDuration("ramp", defaultRamp, "Duration to bring all terrain groups online").
+		WithAlias("ramp", "r").
+		WithValidator("ramp", figtree.AssureDurationGreaterThan(0)).
+		WithValidator("ramp", figtree.AssureDurationLessThan(24*time.Hour))
+
+	// Navigation
+	figs.NewBool("crawl", defaultCrawl, "Crawl origin for links when sitemap unavailable").
+		WithAlias("crawl", "c")
+
+	figs.NewInt("crawl-depth", defaultCrawlDepth, "How many links deep to crawl").
+		WithAlias("crawl-depth", "cd").
+		WithValidator("crawl-depth", figtree.AssureIntInRange(1, 100))
+
+	// Output
+	figs.NewString("save-to", defaultSaveTo,
+		"Report destination — local path or s3:// URI. Env: LEMMINGS_SAVE_TO").
+		WithAlias("save-to", "s").
+		WithValidator("save-to", figtree.AssureStringNotEmpty)
+
+	figs.NewInt("dashboard-port", defaultDashboardPort, "Port for the live dashboard").
+		WithAlias("dashboard-port", "dp").
+		WithValidator("dashboard-port", figtree.AssureIntInRange(1024, 65535))
+
+	// ── Validate and load ───────────────────────────────────
+
+	if problems := figs.Problems(); len(problems) > 0 {
+		for _, p := range problems {
+			fmt.Fprintln(os.Stderr, "config error:", p)
+		}
+		os.Exit(1)
+	}
+
+	if err := figs.Load(); err != nil {
+		log.Fatalf("failed to load configuration: %v", err)
+	}
+
+	// ── Env overrides ───────────────────────────────────────
+	// LEMMINGS_SAVE_TO overrides -save-to if set
+	saveTo := *figs.String("save-to")
+	if env := os.Getenv("LEMMINGS_SAVE_TO"); env != "" {
+		saveTo = env
+	}
+
+	// ── Build SwarmConfig ───────────────────────────────────
+
+	cfg := SwarmConfig{
+		Hit:           *figs.String("hit"),
+		Terrain:       *figs.Int64("terrain"),
+		Pack:          *figs.Int64("pack"),
+		Limit:         *figs.Int("limit"),
+		Until:         *figs.Duration("until"),
+		Ramp:          *figs.Duration("ramp"),
+		Crawl:         *figs.Bool("crawl"),
+		CrawlDepth:    *figs.Int("crawl-depth"),
+		SaveTo:        saveTo,
+		DashboardPort: *figs.Int("dashboard-port"),
+		Version:       version,
+	}
+
+	// ── Boot summary ────────────────────────────────────────
+	printBootSummary(cfg)
+
+	// ── Initialize swarm ────────────────────────────────────
+	swarm, err := NewSwarm(ctx, cfg)
+	if err != nil {
+		log.Fatalf("failed to initialize swarm: %v", err)
+	}
+
+	// ── Run ─────────────────────────────────────────────────
+	if err := swarm.Run(); err != nil {
+		log.Fatalf("swarm error: %v", err)
+	}
+
+	// ── Report ──────────────────────────────────────────────
+	if err := swarm.Report(); err != nil {
+		log.Fatalf("report error: %v", err)
+	}
 }
 
-func (app *application) Start() error {
-  // lemmings main entry start point 
+// printBootSummary writes the pre-flight plan to STDOUT so the engineer
+// knows exactly what is about to happen before a single lemming moves.
+func printBootSummary(cfg SwarmConfig) {
+	total := cfg.Terrain * cfg.Pack
 
-  if err := app.rampUp(); err != nil {
-    log.Println(err)
-    return err
-  }
+	// Wall clock estimate:
+	// ramp brings terrains online linearly, then all lemmings live for -until.
+	// Worst case wall clock = ramp + until.
+	wallClock := cfg.Ramp + cfg.Until
 
-  
+	fmt.Printf("\nlemmings v%s\n", cfg.Version)
+	fmt.Println("─────────────────────────────────────────")
+	fmt.Printf("  target:      %s\n", cfg.Hit)
+	fmt.Println()
+	fmt.Printf("  terrain:     %s groups\n", formatInt(cfg.Terrain))
+	fmt.Printf("  pack:        %s lemmings per terrain\n", formatInt(cfg.Pack))
+	fmt.Printf("  total:       %s lemmings\n", formatInt(total))
+	fmt.Println()
+	fmt.Printf("  until:       %s per lemming\n", cfg.Until)
+	fmt.Printf("  ramp:        %s to full concurrency\n", cfg.Ramp)
+	fmt.Printf("  est. duration: ~%s wall clock\n", wallClock.Round(time.Second))
+	fmt.Println()
+
+	limitStr := fmt.Sprintf("%d goroutines", cfg.Limit)
+	if cfg.Limit == -1 {
+		limitStr = "UNLIMITED (⚠ danger zone)"
+	}
+	fmt.Printf("  limit:       %s\n", limitStr)
+	fmt.Printf("  crawl:       %v (depth: %d)\n", cfg.Crawl, cfg.CrawlDepth)
+	fmt.Printf("  save-to:     %s\n", cfg.SaveTo)
+	fmt.Printf("  dashboard:   http://localhost:%d\n", cfg.DashboardPort)
+	fmt.Println()
+
+	// ── Sanity warnings ──────────────────────────────────────
+	warned := false
+
+	if total > warnTotalLemmings {
+		fmt.Printf("  ⚠  WARNING: %s total lemmings is a large run.\n",
+			formatInt(total))
+		fmt.Printf("              ensure your system and target can handle this load.\n")
+		warned = true
+	}
+
+	if cfg.Terrain > warnTotalGoroutines {
+		fmt.Printf("  ⚠  WARNING: %s terrain groups means %s goroutines\n",
+			formatInt(cfg.Terrain), formatInt(cfg.Terrain))
+		fmt.Printf("              at the terrain layer alone before packs spawn.\n")
+		warned = true
+	}
+
+	if cfg.Limit == -1 {
+		fmt.Printf("  ⚠  WARNING: -limit=-1 disables the semaphore entirely.\n")
+		fmt.Printf("              %s goroutines may spawn simultaneously.\n",
+			formatInt(total))
+		warned = true
+	}
+
+	if warned {
+		fmt.Println()
+	}
+
+	fmt.Println("─────────────────────────────────────────")
+	fmt.Println("  lemmings are gathering...")
+	fmt.Println()
 }
 
-func (app *application) rampUp() error {
-  ctx, cancel := context.WithTimeout(app.ctx, 5*time.Minute)
-  defer cancel()
-  for range *app.figs.Int64("using") {
-    go app.spawn(*app.figs.String("hit"))
-  }
+// formatInt formats an int64 with comma separators
+func formatInt(n int64) string {
+	str := fmt.Sprintf("%d", n)
+	if len(str) <= 3 {
+		return str
+	}
+	result := make([]byte, 0, len(str)+(len(str)-1)/3)
+	offset := len(str) % 3
+	if offset > 0 {
+		result = append(result, str[:offset]...)
+	}
+	for i := offset; i < len(str); i += 3 {
+		if len(result) > 0 {
+			result = append(result, ',')
+		}
+		result = append(result, str[i:i+3]...)
+	}
+	return string(result)
 }
-
-func (app *application) spawn(in string) {
-  ctx, cancel := context.WithTimeout(app.ctx, *app.figs.UnitDuration("until",time.Second))
-  defer cancel()
-  if _, err := app.DownloadPath(in); err != nil {
-    log.Println(err)
-  }
-  time.Sleep(*app.figs.UnitDuration("until", time.Seconds))
-}
-
-func (app *application) Crawl(start string) error {
-  ctx, cancel := context.WithTimeout(app.ctx, 5*time.Minute)
-  defer cancel()
-
-  if len(start) == 0 {
-    start = *app.figs.String("hit")
-  }
-  
-  hitBytes, bytesErr := app.DownloadPath(start)
-  if bytesErr != nil {
-    log.Println(bytesErr)
-    return bytesErr
-  }
-
-  links, extractErr := app.ExtractLinks(hitBytes)
-  if extractErr != nil {
-    log.Println(extractErr)
-    return extractErr
-  }
-
-  for _, link := range links {
-    err := app.Crawl(link)
-    if err != nil {
-      log.Println(err)
-    }
-  }
-}
-
-// DownloadPath acquires the bytes from the [in] path and retuns the `[]byte` or error from the endpoint
-func (app *application) DownloadPath(in string) ([]byte, error) {
-
-}
-
-// ExtractLinks returns an array of paths that exist in the body of the -hit | -h endpoint
-func (app *application) ExtractLinks(in []byte) ([]string, error) {
-
-}
-
-// IndexSitemap returns an array of paths that exist in sitemap.xml
-func (app *application) IndexSitemap(in string) ([]string, error) {
-
-}
-
-
