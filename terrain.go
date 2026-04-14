@@ -65,11 +65,9 @@ func (t *Terrain) Wait() {
 // spawnLemming acquires the semaphore, constructs the lemming, runs it,
 // and sends its LifeLog home when it dies.
 func (t *Terrain) spawnLemming(ctx context.Context, packIndex int64) {
-	defer t.wg.Done()
+	defer t.wg.Done() // handles ALL exit paths cleanly
 
-	// Acquire semaphore slot — blocks if at ceiling, respects ctx cancellation
 	if err := t.sem.Acquire(ctx); err != nil {
-		// Context cancelled before we could acquire — lemming never born
 		t.metrics.LemmingsFailed.Add(1)
 		t.bus.Emit(Event{
 			Kind:    EventLemmingFailed,
@@ -77,15 +75,10 @@ func (t *Terrain) spawnLemming(ctx context.Context, packIndex int64) {
 			Pack:    int(packIndex),
 			Err:     err,
 		})
-		t.wg.Done()
-		// Note: we call wg.Done() above and deferred — double done.
-		// Fix: use a flag. See corrected pattern below.
-		return
+		return // defer fires here cleanly
 	}
 	defer t.sem.Release()
 
-	// Build the lemming's HTTP client with its own isolated cookie jar.
-	// publicsuffix.List ensures cookie scoping behaves like a real browser.
 	jar, err := cookiejar.New(&cookiejar.Options{
 		PublicSuffixList: publicsuffix.List,
 	})
@@ -97,14 +90,13 @@ func (t *Terrain) spawnLemming(ctx context.Context, packIndex int64) {
 			Pack:    int(packIndex),
 			Err:     err,
 		})
-		return
+		return // defer fires here cleanly
 	}
 
 	client := &http.Client{
 		Jar:     jar,
 		Timeout: t.cfg.Until,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			// Follow up to 10 redirects, matching real browser behavior
 			if len(via) >= 10 {
 				return http.ErrUseLastResponse
 			}
@@ -129,10 +121,7 @@ func (t *Terrain) spawnLemming(ctx context.Context, packIndex int64) {
 		Pack:    int(packIndex),
 	})
 
-	// Run blocks until the lemming's context expires
 	ll := lemming.Run(ctx)
-
-	// Lemming is dead — send its lifelog home
 	t.send(ll)
 
 	t.bus.Emit(Event{
