@@ -13,32 +13,25 @@ import (
 )
 
 const (
-	// Entry point defaults
-	defaultHit        string        = "http://localhost:8080/"
-	defaultTerrain    int64         = 50
-	defaultPack       int64         = 50
-	defaultLimit      int           = 100
-	defaultUntil      time.Duration = 30 * time.Second
-	defaultRamp       time.Duration = 5 * time.Minute
-	defaultCrawl      bool          = false
-	defaultCrawlDepth int           = 3
+	defaultHit           string        = "http://localhost:8080/"
+	defaultTerrain       int64         = 50
+	defaultPack          int64         = 50
+	defaultLimit         int           = 100
+	defaultUntil         time.Duration = 30 * time.Second
+	defaultRamp          time.Duration = 5 * time.Minute
+	defaultCrawl         bool          = false
+	defaultCrawlDepth    int           = 3
+	defaultSaveTo        string        = "."
+	defaultDashboardPort int           = 4000
+	defaultTTY           bool          = true  // ← new
 
-	// Save location defaults
-	defaultSaveTo string = "."
-
-	// Dashboard
-	defaultDashboardPort int = 4000
-
-	// Version
-	version = "1.0.0"
-
-	// Sanity thresholds for boot warnings
-	warnTotalLemmings  int64 = 100_000
+	warnTotalLemmings   int64 = 100_000
 	warnTotalGoroutines int64 = 10_000
+
+	version = "1.0.0"
 )
 
 func main() {
-	// Root context with signal cancellation
 	ctx, cancel := signal.NotifyContext(
 		context.Background(),
 		os.Interrupt,
@@ -46,17 +39,13 @@ func main() {
 	)
 	defer cancel()
 
-	// ── CLI Configuration via figtree ──────────────────────
-
 	figs := figtree.Grow()
 
-	// Target
 	figs.NewString("hit", defaultHit, "Origin URL for lemmings to traverse").
 		WithAlias("hit", "h").
 		WithValidator("hit", figtree.AssureStringNotEmpty).
 		WithValidator("hit", figtree.AssureStringHasPrefix("http"))
 
-	// Concurrency shape
 	figs.NewInt64("terrain", defaultTerrain, "Number of terrain goroutine groups (states)").
 		WithAlias("terrain", "t").
 		WithValidator("terrain", figtree.AssureInt64InRange(1, 10_000))
@@ -70,7 +59,6 @@ func main() {
 		WithAlias("limit", "l").
 		WithValidator("limit", figtree.AssureIntInRange(-1, 1_000_000))
 
-	// Timing
 	figs.NewDuration("until", defaultUntil, "How long each lemming lives").
 		WithAlias("until", "u").
 		WithValidator("until", figtree.AssureDurationGreaterThan(0)).
@@ -81,7 +69,6 @@ func main() {
 		WithValidator("ramp", figtree.AssureDurationGreaterThan(0)).
 		WithValidator("ramp", figtree.AssureDurationLessThan(24*time.Hour))
 
-	// Navigation
 	figs.NewBool("crawl", defaultCrawl, "Crawl origin for links when sitemap unavailable").
 		WithAlias("crawl", "c")
 
@@ -89,7 +76,6 @@ func main() {
 		WithAlias("crawl-depth", "cd").
 		WithValidator("crawl-depth", figtree.AssureIntInRange(1, 100))
 
-	// Output
 	figs.NewString("save-to", defaultSaveTo,
 		"Report destination — local path or s3:// URI. Env: LEMMINGS_SAVE_TO").
 		WithAlias("save-to", "s").
@@ -99,7 +85,9 @@ func main() {
 		WithAlias("dashboard-port", "dp").
 		WithValidator("dashboard-port", figtree.AssureIntInRange(1024, 65535))
 
-	// ── Validate and load ───────────────────────────────────
+	// ← new: no single-char alias, too easy to mistype in a script
+	figs.NewBool("tty", defaultTTY,
+		"Use carriage return for live STDOUT updates. Set false for CI pipelines")
 
 	if problems := figs.Problems(); len(problems) > 0 {
 		for _, p := range problems {
@@ -112,14 +100,10 @@ func main() {
 		log.Fatalf("failed to load configuration: %v", err)
 	}
 
-	// ── Env overrides ───────────────────────────────────────
-	// LEMMINGS_SAVE_TO overrides -save-to if set
 	saveTo := *figs.String("save-to")
 	if env := os.Getenv("LEMMINGS_SAVE_TO"); env != "" {
 		saveTo = env
 	}
-
-	// ── Build SwarmConfig ───────────────────────────────────
 
 	cfg := SwarmConfig{
 		Hit:           *figs.String("hit"),
@@ -132,49 +116,40 @@ func main() {
 		CrawlDepth:    *figs.Int("crawl-depth"),
 		SaveTo:        saveTo,
 		DashboardPort: *figs.Int("dashboard-port"),
+		TTY:           *figs.Bool("tty"), // ← new
 		Version:       version,
 	}
 
-	// ── Boot summary ────────────────────────────────────────
 	printBootSummary(cfg)
 
-	// ── Initialize swarm ────────────────────────────────────
 	swarm, err := NewSwarm(ctx, cfg)
 	if err != nil {
 		log.Fatalf("failed to initialize swarm: %v", err)
 	}
 
-	// ── Run ─────────────────────────────────────────────────
 	if err := swarm.Run(); err != nil {
 		log.Fatalf("swarm error: %v", err)
 	}
 
-	// ── Report ──────────────────────────────────────────────
 	if err := swarm.Report(); err != nil {
 		log.Fatalf("report error: %v", err)
 	}
 }
 
-// printBootSummary writes the pre-flight plan to STDOUT so the engineer
-// knows exactly what is about to happen before a single lemming moves.
 func printBootSummary(cfg SwarmConfig) {
 	total := cfg.Terrain * cfg.Pack
-
-	// Wall clock estimate:
-	// ramp brings terrains online linearly, then all lemmings live for -until.
-	// Worst case wall clock = ramp + until.
 	wallClock := cfg.Ramp + cfg.Until
 
 	fmt.Printf("\nlemmings v%s\n", cfg.Version)
 	fmt.Println("─────────────────────────────────────────")
-	fmt.Printf("  target:      %s\n", cfg.Hit)
+	fmt.Printf("  target:        %s\n", cfg.Hit)
 	fmt.Println()
-	fmt.Printf("  terrain:     %s groups\n", formatInt(cfg.Terrain))
-	fmt.Printf("  pack:        %s lemmings per terrain\n", formatInt(cfg.Pack))
-	fmt.Printf("  total:       %s lemmings\n", formatInt(total))
+	fmt.Printf("  terrain:       %s groups\n", formatInt(cfg.Terrain))
+	fmt.Printf("  pack:          %s lemmings per terrain\n", formatInt(cfg.Pack))
+	fmt.Printf("  total:         %s lemmings\n", formatInt(total))
 	fmt.Println()
-	fmt.Printf("  until:       %s per lemming\n", cfg.Until)
-	fmt.Printf("  ramp:        %s to full concurrency\n", cfg.Ramp)
+	fmt.Printf("  until:         %s per lemming\n", cfg.Until)
+	fmt.Printf("  ramp:          %s to full concurrency\n", cfg.Ramp)
 	fmt.Printf("  est. duration: ~%s wall clock\n", wallClock.Round(time.Second))
 	fmt.Println()
 
@@ -182,18 +157,17 @@ func printBootSummary(cfg SwarmConfig) {
 	if cfg.Limit == -1 {
 		limitStr = "UNLIMITED (⚠ danger zone)"
 	}
-	fmt.Printf("  limit:       %s\n", limitStr)
-	fmt.Printf("  crawl:       %v (depth: %d)\n", cfg.Crawl, cfg.CrawlDepth)
-	fmt.Printf("  save-to:     %s\n", cfg.SaveTo)
-	fmt.Printf("  dashboard:   http://localhost:%d\n", cfg.DashboardPort)
+	fmt.Printf("  limit:         %s\n", limitStr)
+	fmt.Printf("  crawl:         %v (depth: %d)\n", cfg.Crawl, cfg.CrawlDepth)
+	fmt.Printf("  save-to:       %s\n", cfg.SaveTo)
+	fmt.Printf("  tty:           %v\n", cfg.TTY)          // ← new
+	fmt.Printf("  dashboard:     http://localhost:%d\n", cfg.DashboardPort)
 	fmt.Println()
 
-	// ── Sanity warnings ──────────────────────────────────────
 	warned := false
 
 	if total > warnTotalLemmings {
-		fmt.Printf("  ⚠  WARNING: %s total lemmings is a large run.\n",
-			formatInt(total))
+		fmt.Printf("  ⚠  WARNING: %s total lemmings is a large run.\n", formatInt(total))
 		fmt.Printf("              ensure your system and target can handle this load.\n")
 		warned = true
 	}
@@ -221,7 +195,10 @@ func printBootSummary(cfg SwarmConfig) {
 	fmt.Println()
 }
 
-// formatInt formats an int64 with comma separators
+func formatTotal(terrain, pack int64) string {
+	return formatInt(terrain * pack)
+}
+
 func formatInt(n int64) string {
 	str := fmt.Sprintf("%d", n)
 	if len(str) <= 3 {
