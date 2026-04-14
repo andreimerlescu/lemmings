@@ -26,24 +26,31 @@ type SwarmConfig struct {
 	CrawlDepth    int
 	SaveTo        string
 	DashboardPort int
+	TTY           bool
 	Version       string
 }
 
-// SwarmMetrics holds the live atomic counters that both the STDOUT ticker
-// and the dashboard read from. Atomic so no lock needed on hot path.
+// SwarmMetrics holds live atomic counters readable by the ticker and dashboard.
 type SwarmMetrics struct {
 	LemmingsAlive     atomic.Int64
 	LemmingsCompleted atomic.Int64
 	LemmingsFailed    atomic.Int64
+	TerrainsOnline    atomic.Int64
 	TotalVisits       atomic.Int64
 	TotalBytes        atomic.Int64
-	TotalWaitingRoom  atomic.Int64 // lemmings that hit a waiting room at least once
+	TotalWaitingRoom  atomic.Int64
 	Total2xx          atomic.Int64
 	Total3xx          atomic.Int64
 	Total4xx          atomic.Int64
 	Total5xx          atomic.Int64
-	TerrainsOnline    atomic.Int64
+	OverflowLogs      atomic.Int64 // lifelogs that hit the overflow channel
+	DroppedLogs       atomic.Int64 // lifelogs dropped when both channels full
 }
+
+const (
+	primaryChanCap  = 500_000
+	overflowChanCap = 500_000
+)
 
 // Swarm is the top-level coordinator. One swarm per lemmings invocation.
 type Swarm struct {
@@ -52,13 +59,14 @@ type Swarm struct {
 	cancel    context.CancelFunc
 	pool      *URLPool
 	terrains  []*Terrain
-	results   chan LifeLog
+	primary   chan LifeLog
+	overflow  chan LifeLog
 	events    *EventBus
 	metrics   SwarmMetrics
 	reporter  *Reporter
 	dashboard *Dashboard
 	sema      sema.Semaphore
-	token     string    // dashboard auth token
+	token     string
 	startedAt time.Time
 	mu        sync.Mutex
 }
@@ -67,47 +75,39 @@ type Swarm struct {
 func NewSwarm(ctx context.Context, cfg SwarmConfig) (*Swarm, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
-	// Generate dashboard auth token
 	token, err := generateToken()
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to generate dashboard token: %w", err)
 	}
 
-	// Initialize semaphore
-	// -1 means unlimited: set ceiling to terrain*pack (the raw total)
 	limit := cfg.Limit
 	if limit == -1 {
 		limit = int(cfg.Terrain * cfg.Pack)
 	}
 	sem := sema.New(limit)
 
-	// Results channel — buffered to total lemmings so no lemming ever blocks
-	// on send at death. If total exceeds int, cap at a safe buffer.
-	total := cfg.Terrain * cfg.Pack
-	bufSize := int(total)
-	if bufSize > 1_000_000 {
-		bufSize = 1_000_000
+	// Primary channel: sized to actual total, capped at primaryChanCap
+	primarySize := int(cfg.Terrain * cfg.Pack)
+	if primarySize > primaryChanCap {
+		primarySize = primaryChanCap
 	}
-	results := make(chan LifeLog, bufSize)
 
-	// Event bus
 	bus := NewEventBus()
 
 	s := &Swarm{
-		cfg:     cfg,
-		ctx:     ctx,
-		cancel:  cancel,
-		results: results,
-		events:  bus,
-		sema:    sem,
-		token:   token,
+		cfg:      cfg,
+		ctx:      ctx,
+		cancel:   cancel,
+		primary:  make(chan LifeLog, primarySize),
+		overflow: make(chan LifeLog, overflowChanCap),
+		events:   bus,
+		sema:     sem,
+		token:    token,
 	}
 
-	// Print dashboard token to STDOUT — engineer enters this at localhost:4000
 	fmt.Printf("  dashboard token: %s\n\n", token)
 
-	// Index the URL pool before any lemming spawns
 	fmt.Println("  indexing origin...")
 	pool, err := BuildURLPool(ctx, cfg.Hit, cfg.Crawl, cfg.CrawlDepth)
 	if err != nil {
@@ -117,32 +117,45 @@ func NewSwarm(ctx context.Context, cfg SwarmConfig) (*Swarm, error) {
 	s.pool = pool
 	fmt.Printf("  indexed %d URLs from %s\n\n", len(pool.URLs), cfg.Hit)
 
-	// Build terrains — do not spawn lemmings yet, ramp does that
 	s.terrains = make([]*Terrain, cfg.Terrain)
 	for i := int64(0); i < cfg.Terrain; i++ {
-		s.terrains[i] = NewTerrain(i, cfg, pool, results, bus, sem, &s.metrics)
+		s.terrains[i] = NewTerrain(i, cfg, pool, s.sendLifeLog, bus, sem, &s.metrics)
 	}
 
-	// Wire reporter and dashboard
 	s.reporter = NewReporter(cfg)
 	s.dashboard = NewDashboard(cfg, bus, &s.metrics, token)
 
 	return s, nil
 }
 
-// Run starts the dashboard, begins the ramp scheduler, collects results,
-// and blocks until all lemmings have died or context is cancelled.
+// sendLifeLog is the non-blocking death drain. Primary first, overflow second,
+// drop counter third. A lemming never blocks at death.
+func (s *Swarm) sendLifeLog(ll LifeLog) {
+	select {
+	case s.primary <- ll:
+	default:
+		select {
+		case s.overflow <- ll:
+			s.metrics.OverflowLogs.Add(1)
+			s.events.Emit(Event{Kind: EventLogOverflow})
+		default:
+			s.metrics.DroppedLogs.Add(1)
+			s.events.Emit(Event{Kind: EventLogDropped})
+		}
+	}
+}
+
+// Run starts the dashboard, ramp scheduler, collector, and STDOUT ticker.
+// Blocks until all lemmings are dead and results are collected.
 func (s *Swarm) Run() error {
 	s.startedAt = time.Now()
 
-	// Start dashboard server
 	go func() {
 		if err := s.dashboard.Serve(s.ctx); err != nil {
 			log.Printf("dashboard error: %v", err)
 		}
 	}()
 
-	// Start result collector
 	var collectorWg sync.WaitGroup
 	collectorWg.Add(1)
 	go func() {
@@ -150,15 +163,12 @@ func (s *Swarm) Run() error {
 		s.collectResults()
 	}()
 
-	// Start STDOUT ticker
 	go s.tickSTDOUT()
 
-	// Ramp scheduler — brings terrains online over cfg.Ramp duration
 	if err := s.ramp(); err != nil {
 		return fmt.Errorf("ramp error: %w", err)
 	}
 
-	// Wait for all terrains to finish
 	var terrainWg sync.WaitGroup
 	for _, t := range s.terrains {
 		terrainWg.Add(1)
@@ -169,8 +179,8 @@ func (s *Swarm) Run() error {
 	}
 	terrainWg.Wait()
 
-	// All lemmings dead — close results channel so collector can drain and exit
-	close(s.results)
+	// All lemmings dead — close primary so collector drains and exits
+	close(s.primary)
 	collectorWg.Wait()
 
 	elapsed := time.Since(s.startedAt).Round(time.Second)
@@ -180,18 +190,14 @@ func (s *Swarm) Run() error {
 	return nil
 }
 
-// ramp brings terrain groups online sequentially over cfg.Ramp duration.
-// Each terrain is started with a linear delay between them.
-// If ctx is cancelled during ramp, we stop launching new terrains.
+// ramp brings terrain groups online linearly over cfg.Ramp duration.
 func (s *Swarm) ramp() error {
 	n := len(s.terrains)
 	if n == 0 {
 		return nil
 	}
 
-	// Interval between each terrain coming online
 	interval := s.cfg.Ramp / time.Duration(n)
-
 	fmt.Printf("  ramping %d terrain groups over %s (%s between each)\n\n",
 		n, s.cfg.Ramp, interval.Round(time.Millisecond))
 
@@ -210,7 +216,6 @@ func (s *Swarm) ramp() error {
 			Terrain: int(t.id),
 		})
 
-		// Don't sleep after the last terrain
 		if i < n-1 {
 			select {
 			case <-s.ctx.Done():
@@ -223,53 +228,84 @@ func (s *Swarm) ramp() error {
 	return nil
 }
 
-// collectResults drains the results channel until it is closed,
-// aggregating LifeLogs into the swarm's metric counters and reporter.
+// collectResults drains primary then overflow until primary is closed and
+// overflow is empty.
 func (s *Swarm) collectResults() {
-	for log := range s.results {
-		s.metrics.LemmingsCompleted.Add(1)
-		s.metrics.LemmingsAlive.Add(-1)
-
-		for _, visit := range log.Visits {
-			s.metrics.TotalVisits.Add(1)
-			s.metrics.TotalBytes.Add(visit.BytesIn)
-
-			if visit.WaitingRoom.Detected {
-				s.metrics.TotalWaitingRoom.Add(1)
+	for {
+		select {
+		case ll, ok := <-s.primary:
+			if !ok {
+				// primary closed — drain overflow and exit
+				s.drainOverflow()
+				return
 			}
+			s.ingest(ll)
 
-			switch {
-			case visit.StatusCode >= 200 && visit.StatusCode < 300:
-				s.metrics.Total2xx.Add(1)
-			case visit.StatusCode >= 300 && visit.StatusCode < 400:
-				s.metrics.Total3xx.Add(1)
-			case visit.StatusCode >= 400 && visit.StatusCode < 500:
-				s.metrics.Total4xx.Add(1)
-			case visit.StatusCode >= 500:
-				s.metrics.Total5xx.Add(1)
-			}
+		case ll := <-s.overflow:
+			s.ingest(ll)
 		}
-
-		if log.Error != nil {
-			s.metrics.LemmingsFailed.Add(1)
-		}
-
-		// Hand log to reporter for per-path accounting
-		s.reporter.Ingest(log)
-
-		// Emit to event bus for dashboard
-		s.events.Emit(Event{
-			Kind:    EventLemmingDied,
-			Terrain: log.Terrain,
-			Pack:    log.Pack,
-		})
 	}
 }
 
-// tickSTDOUT prints a live one-line summary to STDOUT every second.
+// drainOverflow empties the overflow channel after primary closes.
+func (s *Swarm) drainOverflow() {
+	for {
+		select {
+		case ll := <-s.overflow:
+			s.ingest(ll)
+		default:
+			return
+		}
+	}
+}
+
+// ingest updates metrics and hands a LifeLog to the reporter and event bus.
+func (s *Swarm) ingest(ll LifeLog) {
+	s.metrics.LemmingsCompleted.Add(1)
+	s.metrics.LemmingsAlive.Add(-1)
+
+	for _, visit := range ll.Visits {
+		s.metrics.TotalVisits.Add(1)
+		s.metrics.TotalBytes.Add(visit.BytesIn)
+
+		if visit.WaitingRoom.Detected {
+			s.metrics.TotalWaitingRoom.Add(1)
+		}
+
+		switch {
+		case visit.StatusCode >= 200 && visit.StatusCode < 300:
+			s.metrics.Total2xx.Add(1)
+		case visit.StatusCode >= 300 && visit.StatusCode < 400:
+			s.metrics.Total3xx.Add(1)
+		case visit.StatusCode >= 400 && visit.StatusCode < 500:
+			s.metrics.Total4xx.Add(1)
+		case visit.StatusCode >= 500:
+			s.metrics.Total5xx.Add(1)
+		}
+	}
+
+	if ll.Error != nil {
+		s.metrics.LemmingsFailed.Add(1)
+	}
+
+	s.reporter.Ingest(ll)
+	s.events.Emit(Event{
+		Kind:    EventLemmingDied,
+		Terrain: ll.Terrain,
+		Pack:    ll.Pack,
+	})
+}
+
+// tickSTDOUT prints live metrics every second.
+// Uses \r in TTY mode to overwrite the line; newline in CI mode.
 func (s *Swarm) tickSTDOUT() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+
+	terminator := "\n"
+	if s.cfg.TTY {
+		terminator = "\r"
+	}
 
 	for {
 		select {
@@ -284,8 +320,11 @@ func (s *Swarm) tickSTDOUT() {
 			xx2 := s.metrics.Total2xx.Load()
 			xx4 := s.metrics.Total4xx.Load()
 			xx5 := s.metrics.Total5xx.Load()
+			overflow := s.metrics.OverflowLogs.Load()
+			dropped := s.metrics.DroppedLogs.Load()
 
-			fmt.Printf("\r  [%s] terrains: %d | alive: %s | done: %s | visits: %s | 2xx: %s 4xx: %s 5xx: %s",
+			line := fmt.Sprintf(
+				"  [%s] terrains: %d | alive: %s | done: %s | visits: %s | 2xx: %s 4xx: %s 5xx: %s",
 				elapsed,
 				terrains,
 				formatInt(alive),
@@ -296,13 +335,22 @@ func (s *Swarm) tickSTDOUT() {
 				formatInt(xx5),
 			)
 
-			// Flush stdout — important for CI environments
+			// Only show overflow/dropped if they're non-zero —
+			// no need to alarm engineers who sized their runs correctly
+			if overflow > 0 {
+				line += fmt.Sprintf(" | overflow: %s", formatInt(overflow))
+			}
+			if dropped > 0 {
+				line += fmt.Sprintf(" | ⚠ dropped: %s", formatInt(dropped))
+			}
+
+			fmt.Print(line + terminator)
 			os.Stdout.Sync()
 		}
 	}
 }
 
-// printFinalSummary writes the post-run summary block to STDOUT.
+// printFinalSummary writes the post-run block to STDOUT.
 func (s *Swarm) printFinalSummary() {
 	total := s.cfg.Terrain * s.cfg.Pack
 	completed := s.metrics.LemmingsCompleted.Load()
@@ -314,45 +362,62 @@ func (s *Swarm) printFinalSummary() {
 	xx3 := s.metrics.Total3xx.Load()
 	xx4 := s.metrics.Total4xx.Load()
 	xx5 := s.metrics.Total5xx.Load()
+	overflow := s.metrics.OverflowLogs.Load()
+	dropped := s.metrics.DroppedLogs.Load()
 
 	fmt.Println()
 	fmt.Println("─────────────────────────────────────────")
-	fmt.Printf("  lemmings v%s — final report\n", s.cfg.Version)
+	fmt.Printf("  lemmings v%s — final summary\n", s.cfg.Version)
 	fmt.Println("─────────────────────────────────────────")
-	fmt.Printf("  target:        %s\n", s.cfg.Hit)
+	fmt.Printf("  target:         %s\n", s.cfg.Hit)
 	fmt.Printf("  total lemmings: %s\n", formatInt(total))
-	fmt.Printf("  completed:     %s\n", formatInt(completed))
-	fmt.Printf("  failed:        %s\n", formatInt(failed))
+	fmt.Printf("  completed:      %s\n", formatInt(completed))
+	fmt.Printf("  failed:         %s\n", formatInt(failed))
 	fmt.Println()
-	fmt.Printf("  total visits:  %s\n", formatInt(visits))
-	fmt.Printf("  total bytes:   %s\n", formatBytes(bytes))
+	fmt.Printf("  total visits:   %s\n", formatInt(visits))
+	fmt.Printf("  total bytes:    %s\n", formatBytes(bytes))
 	fmt.Println()
-	fmt.Printf("  2xx:           %s\n", formatInt(xx2))
-	fmt.Printf("  3xx:           %s\n", formatInt(xx3))
-	fmt.Printf("  4xx:           %s\n", formatInt(xx4))
-	fmt.Printf("  5xx:           %s\n", formatInt(xx5))
+	fmt.Printf("  2xx:            %s\n", formatInt(xx2))
+	fmt.Printf("  3xx:            %s\n", formatInt(xx3))
+	fmt.Printf("  4xx:            %s\n", formatInt(xx4))
+	fmt.Printf("  5xx:            %s\n", formatInt(xx5))
 	fmt.Println()
-	fmt.Printf("  waiting room:  %s lemmings held\n", formatInt(wr))
+	fmt.Printf("  waiting room:   %s lemmings held\n", formatInt(wr))
+	fmt.Println()
+
+	// Only surface channel pressure metrics if they occurred
+	if overflow > 0 || dropped > 0 {
+		fmt.Println("  channel pressure:")
+		fmt.Printf("    overflow logs:  %s\n", formatInt(overflow))
+		fmt.Printf("    dropped logs:   %s\n", formatInt(dropped))
+		if dropped > 0 {
+			fmt.Println()
+			fmt.Println("  ⚠  dropped logs indicate your -limit is too low")
+			fmt.Println("     for the volume requested. increase -limit or")
+			fmt.Println("     reduce -terrain and -pack for accurate results.")
+		}
+		fmt.Println()
+	}
+
 	fmt.Println("─────────────────────────────────────────")
-	fmt.Printf("  report saved to: %s\n\n", s.cfg.SaveTo)
+	fmt.Printf("  report: %s\n\n", s.cfg.SaveTo)
 }
 
-// Report triggers the reporter to write the .md and .html output files.
+// Report triggers the reporter to write output files.
 func (s *Swarm) Report() error {
 	return s.reporter.Write(s.cfg.SaveTo)
 }
 
-// generateToken produces a cryptographically random hex string for
-// dashboard authentication.
+// generateToken produces a cryptographically random 64-char hex string.
 func generateToken() (string, error) {
-	b := make([]byte, 32) // 256 bits → 64 hex chars
+	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
 }
 
-// formatBytes renders a byte count as a human-readable string.
+// formatBytes renders a byte count as human-readable.
 func formatBytes(b int64) string {
 	const (
 		kb = 1024
