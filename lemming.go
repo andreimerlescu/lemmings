@@ -161,13 +161,16 @@ func (l *Lemming) Run(parent context.Context) LifeLog {
 			visits = append(visits, visit)
 
 			l.bus.Emit(Event{
-				Kind:       EventVisitComplete,
-				LemmingID:  l.identity.ID,
-				Terrain:    int(l.identity.Terrain),
-				Pack:       int(l.identity.Pack),
-				URL:        url,
-				StatusCode: visit.StatusCode,
+    			Kind:       EventVisitComplete,
+    			LemmingID:  l.identity.ID,
+    			Terrain:    int(l.identity.Terrain),
+    			Pack:       int(l.identity.Pack),
+    			URL:        url,
+    			StatusCode: visit.StatusCode,
+    			BytesIn:    visit.BytesIn,
+    			Duration:   visit.Duration,
 			})
+
 		}
 	}
 }
@@ -175,6 +178,9 @@ func (l *Lemming) Run(parent context.Context) LifeLog {
 // hit performs a single page visit, handling waiting room detection
 // and checksum comparison. It blocks for the full duration if the
 // lemming is placed in a waiting room.
+//
+// The WaitingRoom event is emitted after waitInRoom returns so that
+// the Duration field reflects the actual time spent waiting, not zero.
 func (l *Lemming) hit(ctx context.Context, url string) Visit {
 	visit := Visit{
 		LemmingID: l.identity.ID,
@@ -206,17 +212,19 @@ func (l *Lemming) hit(ctx context.Context, url string) Visit {
 			EnteredAt: time.Now(),
 		}
 
+		// Poll until admitted or context expires
+		body, visit = l.waitInRoom(ctx, url, visit)
+		_ = body
+
+		// Emit waiting room event now that Duration is known
 		l.bus.Emit(Event{
 			Kind:      EventWaitingRoom,
 			LemmingID: l.identity.ID,
 			Terrain:   int(l.identity.Terrain),
 			Pack:      int(l.identity.Pack),
 			URL:       url,
+			Duration:  visit.WaitingRoom.Duration,
 		})
-
-		// Poll until admitted (checksum matches) or context expires
-		body, visit = l.waitInRoom(ctx, url, visit)
-		_ = body
 	}
 
 	visit.Duration = time.Since(start)
