@@ -24,14 +24,18 @@ type SwarmConfig struct {
 	Ramp          time.Duration
 	Crawl         bool
 	CrawlDepth    int
-	SaveTo        string
 	DashboardPort int
 	TTY           bool
 	Version       string
 	Observe         bool
 	MetricsPort     int
 	MetricsURLLabel string
-
+	SaveTo   []string
+	SMTPHost string
+	SMTPPort int
+	SMTPUser string
+	SMTPPass string
+	SMTPFrom string
 }
 
 // SwarmMetrics holds live atomic counters readable by the ticker and dashboard.
