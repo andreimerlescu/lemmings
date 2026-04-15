@@ -28,6 +28,10 @@ type SwarmConfig struct {
 	DashboardPort int
 	TTY           bool
 	Version       string
+	Observe         bool
+	MetricsPort     int
+	MetricsURLLabel string
+
 }
 
 // SwarmMetrics holds live atomic counters readable by the ticker and dashboard.
