@@ -1,5 +1,3 @@
-README.md
-
 # Lemmings
 
 > Simulating real-world NPC traffic during high-load events. Inspired by a beloved childhood [videogame](https://en.wikipedia.org/wiki/Lemmings_(video_game)).
