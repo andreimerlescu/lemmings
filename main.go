@@ -193,7 +193,7 @@ figs.NewString("smtp-from", "", "SMTP from address. Overrides LEMMINGS_SMTP_FROM
 		log.Fatalf("swarm error: %v", err)
 	}
 
-	if err := swarm.Report(); err != nil {
+	if err := swarm.Report(ctx); err != nil {
 		log.Fatalf("report error: %v", err)
 	}
 }
