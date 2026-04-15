@@ -11,6 +11,35 @@ import (
 	"time"
 )
 
+// mockObserver is a minimal Observer implementation for swarm integration
+// tests. Records whether Attach and Detach were called and can be
+// configured to return errors on either.
+type mockObserver struct {
+    attached  bool
+    detached  bool
+    attachErr error
+    detachErr error
+}
+
+func (m *mockObserver) Attach(_ context.Context, _ *EventBus) error {
+    if m.attachErr != nil {
+        return m.attachErr
+    }
+    m.attached = true
+    return nil
+}
+
+func (m *mockObserver) Detach() error {
+    if m.detachErr != nil {
+        return m.detachErr
+    }
+    m.detached = true
+    return nil
+}
+
+func (m *mockObserver) Name() string { return "mock" }
+
+
 // TestSwarm_RegisterObserver_AppendsToList verifies that RegisterObserver
 // appends the observer to s.observers.
 func TestSwarm_RegisterObserver_AppendsToList(t *testing.T) {
