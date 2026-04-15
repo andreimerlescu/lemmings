@@ -7,6 +7,59 @@ import (
 	"time"
 )
 
+// TestEvent_VisitComplete_CarriesByteAndDuration verifies that an Event
+// constructed for EventVisitComplete can carry BytesIn and Duration fields
+// and that those values survive the bus round-trip.
+func TestEvent_VisitComplete_CarriesByteAndDuration(t *testing.T) {
+    bus := NewEventBus()
+    var received Event
+
+    bus.Subscribe(func(e Event) {
+        if e.Kind == EventVisitComplete {
+            received = e
+        }
+    })
+
+    bus.Emit(Event{
+        Kind:       EventVisitComplete,
+        LemmingID:  "test-lemming",
+        URL:        "http://example.com/",
+        StatusCode: 200,
+        BytesIn:    2048,
+        Duration:   42 * time.Millisecond,
+    })
+
+    if received.BytesIn != 2048 {
+        t.Errorf("expected BytesIn=2048, got %d", received.BytesIn)
+    }
+    if received.Duration != 42*time.Millisecond {
+        t.Errorf("expected Duration=42ms, got %v", received.Duration)
+    }
+}
+
+// TestEvent_WaitingRoom_CarriesDuration verifies that an EventWaitingRoom
+// event carries the Duration field representing time spent in the queue.
+func TestEvent_WaitingRoom_CarriesDuration(t *testing.T) {
+    bus := NewEventBus()
+    var received Event
+
+    bus.Subscribe(func(e Event) {
+        if e.Kind == EventWaitingRoom {
+            received = e
+        }
+    })
+
+    bus.Emit(Event{
+        Kind:     EventWaitingRoom,
+        URL:      "http://example.com/",
+        Duration: 90 * time.Second,
+    })
+
+    if received.Duration != 90*time.Second {
+        t.Errorf("expected Duration=90s, got %v", received.Duration)
+    }
+}
+
 // ── EventBus ──────────────────────────────────────────────────────────────────
 
 // TestNewEventBus verifies that a freshly constructed EventBus is open,
