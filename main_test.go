@@ -58,20 +58,23 @@ const (
 //	cfg := testConfig()
 //	cfg.Hit = srv.URL
 func testConfig() SwarmConfig {
-	return SwarmConfig{
-		Hit:           "http://localhost:8080/",
-		Terrain:       2,
-		Pack:          2,
-		Limit:         10,
-		Until:         testUntil,
-		Ramp:          testRamp,
-		Crawl:         false,
-		CrawlDepth:    testCrawlDepth,
-		SaveTo:        ".",
-		DashboardPort: 0, // 0 means no dashboard in tests
-		TTY:           false,
-		Version:       "test",
-	}
+    return SwarmConfig{
+        Hit:            "http://localhost:8080/",
+        Terrain:        2,
+        Pack:           2,
+        Limit:          10,
+        Until:          testUntil,
+        Ramp:           testRamp,
+        Crawl:          false,
+        CrawlDepth:     testCrawlDepth,
+        SaveTo:         ".",
+        DashboardPort:  0,
+        TTY:            false,
+        Observe:        false,   // new
+        MetricsPort:    0,       // new — 0 means no metrics server in tests
+        MetricsURLLabel: "path", // new
+        Version:        "test",
+    }
 }
 
 // ── URLPool helper ────────────────────────────────────────────────────────────
