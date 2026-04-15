@@ -138,10 +138,26 @@ figs.NewString("smtp-from", "", "SMTP from address. Overrides LEMMINGS_SMTP_FROM
 		log.Fatalf("failed to load configuration: %v", err)
 	}
 
-	saveTo := *figs.String("save-to")
+	saveTo := *figs.List("save-to")
 	if env := os.Getenv("LEMMINGS_SAVE_TO"); env != "" {
-		saveTo = env
+	    for _, s := range strings.Split(env, ",") {
+        	s = strings.TrimSpace(s)
+        	if s != "" {
+        	    saveTo = append(saveTo, s)
+        	}
+    	}
 	}
+
+	// Deduplicate
+	seen := make(map[string]bool)
+	var dedupSaveTo []string
+	for _, s := range saveTo {
+	    if !seen[s] {	
+	        seen[s] = true
+	        dedupSaveTo = append(dedupSaveTo, s)
+	    }
+	}
+	saveTo = dedupSaveTo
 
 	cfg := SwarmConfig{
 		Hit:           *figs.String("hit"),
@@ -152,7 +168,12 @@ figs.NewString("smtp-from", "", "SMTP from address. Overrides LEMMINGS_SMTP_FROM
 		Ramp:          *figs.Duration("ramp"),
 		Crawl:         *figs.Bool("crawl"),
 		CrawlDepth:    *figs.Int("crawl-depth"),
-		SaveTo:        saveTo,
+		SaveTo:   saveTo,
+		SMTPHost: *figs.String("smtp-host"),
+		SMTPPort: *figs.Int("smtp-port"),
+		SMTPUser: *figs.String("smtp-user"),
+		SMTPPass: *figs.String("smtp-pass"),
+		SMTPFrom: *figs.String("smtp-from"),
 		DashboardPort: *figs.Int("dashboard-port"),
 		TTY:           *figs.Bool("tty"), // ← new
 		Version:       version,
@@ -200,7 +221,12 @@ func printBootSummary(cfg SwarmConfig) {
 	}
 	fmt.Printf("  limit:         %s\n", limitStr)
 	fmt.Printf("  crawl:         %v (depth: %d)\n", cfg.Crawl, cfg.CrawlDepth)
-	fmt.Printf("  save-to:       %s\n", cfg.SaveTo)
+	// Replace with:
+	fmt.Printf("  save-to:\n")
+	for _, dest := range cfg.SaveTo {
+	    fmt.Printf("    → %s\n", dest)
+	}
+
 	fmt.Printf("  tty:           %v\n", cfg.TTY)          // ← new
 	fmt.Printf("  dashboard:     http://localhost:%d\n", cfg.DashboardPort)
 	fmt.Printf("  observe:       %v\n", cfg.Observe)
