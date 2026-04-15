@@ -1,26 +1,24 @@
-TODO.md
-
 # Lemmings TODO
 
-> Outstanding items identified during initial development session.
-> Work through this list during code review before v0.0.1 tag.
-> Items are grouped by priority and file. Check off as completed.
+> Outstanding items identified during the initial development session.
+> Work through this list during code review before tagging v0.0.1.
+> Items are grouped by priority and file. Check off each item as it is resolved.
 
 ---
 
 ## Priority 1 — Will Not Compile
 
-These are definite compile errors identified during generation.
-Fix these before attempting go build.
+These are confirmed or near-confirmed compile errors that must be fixed
+before go build ./... can pass. Start here.
 
 ### target.go
 
-- [ ] smtp.NewClient returns (*smtp.Client, error) but the error is not
-      captured in sendTLS. Current code:
+- [ ] smtp.NewClient returns (*smtp.Client, error) but the error return
+      is not captured in sendTLS. Current code:
 
-          smtp.NewClient(conn, host)
+          client, err := smtp.NewClient(conn, host)
 
-      Must be:
+      Must become:
 
           client, err := smtp.NewClient(conn, host)
           if err != nil {
@@ -28,436 +26,423 @@ Fix these before attempting go build.
           }
           return t.sendViaSMTPConn(client, msg)
 
+- [ ] Verify all error returns from smtp.Client methods in sendSTARTTLS
+      and sendPlain are captured and wrapped correctly.
+
+- [ ] Verify that the net/smtp, crypto/tls, net, mime/multipart,
+      mime/quotedprintable, and net/textproto imports are all present
+      in target.go. These are easy to miss during generation.
+
 ### pool_test.go
 
-- [ ] import_srv is not a valid Go identifier — hyphens are not permitted.
-      Rename to importSrv or testSrv throughout TestIndexSitemap_Index.
+- [ ] TestIndexSitemap_Index uses import_srv as a variable name.
+      Hyphens are not valid in Go identifiers. Rename to importSrv
+      or testSrv throughout the test function.
 
-- [ ] TestIndexSitemap_Index declares innerSrv as an *http.Server that is
-      never started and serves no purpose. Remove it entirely or replace
-      with the correct httptest.Server reference.
+- [ ] The same test declares innerSrv as an *http.Server that is
+      never started and serves no purpose. Remove it entirely.
+
+- [ ] Verify net/http/httptest is in the pool_test.go import block —
+      the file uses httptest.NewServer directly in TestIndexSitemap_Index
+      rather than going through the testServer builder.
 
 ### observer_test.go
 
 - [ ] TestPrometheusObserver_Attach_StartsServer references bus without
-      declaring it in scope. Add:
+      declaring it. Add:
 
           bus := NewEventBus()
 
       before the Attach call. Scan the entire file for any other function
-      with the same issue.
+      that references bus without a declaration in scope.
+
+### report_test.go
+
+- [ ] Verify net/http is in the import block. The file uses http.StatusOK
+      in makeLifeLog.
+
+- [ ] Verify fmt is in the import block. The file uses fmt.Errorf in
+      TestReporter_Ingest_RecordsErrors and fmt.Sprintf in multiple helpers.
+
+### dashboard_test.go
+
+- [ ] Verify net is in the import block. freePort uses net.Listen and
+      net.TCPAddr directly.
+
+### lemming_test.go
+
+- [ ] newRNG() returns *rand.Rand. Verify math/rand is explicitly imported
+      in lemming_test.go. The file may only pull in crypto-related packages
+      transitively and miss math/rand.
 
 ---
 
 ## Priority 2 — Will Compile But Will Panic or Produce Wrong Results
 
-These issues will not be caught by the compiler but will surface at runtime
-or produce silently wrong output.
+These issues will not be caught by the compiler but will cause runtime
+failures, data corruption, or silently wrong output.
 
 ### lemming.go
 
-- [ ] Verify import block correctly aliases crypto/rand and math/rand.
-      Both are needed in the package. math/rand is used for per-lemming
-      RNG. crypto/rand is used in swarm.go for generateToken. If both
-      appear in the same file without aliasing the build will fail.
-      Expected correct form in any file needing both:
+- [ ] Verify the import block correctly aliases math/rand and crypto/rand
+      to avoid collision. Suggested aliases:
 
           import (
               crand "crypto/rand"
-              "math/rand"
+              mrand "math/rand"
           )
 
-- [ ] Verify that the Accept-Encoding header behaviour of the indexing
-      http.Client in pool.go matches the lemming http.Client. If one
-      client requests gzip and the other does not, SHA-512 checksums
-      will never match and every visit will record Match: false.
-      Both clients should either both omit Accept-Encoding (letting Go
-      handle decompression transparently) or both set it explicitly.
+      Then verify every usage of rand.New, rand.NewSource in lemming.go
+      and every usage of rand.Read in swarm.go uses the correct alias.
+
+- [ ] Verify that the EventWaitingRoom emit has been moved to after
+      waitInRoom returns, not before. The emit must include the Duration
+      field from visit.WaitingRoom.Duration. If the emit is still at the
+      top of the waiting room detection block, Duration will always be zero.
+
+- [ ] Verify that EventVisitComplete emit includes both BytesIn and
+      Duration fields populated from the visit struct. If either is missing,
+      the Prometheus observer will record zero for all visit durations
+      and zero for all byte counts.
+
+### swarm.go
+
+- [ ] SwarmMetrics contains atomic.Int64 fields. Atomic types must not
+      be copied. Verify that SwarmMetrics is always passed and stored as
+      a pointer (*SwarmMetrics) and never as a value. Check every struct
+      that embeds or stores SwarmMetrics and every function that receives it.
+
+- [ ] The Swarm struct currently has:
+
+          metrics SwarmMetrics
+
+      This should be:
+
+          metrics *SwarmMetrics
+
+      And the construction should be:
+
+          metrics: &SwarmMetrics{}
+
+      Verify this is consistent across swarm.go, terrain.go, dashboard.go,
+      and observer.go.
+
+### terrain.go
+
+- [ ] Verify spawnLemming has exactly one wg.Done path via defer at the
+      top of the function. There must be zero explicit wg.Done() calls
+      anywhere in the function body. A double-Done will panic at runtime
+      and is easy to miss in code review because it only fires on the
+      error paths.
 
 ### observer.go
 
-- [ ] alive is declared as *prometheus.GaugeVec with no label dimensions
-      and accessed via o.alive.With(prometheus.Labels{}).Inc(). This
-      works but wastes a map allocation on every increment. Change the
-      declaration to a plain prometheus.Gauge:
+- [ ] The alive metric is declared as *prometheus.GaugeVec but accessed
+      with empty labels:
+
+          o.alive.With(prometheus.Labels{}).Inc()
+
+      A GaugeVec with no label dimensions should be a plain *prometheus.Gauge.
+      Change the declaration to:
+
+          o.alive prometheus.Gauge
+
+      And the construction to:
 
           o.alive = prometheus.NewGauge(prometheus.GaugeOpts{
               Name: "lemmings_alive",
               Help: "Number of lemmings currently running.",
           })
 
-      And update all call sites from:
-
-          o.alive.With(prometheus.Labels{}).Inc()
-          o.alive.With(prometheus.Labels{}).Dec()
-
-      To:
+      And all usages to:
 
           o.alive.Inc()
           o.alive.Dec()
 
-      Update observer_test.go gaugeValue call accordingly.
+      Update observer_test.go gaugeValue calls accordingly — gaugeValue
+      currently takes a prometheus.Gauge, so the test helper may already
+      be correct if the declaration is fixed.
 
 ### dashboard.go
 
 - [ ] Verify every % character in the JavaScript section of dashboardHTML
-      is written as %% to survive the fmt.Sprintf call. A single % that
-      is a modulo operator in JS will produce runtime output like
-      %!(EXTRA string=...) in the rendered dashboard HTML silently.
-      Known JS modulo uses in the template: elapsed() function uses %
-      for hours and minutes calculation. Verify both are %%.
+      is written as %% to survive the fmt.Sprintf call. A single % followed
+      by any letter will produce a runtime formatting artifact in the HTML
+      silently. The modulo operators in the elapsed() JS function are the
+      most likely culprits:
 
-### swarm.go
+          const h = Math.floor(secs / 3600);
+          const m = Math.floor((secs %% 3600) / 60);
+          const s = secs %% 60;
 
-- [ ] SwarmMetrics contains atomic.Int64 fields. Atomic types must not
-      be copied. Verify that SwarmMetrics is always passed and stored as
-      *SwarmMetrics (pointer) and never as a value type. Check every
-      function signature that accepts or returns SwarmMetrics. If Swarm
-      embeds it as a value:
-
-          metrics SwarmMetrics
-
-      Change to:
-
-          metrics *SwarmMetrics
-
-      And update NewSwarm to initialise it as &SwarmMetrics{}.
-
-### terrain.go
-
-- [ ] Verify spawnLemming has exactly one wg.Done path via defer and
-      zero explicit wg.Done() calls in the function body. During
-      architecture discussion a double-Done bug was caught and fixed.
-      Confirm the fix made it into the final written version. Search
-      the function body for any wg.Done() call that is not the deferred
-      one at the top.
-
----
-
-## Priority 3 — Missing Imports
-
-These files are likely missing imports that will cause compile errors.
-Verify each import block before running go build.
-
-### report_test.go
-
-- [ ] Verify net/http is imported (needed for http.StatusOK)
-- [ ] Verify fmt is imported (needed for fmt.Errorf in makeLifeLog)
-- [ ] Verify sort is imported (needed for sort.Slice in BenchmarkPercentile_1M)
-
-### dashboard_test.go
-
-- [ ] Verify net is imported (needed for net.Listen and net.TCPAddr
-      in freePort)
-- [ ] Verify golang.org/x/net/publicsuffix is imported (needed for
-      cookiejar in TestServe_AuthFlow)
-
-### pool_test.go
-
-- [ ] Verify net/http/httptest is imported (needed for httptest.NewServer
-      in TestIndexSitemap_Index which bypasses the testServer builder)
-- [ ] Verify net/http is imported (needed for http.HandlerFunc in the
-      same test)
-
-### lemming_test.go
-
-- [ ] Verify math/rand is imported (needed for newRNG() which returns
-      *rand.Rand)
-- [ ] Verify net/http/httptest is imported (needed for httptest.NewServer
-      in TestRequest_SetsUserAgent and TestRequest_ContextCancelled)
-
-### observer_test.go
-
-- [ ] Verify github.com/prometheus/client_golang/prometheus is imported
-- [ ] Verify github.com/prometheus/client_model/go is imported as dto
-- [ ] Verify io is imported (needed for io.ReadAll in
-      TestObserver_Metrics_Scrapeable)
-
-### terrain_test.go
-
-- [ ] Verify net/http is imported (needed for http.HandlerFunc and
-      http.ResponseWriter in TestTerrain_Launch_SemaphoreRespected)
-- [ ] Verify github.com/andreimerlescu/sema is imported (needed for
-      newTestSema)
-
-### swarm_test.go
-
-- [ ] Verify context is imported
-- [ ] Verify fmt is imported (needed for fmt.Errorf in
-      TestSwarm_RegisterObserver_AttachError)
-- [ ] Verify os is imported (needed for os.ReadDir in
-      TestSwarm_Report_WritesFiles)
-
-### target_test.go
-
-- [ ] Verify net is imported (needed for net.Listener and net.TCPAddr
-      in startTestSMTPServer)
-- [ ] Verify sync is imported (needed for sync.Mutex in
-      TestReporter_Write_DeliversToAllTargets)
-- [ ] Verify context is imported
-
----
-
-## Priority 4 — Logic and Correctness Issues
-
-These will compile and may not panic but produce incorrect results
-or fail tests unexpectedly.
+      Verify both %% are present and not accidentally corrected to % by
+      an editor or linter.
 
 ### pool.go
 
-- [ ] indexSitemap recursion guard: the sitemap index handler recurses
-      one level deep into child sitemaps. If a child sitemap is itself
-      a sitemap index (two levels of nesting), the recursion continues
-      unbounded. Add a depth parameter or a visited URL set to prevent
-      infinite recursion on malformed or adversarial sitemaps.
+- [ ] Verify the indexing HTTP client and the lemming HTTP client both
+      send the same Accept-Encoding header. If the indexing client allows
+      gzip but a lemming client does not (or vice versa), the server may
+      return different byte sequences for the same URL and every checksum
+      will fail to match. Go's http.Client handles gzip decompression
+      transparently when the server sends Content-Encoding: gzip, but only
+      if the client sent Accept-Encoding: gzip in the request. Verify
+      consistency between fetchURL in pool.go and request in lemming.go.
 
-- [ ] crawlOrigin is recursive but uses a shared visited map with a
-      mutex. Verify that the recursive goroutine spawning pattern does
-      not create a goroutine explosion on a site with many links at
-      every depth level. Consider converting to an iterative BFS with
-      a work queue bounded by a semaphore.
+---
+
+## Priority 3 — Correctness and Behaviour Gaps
+
+These will not cause crashes but will produce incorrect or misleading
+results in the report or dashboard.
 
 ### report.go
 
-- [ ] buildReportData sorts the global allDurations slice for percentile
-      calculation. This sort mutates the slice in place. If Write is
-      called more than once (which it should not be, but defensive
-      programming matters), the second call will sort an already-sorted
-      slice which is harmless but wasteful. More importantly, verify
-      that the per-path durations slice in pathStats is also pre-sorted
-      before being passed to percentile(). Currently it is not sorted
-      before the per-path P50 and P99 calculations. This will produce
-      wrong percentile values for per-path breakdown. The fix:
+- [ ] Verify resolveSavePath has been completely removed. Nothing should
+      still call it. The function's logic now lives in LocalTarget.resolveDir
+      and any remaining call to resolveSavePath will be a compile error —
+      but verify the function body itself is gone to avoid confusion.
 
-          sort.Slice(ps.durations, func(i, j int) bool {
-              return ps.durations[i] < ps.durations[j]
-          })
+- [ ] Verify Write(ctx context.Context) is the only Write signature in
+      report.go. The old Write(saveTo string) must not exist anywhere in
+      the file.
 
-      This sort must happen inside buildReportData before percentile()
-      is called on ps.durations.
+- [ ] Verify buildFilename produces the correct format. The expected output
+      is lemmings.YYYY.MM.DD.domain — four dot-separated components. Test
+      this manually with a localhost:8080 hit URL to confirm the colon
+      replacement in domainFromURL produces localhost-8080 and not
+      localhost:8080 which would be an invalid filename on some systems.
 
-### lemming.go
+### main.go
 
-- [ ] waitInRoom accumulates BytesIn across all polls:
+- [ ] Verify figs.List("save-to") dereferences correctly. figtree may
+      return *[]string or []string depending on the version. Confirm the
+      return type against the figtree source before dereferencing.
 
-          visit.BytesIn += bytesIn
+- [ ] Verify the LEMMINGS_SAVE_TO environment variable appends to the
+      list from -save-to rather than replacing it. The intended behaviour
+      is additive — both the flag and the env var contribute destinations.
 
-      But the initial request before the waiting room was detected also
-      set visit.BytesIn. Verify this does not double-count the initial
-      request body. The current logic sets BytesIn from the first
-      request, then adds to it in the poll loop. This means the first
-      request body is counted once (correct) and each subsequent poll
-      body is added (correct). Trace through the flow once manually to
-      confirm the accumulation is right.
+- [ ] Verify the deduplication logic for saveTo correctly handles the case
+      where the same destination appears in both the flag and the env var.
 
-- [ ] The third exit path from waitInRoom — body changed but is not a
-      waiting room and does not match expected — exits the wait loop and
-      records the visit as-is. But ExitedAt and Duration are set in
-      this path. Verify that ExitedAt is set before Duration is computed
-      from it, otherwise Duration will be zero.
+- [ ] Verify the boot summary correctly handles the case where SaveTo has
+      only one entry — the output should still use the arrow format:
+
+          save-to:
+            → .
+
+      And not revert to the old single-line format.
 
 ### swarm.go
 
-- [ ] ramp() sleeps between terrain launches using time.After. If the
-      number of terrains is 1, the interval calculation is:
+- [ ] Verify applyFlagSMTPOverrides is called for every MailTarget in the
+      targets list, not just the first one. If the user specifies two mailto:
+      destinations, both need the SMTP overrides applied.
 
-          cfg.Ramp / time.Duration(1)
-
-      Which equals cfg.Ramp. This means a single-terrain run with
-      -ramp=5m will wait 5 minutes before declaring the ramp complete
-      even though there is nothing left to ramp. Add a guard:
-
-          if n == 1 {
-              terrains[0].Launch(ctx)
-              return nil
-          }
-
-      Or change the sleep to only occur when i < n-1 (which is already
-      in the code — verify this guard is present in the final version).
+- [ ] Verify that Report(ctx) passes the swarm's context and not
+      context.Background(). If the swarm context is already cancelled by
+      the time Report is called (due to signal handling), S3 uploads and
+      SMTP sends should still complete using a fresh context with a timeout.
+      Consider using context.WithTimeout(context.Background(), 30*time.Second)
+      for the report delivery context rather than the swarm's potentially
+      cancelled context.
 
 ### target.go
 
-- [ ] MailTarget.buildMessage writes the Content-Type multipart header
-      directly to buf before calling mw.CreatePart. But multipart.NewWriter
-      also writes its own boundary markers when CreatePart is called.
-      Verify that the manually written Content-Type header and the
-      multipart writer's output do not produce a malformed MIME structure.
-      The correct pattern is to let the multipart writer own the boundary
-      entirely and not write the Content-Type header manually. Test with
-      a real email client or use mime/multipart's own test suite as a
-      reference.
+- [ ] Verify that MailTarget.Deliver passes the context to sendTLS,
+      sendSTARTTLS, and sendPlain. Currently these methods do not accept
+      a context parameter. For v0.0.1 this is acceptable since net/smtp
+      does not natively support context cancellation, but add a TODO comment
+      noting this gap.
 
-- [ ] sendViaSMTPConn calls net.SplitHostPort on a string it constructs
-      itself from smtpCfg.Host and smtpCfg.Port. This is redundant — it
-      already has host and port as separate values. Simplify to just use
-      t.smtpCfg.Host directly rather than round-tripping through a
-      formatted string and SplitHostPort.
+- [ ] Verify that S3Target.Deliver correctly handles the case where both
+      AWS_DEFAULT_REGION and AWS_REGION are unset and the SDK cannot detect
+      the region automatically. The error message from the SDK in this case
+      is not user-friendly — consider wrapping it with a diagnostic hint.
 
 ---
 
-## Priority 5 — Test Coverage Gaps
+## Priority 4 — Test Coverage Gaps
 
-Issues in the test suite that reduce confidence in the implementation.
+These are gaps identified in the test suite that should be addressed before
+the test suite can be considered complete.
 
 ### observer_test.go
 
-- [ ] The four swarm integration tests (TestSwarm_RegisterObserver_*)
-      were written in observer_test.go but belong in swarm_test.go.
-      Move them and the mockObserver type to swarm_test.go and remove
-      from observer_test.go to avoid duplicate declarations.
+- [ ] The four swarm integration tests (TestSwarm_RegisterObserver_*  and
+      TestSwarm_Run_DetachesObservers) were written in observer_test.go but
+      belong in swarm_test.go. Move them and remove the duplicates. The
+      mockObserver struct must move with them.
 
-- [ ] TestObserver_Metrics_Scrapeable and
-      TestObserver_Metrics_ContainsExpectedNames both start a real HTTP
-      server and make real HTTP requests. These tests will fail if the
-      metrics port is already in use. The freeMetricsPort helper uses
-      an incrementing counter starting at 19000 which is fragile across
-      parallel test runs. Consider using the freePort helper pattern
-      (net.Listen on :0) instead.
+- [ ] TestPrometheusObserver_Attach_StartsServer is missing a bus declaration.
+      After fixing the compile error, verify the test actually exercises the
+      server starting — not just that Attach returns nil.
 
-### report_test.go
+### swarm_test.go
 
-- [ ] There is no test that verifies the per-path duration slice is
-      sorted before percentile() is called on it. Add
-      TestBuildReportData_PerPathPercentilesAreSorted that ingests
-      visits in reverse duration order and verifies P50 and P99 are
-      still correct.
+- [ ] After moving the observer integration tests from observer_test.go,
+      verify makeMinimalSwarm initialises the observers field correctly.
+      The zero value (nil slice) is valid for []Observer but verify the
+      deferred detach loop in Run handles a nil observers slice without
+      panicking:
 
-### pool_test.go
+          for _, o := range s.observers {
 
-- [ ] There is no test for the sitemap index recursion depth limit.
-      If the recursion guard is added (see Priority 4), add a test
-      that verifies a two-level nested sitemap index does not recurse
-      infinitely.
+      ranging over a nil slice is safe in Go — this is fine. But document
+      it explicitly with a comment so future contributors do not add a
+      nil check unnecessarily.
 
-### lemming_test.go
+### target_test.go
 
-- [ ] TestRun_WaitingRoom_DurationRecorded has a t.Log at the end that
-      says "test inconclusive" if the lemming was not admitted. This
-      should be t.Skip not t.Log so the test is clearly marked as
-      skipped rather than appearing to pass when it did not run the
-      assertion.
+- [ ] TestMailTarget_Deliver_LocalSMTP uses acceptOneSMTPMessage which
+      implements a bare-minimum SMTP state machine. Verify it handles the
+      EHLO/HELO negotiation correctly for Go's net/smtp client, which sends
+      EHLO first and falls back to HELO. The current implementation sends
+      250 OK for any unrecognised command which should work, but verify
+      against an actual net/smtp dial.
+
+- [ ] Add a test that verifies ParseTarget correctly handles a comma in
+      the destination string — this would indicate the user passed a full
+      -save-to list as a single string rather than using the list flag.
+      ParseTarget should treat the whole string as one URI and return a
+      LocalTarget, not split on the comma. The splitting happens at the
+      figtree level, not at ParseTarget.
 
 ### main_test.go
 
-- [ ] testConfig() sets DashboardPort: 0 and MetricsPort: 0. Verify
-      that passing port 0 to the dashboard and observer servers causes
-      them to either not start or to bind to a random port. If port 0
-      causes ListenAndServe to return an error immediately, tests that
-      call NewSwarm with Observe: false will be fine but any test that
-      sets Observe: true will fail. Add a note or guard in NewSwarm
-      that skips observer initialisation when MetricsPort is 0.
+- [ ] testConfig() was updated with SaveTo: []string{"."} but verify this
+      does not cause any existing test that passes cfg to NewSwarm to
+      attempt creating a LocalTarget and writing files during the test.
+      NewSwarm now calls ParseTarget for each SaveTo entry — tests that
+      do not want file I/O should either use an empty SaveTo list or a
+      temp directory.
 
 ---
 
-## Priority 6 — Documentation and Consistency
+## Priority 5 — Documentation and Polish
 
-Non-blocking issues that should be addressed before v0.0.1 tag.
+Address these after the code compiles and tests pass.
 
 ### All source files
 
-- [ ] Run gofmt -w . on all files after compile errors are fixed.
-      Do not run gofmt before fixing compile errors — it will reformat
-      broken code and make diffs harder to read.
+- [ ] Verify every exported type, function, and method has a godoc comment
+      following the structure agreed during development:
+      what it is, how to use it, gotchas and warnings.
 
-- [ ] Run go vet ./... and address every warning. Pay particular
-      attention to printf format string warnings which often indicate
-      mismatched % arguments.
-
-- [ ] Verify that every exported type and function has a godoc comment.
-      The godoc standard established during generation was:
-      1. What it is
-      2. How to use it
-      3. Gotchas and warnings if applicable
-      Unexported functions should have shorter comments covering
-      gotchas only.
+- [ ] Verify every unexported function has at minimum a single-line comment
+      describing what it does and any gotchas worth calling out.
 
 ### README.md
 
-- [ ] The All Flags table currently shows -save-to with default "." and
-      description "Local path or s3:// URI for report output". Update
-      the description to reflect that it now accepts a comma-separated
-      list of URIs including mailto: targets.
+- [ ] The All Flags table has -save-to listed with the old single-string
+      description. Update to reflect the comma-separated list format and
+      give an example that shows all three target types.
 
-- [ ] The Dependencies table does not include net/smtp (standard library
-      but worth noting) or mime/multipart (standard library). Consider
-      adding a note that email delivery uses only stdlib — no external
-      mail library dependency.
+- [ ] Add a section on the LEMMINGS_SAVE_TO environment variable and how
+      it interacts with -save-to additively.
+
+- [ ] The Dependencies table is missing github.com/prometheus/client_model
+      which is used in observer_test.go for the DTO metric reading helpers.
 
 ### TESTS.md
 
-- [ ] Add a section covering target_test.go and observer_test.go since
-      these files were added after TESTS.md was written. Specifically
-      document what TestMailTarget_Deliver_LocalSMTP proves about email
-      delivery reliability and what TestURLLabel_CardinalityCap proves
-      about Prometheus cardinality safety.
+- [ ] Add a section covering target_test.go and what it proves about
+      report delivery reliability — specifically the partial failure
+      guarantee that a failing S3 upload does not prevent local delivery.
+
+- [ ] Add target.go to the fuzz targets table. The mailto: URI parser
+      and the s3:// URI parser are parsing externally-provided strings
+      and should have fuzz coverage in v0.0.2.
 
 ### Makefile
 
-- [ ] Add a make docs target that runs go doc ./... and pipes to a file.
-      Useful for verifying godoc coverage before a release.
+- [ ] Add a make run-local target that runs lemmings against localhost:8080
+      with the smallest possible parameters for quick iteration:
 
-- [ ] Add a make check target that runs build + vet + fmt-check + test
-      in sequence without the bench tag. This becomes the single command
-      for CI pipelines to run.
+          run-local:
+              $(GO) run . \
+                  -hit http://localhost:8080/ \
+                  -terrain 2 \
+                  -pack 2 \
+                  -until 10s \
+                  -ramp 5s \
+                  -tty=true \
+                  -save-to /tmp/lemmings-test
 
-- [ ] The current make run target hardcodes http://localhost:8080/ as
-      the hit URL. Add a HIT variable so engineers can override it:
+- [ ] Add a make build-check target that runs go build, go vet, and
+      gofmt -l in sequence and exits 1 if any fails. This is the
+      pre-commit gate:
 
-          HIT ?= http://localhost:8080/
-          run:
-              $(GO) run . -hit $(HIT) ...
-
----
-
-## Priority 7 — Pre-Release Checklist
-
-Do these last, after all above items are resolved.
-
-- [ ] go build ./... — zero errors
-- [ ] go vet ./... — zero warnings
-- [ ] gofmt -l . — no files listed
-- [ ] go test -race ./... — zero failures, zero data races
-- [ ] go test -race -count=3 ./... — verify no flaky tests on repeat runs
-- [ ] First local run produces a non-empty report file on disk
-- [ ] First local run dashboard loads and displays live metrics
-- [ ] Report HTML opens correctly in a browser with no external requests
-- [ ] git tag v0.0.1 and push
-- [ ] Verify pkg.go.dev picks up the module within 10 minutes of tag push
-- [ ] Update README.md badges from placeholder to real passing/failing state
+          build-check: vet fmt-check
+              $(GO) build ./...
 
 ---
 
-## Items Explicitly Out of Scope for v0.0.1
+## Priority 6 — v0.0.1 Release Gates
 
-Do not open issues or PRs for these during the review. They are tracked
-in README.md under v1.1.0 Roadmap.
+The following must all be true before tagging v0.0.1. This is the
+definition of done for the initial release.
 
-- Database Navigator implementations (MySQL, PostgreSQL, MongoDB, SQLite)
-- Fibonacci ramp shape (current linear ramp is correct for v0.0.1)
-- S3 bucket auto-creation
-- SMTP retry logic
-- Prometheus remote write
-- Per-lemming timing breakdown in reports
-- Geographically distributed load via multiple instances
-- The -local flag for forcing local copy alongside S3 upload
-- gRPC target support
-- Message queue target support (Kafka, SQS, RabbitMQ)
+- [ ] go build ./... exits 0 with no output
+- [ ] go vet ./... exits 0 with no output
+- [ ] gofmt -l . returns no filenames
+- [ ] go test -race ./... exits 0 with all tests passing
+- [ ] make test exits 0
+- [ ] make lint exits 0
+- [ ] A real run against localhost produces a non-empty .md and .html report
+- [ ] The HTML report opens in a browser without errors
+- [ ] The dashboard is accessible at localhost:4000 during a real run
+- [ ] The live ticker updates every second during a real run
+- [ ] At least one URL in the report shows Match: true
+- [ ] dropped_logs is 0 in the first real run
+- [ ] The report file path is printed to STDOUT at the end of the run
 
 ---
 
-## How to Use This File
+## Deferred to v0.0.2 and Beyond
 
-Work top to bottom. Fix Priority 1 items first — nothing else matters
-until the package compiles. Then Priority 2, then Priority 3, and so on.
+Do not attempt to address these during the v0.0.1 review. They are recorded
+here so they are not lost.
 
-When an item is resolved, check the box and commit with a message that
-references the item. For example:
+- [ ] Fuzz tests for ParseTarget (mailto: and s3:// URI parsers)
+- [ ] Fuzz tests for buildMessage (MIME construction with arbitrary inputs)
+- [ ] S3 bucket creation if bucket does not exist (with -s3-create-bucket flag)
+- [ ] SMTP retry logic with exponential backoff on transient failures
+- [ ] -local flag to force local copy alongside S3 or email delivery
+- [ ] Fibonacci ramp shape as an alternative to linear ramp
+- [ ] Per-lemming timing breakdown in the HTML report
+- [ ] Time series graph in HTML report showing visit rate over the run duration
+- [ ] Prometheus remote write support
+- [ ] Database Navigator implementations (MySQL, PostgreSQL, MongoDB, SQLite)
+- [ ] Geographically distributed load via coordinated lemmings instances
+- [ ] Report comparison mode — diff two report files and highlight regressions
+- [ ] -dry-run flag that indexes the URL pool and prints the plan without
+      spawning any lemmings
+- [ ] CI integration examples (GitHub Actions, GitLab CI, CircleCI)
+- [ ] Helm chart for running lemmings as a Kubernetes Job
 
-    git commit -m "fix: smtp.NewClient error capture in target.go (TODO P1)"
+---
 
-When every box in Priority 1 through 5 is checked, run the Priority 7
-checklist. When that passes, tag v0.0.1.
+## Notes for the Reviewer
 
-Do not delete this file after the review. Archive it as REVIEW_v0.0.1.md
-so the decisions made during initial development are preserved for future
-contributors who need to understand why certain choices were made.​​​​​​​​​​​​​​​​
+When you open a new chat thread tomorrow, paste REVIEW.md first so the
+reviewer has full context before seeing any code. Then paste one source
+file at a time in dependency order. Do not paste all files at once.
+
+The most productive review sequence is:
+
+1. Paste REVIEW.md — establish context
+2. Paste events.go — simplest file, fewest dependencies
+3. Paste pool.go — URL indexing, no swarm dependencies
+4. Paste lemming.go — the heart of the package
+5. Paste terrain.go — depends on lemming
+6. Paste swarm.go — depends on everything
+7. Paste report.go + target.go together — they are coupled
+8. Paste observer.go — depends on events and swarm
+9. Paste dashboard.go — depends on events and swarm
+10. Paste main.go last — the wiring layer
+11. Paste each test file immediately after its source file
+
+Fix compile errors before moving to the next file. A clean compile is
+the gate to every other kind of review.
