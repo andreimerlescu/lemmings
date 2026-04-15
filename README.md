@@ -1,3 +1,5 @@
+README.md
+
 # Lemmings
 
 > Simulating real-world NPC traffic during high-load events. Inspired by a beloved childhood [videogame](https://en.wikipedia.org/wiki/Lemmings_(video_game)).
@@ -174,30 +176,121 @@ from the last 1,000 events — the view is never empty on a cold join.
 
 ---
 
-## The Report
+## Prometheus Metrics
 
-When the swarm completes, lemmings writes two report files to disk:
+When -observe is set, lemmings starts a Prometheus metrics endpoint on
+http://localhost:9090/metrics (configurable via -metrics-port). The endpoint
+is scraped by any standard Prometheus installation with no additional
+configuration.
 
-    lemmings.YYYY.MM.DD.domain.md
-    lemmings.YYYY.MM.DD.domain.html
+Eleven metrics are exposed under the lemmings_ namespace:
 
-The HTML report is fully self-contained — no external stylesheets, no CDN
-dependencies, no internet connection required to open it. It can be archived,
-emailed, or attached to an incident ticket and will render correctly anywhere.
+| Metric | Type | Description |
+|---|---|---|
+| lemmings_alive | Gauge | Lemmings currently running |
+| lemmings_completed_total | Counter | Lemmings that completed normally |
+| lemmings_failed_total | Counter | Lemmings that failed to start |
+| lemmings_visits_total | Counter | Page visits by status class (2xx/3xx/4xx/5xx) |
+| lemmings_visit_duration_seconds | Histogram | Visit latency distribution |
+| lemmings_bytes_total | Counter | Total bytes transferred |
+| lemmings_waiting_room_total | Counter | Lemmings that hit a waiting room |
+| lemmings_waiting_room_duration_seconds | Histogram | Time spent in waiting rooms |
+| lemmings_terrains_online | Gauge | Terrain groups currently active |
+| lemmings_dropped_logs_total | Counter | LifeLogs dropped due to channel pressure |
+| lemmings_overflow_logs_total | Counter | LifeLogs routed to overflow channel |
 
-Both reports contain:
+The visit duration histogram's URL label granularity is controlled by
+-metrics-url-label with three values:
 
-- Full configuration summary
-- Total lemmings, visits, and bytes
-- Response code breakdown (2xx / 3xx / 4xx / 5xx)
-- Timing percentiles: fastest, p50, p90, p95, p99, slowest
-- Per-path breakdown with individual hit counts, byte totals, and percentiles
-- Waiting room summary
-- Dropped and overflow log counts with remediation guidance
+- **full** — full URL as label. Capped at 999 distinct values.
+- **path** — path component only, query strings stripped. Default.
+- **none** — no URL label. Zero cardinality risk. Best for large sitemaps.
 
-The default save location is the current directory. Override it with -save-to
-or the LEMMINGS_SAVE_TO environment variable. S3 URI prefixes are supported
-for teams that archive reports centrally.
+The 999-value cardinality cap exists because a histogram with 1000+ URL labels
+at 15 buckets each creates 15,000+ active time series from one label alone,
+which exceeds the comfortable range of a default Prometheus installation. URLs
+beyond the cap are recorded under the synthetic label value "other".
+
+    lemmings -hit https://myapp.com -terrain 50 -pack 50 -until 30s \
+        -observe -metrics-port 9090 -metrics-url-label path
+
+---
+
+## Report Delivery
+
+When the swarm completes, lemmings renders two report formats — markdown and
+self-contained HTML — and delivers them to every configured destination
+simultaneously.
+
+The -save-to flag accepts a comma-separated list of destinations. Each
+destination is parsed by its URI prefix and routed to the appropriate delivery
+target. Multiple targets run concurrently — a failure in one does not prevent
+others from receiving the report.
+
+    lemmings -hit https://myapp.com \
+        -save-to ".,s3://my-bucket/lemmings,mailto:ops@mycompany.com?subject=Lemmings%20Results"
+
+### Local Delivery
+
+The default target. Writes both files to:
+
+    <save-to>/lemmings/<domain>/lemmings.YYYY.MM.DD.<domain>.md
+    <save-to>/lemmings/<domain>/lemmings.YYYY.MM.DD.<domain>.html
+
+The directory tree is created automatically. Existing files with the same name
+are overwritten — filenames include the date so this only occurs if lemmings
+runs more than once on the same day against the same target.
+
+    -save-to .
+    -save-to /var/reports
+    -save-to file:///var/reports
+
+### S3 Delivery
+
+Uploads both files to an S3 bucket with correct Content-Type headers so they
+render correctly when accessed via S3 URLs or CloudFront.
+
+    -save-to s3://my-bucket/lemmings/reports
+
+Credentials are read from the standard AWS credential chain in order:
+
+1. Environment variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN
+2. Shared credentials file: ~/.aws/credentials
+3. IAM instance role — works automatically on EC2, ECS, and Lambda
+
+The bucket region is read from AWS_DEFAULT_REGION or AWS_REGION. The bucket
+must already exist and the credentials must have s3:PutObject permission.
+Lemmings does not create the bucket.
+
+### Email Delivery
+
+Sends the HTML report inline in the email body and the markdown report as an
+attachment. Uses standard RFC 6068 mailto URI syntax.
+
+    -save-to "mailto:ops@mycompany.com?subject=Lemmings%20Results&cc=team@mycompany.com"
+
+SMTP configuration is read from environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| LEMMINGS_SMTP_HOST | localhost | SMTP server hostname |
+| LEMMINGS_SMTP_PORT | 587 | SMTP server port |
+| LEMMINGS_SMTP_USER | | SMTP username (optional) |
+| LEMMINGS_SMTP_PASS | | SMTP password (optional) |
+| LEMMINGS_SMTP_FROM | lemmings@localhost | From address |
+
+SMTP flags override environment variables when both are present:
+
+    lemmings -hit https://myapp.com \
+        -save-to "mailto:ops@mycompany.com" \
+        -smtp-host mail.mycompany.com \
+        -smtp-port 587 \
+        -smtp-user sender@mycompany.com \
+        -smtp-from noreply@mycompany.com
+
+TLS mode is auto-detected from the port: 465 uses implicit TLS, 587 uses
+STARTTLS (default), 25 uses plain SMTP. STARTTLS falls back to plain if the
+server does not support it.
 
 ---
 
@@ -217,13 +310,25 @@ Run with crawl enabled for sites without a sitemap:
 
     lemmings -hit https://myapp.com -terrain 10 -pack 10 -until 30s -crawl
 
-Run in CI with TTY disabled so output is line-per-second rather than overwrite:
+Run in CI with TTY disabled and report saved to S3:
 
-    lemmings -hit https://staging.myapp.com -terrain 5 -pack 5 -until 10s -tty=false
+    lemmings -hit https://staging.myapp.com \
+        -terrain 5 -pack 5 -until 10s \
+        -tty=false \
+        -save-to "s3://ci-reports/lemmings"
+
+Run with Prometheus metrics and email delivery:
+
+    lemmings -hit https://myapp.com \
+        -terrain 50 -pack 50 -until 30s \
+        -observe \
+        -save-to ".,s3://my-bucket/lemmings,mailto:ops@mycompany.com?subject=Launch%20Test"
 
 ---
 
 ## All Flags
+
+### Core
 
 | Flag | Alias | Default | Description |
 |---|---|---|---|
@@ -235,9 +340,37 @@ Run in CI with TTY disabled so output is line-per-second rather than overwrite:
 | -ramp | -r | 5m | Duration to bring all terrains online |
 | -crawl | -c | false | Crawl origin for links when no sitemap is found |
 | -crawl-depth | -cd | 3 | How many links deep to crawl |
-| -save-to | -s | . | Local path or s3:// URI for report output |
-| -dashboard-port | -dp | 4000 | Port for the live dashboard |
 | -tty | | true | Use carriage return for live output. Set false for CI |
+
+### Report Delivery
+
+| Flag | Alias | Default | Description |
+|---|---|---|---|
+| -save-to | -s | . | Comma-separated delivery destinations: local path, s3://, or mailto: |
+
+### SMTP (for mailto: delivery)
+
+| Flag | Alias | Default | Description |
+|---|---|---|---|
+| -smtp-host | -sh | | SMTP hostname. Overrides LEMMINGS_SMTP_HOST |
+| -smtp-port | -sp | 0 | SMTP port. Overrides LEMMINGS_SMTP_PORT |
+| -smtp-user | -su | | SMTP username. Overrides LEMMINGS_SMTP_USER |
+| -smtp-pass | -spw | | SMTP password. Overrides LEMMINGS_SMTP_PASS |
+| -smtp-from | -sf | | From address. Overrides LEMMINGS_SMTP_FROM |
+
+### Dashboard
+
+| Flag | Alias | Default | Description |
+|---|---|---|---|
+| -dashboard-port | -dp | 4000 | Port for the live dashboard |
+
+### Prometheus
+
+| Flag | Alias | Default | Description |
+|---|---|---|---|
+| -observe | -obs | false | Enable Prometheus metrics exporter |
+| -metrics-port | -mp | 9090 | Port for the /metrics endpoint |
+| -metrics-url-label | -mul | path | URL label granularity: full, path, or none |
 
 ---
 
@@ -259,7 +392,12 @@ about to happen:
       est. duration: ~5m30s wall clock
 
       limit:         100 goroutines
+      save-to:
+        → .
+        → s3://my-bucket/lemmings
+        → mailto:ops@mycompany.com
       dashboard:     http://localhost:4000
+      metrics:       http://localhost:9090/metrics
 
     ─────────────────────────────────────────
       lemmings are gathering...
@@ -288,7 +426,10 @@ The final summary closes the run:
 
       waiting room:   312 lemmings held
     ─────────────────────────────────────────
-      report: ./lemmings/myapp.com/
+      report (md):   ./lemmings/myapp.com/lemmings.2026.04.14.myapp.com.md
+      report (html): ./lemmings/myapp.com/lemmings.2026.04.14.myapp.com.html
+      report (md):   s3://my-bucket/lemmings/lemmings.2026.04.14.myapp.com.md
+      report (html): s3://my-bucket/lemmings/lemmings.2026.04.14.myapp.com.html
 
 ---
 
@@ -341,6 +482,10 @@ The short version:
 - Each lemming's cookie jar isolation is structurally verified — session state
   never crosses between virtual users.
 
+- Report delivery targets are tested independently. A failure in one target
+  (such as an unreachable S3 bucket or SMTP server) does not prevent other
+  targets from receiving the report.
+
 ---
 
 ## Dependencies
@@ -352,6 +497,8 @@ The short version:
 | [room](https://github.com/andreimerlescu/room) | Waiting room integration (optional — detected automatically) |
 | golang.org/x/net/html | HTML link extraction during crawl |
 | golang.org/x/net/publicsuffix | Cookie jar domain scoping |
+| github.com/aws/aws-sdk-go-v2 | S3 report upload |
+| github.com/prometheus/client_golang | Prometheus metrics exporter |
 
 ---
 
