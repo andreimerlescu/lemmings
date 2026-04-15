@@ -81,11 +81,34 @@ func main() {
 		WithAlias("crawl-depth", "cd").
 		WithValidator("crawl-depth", figtree.AssureIntInRange(1, 100))
 
-	figs.NewString("save-to", defaultSaveTo,
-		"Report destination — local path or s3:// URI. Env: LEMMINGS_SAVE_TO").
-		WithAlias("save-to", "s").
-		WithValidator("save-to", figtree.AssureStringNotEmpty)
+	// Remove:
+figs.NewString("save-to", defaultSaveTo, ...)
 
+// Replace with:
+figs.NewList("save-to", []string{defaultSaveTo},
+    "Report destinations — comma-separated list of local paths, "+
+        "s3:// URIs, or mailto: URIs. "+
+        "Env: LEMMINGS_SAVE_TO").
+    WithAlias("save-to", "s").
+    WithValidator("save-to", figtree.AssureListNotEmpty)
+
+figs.NewString("smtp-host", "", "SMTP server hostname. Overrides LEMMINGS_SMTP_HOST").
+    WithAlias("smtp-host", "sh")
+
+figs.NewInt("smtp-port", 0, "SMTP server port (465=TLS, 587=STARTTLS, 25=plain). Overrides LEMMINGS_SMTP_PORT").
+    WithAlias("smtp-port", "sp").
+    WithValidator("smtp-port", figtree.AssureIntInRange(0, 65535))
+
+figs.NewString("smtp-user", "", "SMTP username. Overrides LEMMINGS_SMTP_USER").
+    WithAlias("smtp-user", "su")
+
+figs.NewString("smtp-pass", "", "SMTP password. Overrides LEMMINGS_SMTP_PASS").
+    WithAlias("smtp-pass", "spw")
+
+figs.NewString("smtp-from", "", "SMTP from address. Overrides LEMMINGS_SMTP_FROM").
+    WithAlias("smtp-from", "sf")
+
+	
 	figs.NewInt("dashboard-port", defaultDashboardPort, "Port for the live dashboard").
 		WithAlias("dashboard-port", "dp").
 		WithValidator("dashboard-port", figtree.AssureIntInRange(1024, 65535))
