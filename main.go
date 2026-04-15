@@ -90,7 +90,17 @@ func main() {
 		WithAlias("dashboard-port", "dp").
 		WithValidator("dashboard-port", figtree.AssureIntInRange(1024, 65535))
 
-	// ← new: no single-char alias, too easy to mistype in a script
+	figs.NewBool("observe", defaultObserve, "Enable Prometheus metrics exporter on -metrics-port").
+         WithAlias("observe", "obs")
+
+	figs.NewInt("metrics-port", defaultMetricsPort, "Port for the Prometheus /metrics endpoint").
+	     WithAlias("metrics-port", "mp").
+	     WithValidator("metrics-port", figtree.AssureIntInRange(1024, 65535))
+
+	figs.NewString("metrics-url-label", defaultMetricsURLLabel, "URL label granularity on visit duration histogram: full, path, or none. Capped at 999 distinct values. Use none for sites with large URL surfaces.").
+         WithAlias("metrics-url-label", "mul").
+         WithValidator("metrics-url-label", figtree.AssureStringInSet("full", "path", "none"))
+
 	figs.NewBool("tty", defaultTTY,
 		"Use carriage return for live STDOUT updates. Set false for CI pipelines")
 
@@ -123,6 +133,9 @@ func main() {
 		DashboardPort: *figs.Int("dashboard-port"),
 		TTY:           *figs.Bool("tty"), // ← new
 		Version:       version,
+		Observe:         *figs.Bool("observe"),
+		MetricsPort:     *figs.Int("metrics-port"),
+		MetricsURLLabel: *figs.String("metrics-url-label"),
 	}
 
 	printBootSummary(cfg)
@@ -167,6 +180,11 @@ func printBootSummary(cfg SwarmConfig) {
 	fmt.Printf("  save-to:       %s\n", cfg.SaveTo)
 	fmt.Printf("  tty:           %v\n", cfg.TTY)          // ← new
 	fmt.Printf("  dashboard:     http://localhost:%d\n", cfg.DashboardPort)
+	fmt.Printf("  observe:       %v\n", cfg.Observe)
+	if cfg.Observe {
+	    fmt.Printf("  metrics:     http://localhost:%d/metrics\n", cfg.MetricsPort)
+	    fmt.Printf("  url-label:   %s\n", cfg.MetricsURLLabel)
+	}
 	fmt.Println()
 
 	warned := false
