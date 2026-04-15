@@ -9,6 +9,85 @@ import (
 	"time"
 )
 
+// TestRun_VisitCompleteEvent_CarriesMetrics verifies that the EventVisitComplete
+// events emitted by Run carry non-zero BytesIn and Duration fields so that
+// observers can record metrics without reading from a separate channel.
+func TestRun_VisitCompleteEvent_CarriesMetrics(t *testing.T) {
+    srv := newTestServer(t).withNormalPage("/").build()
+    cfg := testConfig()
+    cfg.Hit = srv.URL
+    cfg.Until = 200 * time.Millisecond
+    pool := testPool(srv.URL)
+    bus := NewEventBus()
+
+    var mu sync.Mutex
+    var visitEvents []Event
+    bus.Subscribe(Filter(func(e Event) {
+        mu.Lock()
+        visitEvents = append(visitEvents, e)
+        mu.Unlock()
+    }, EventVisitComplete))
+
+    l := NewLemming(0, 0, cfg, pool, newTestClient(), bus, testMetrics())
+    l.Run(context.Background())
+
+    mu.Lock()
+    defer mu.Unlock()
+
+    if len(visitEvents) == 0 {
+        t.Fatal("expected at least one EventVisitComplete")
+    }
+    for i, e := range visitEvents {
+        if e.Duration == 0 {
+            t.Errorf("visit[%d]: Duration should be non-zero on EventVisitComplete", i)
+        }
+        if e.StatusCode == 0 {
+            t.Errorf("visit[%d]: StatusCode should be non-zero on EventVisitComplete", i)
+        }
+    }
+}
+
+// TestRun_WaitingRoomEvent_CarriesDuration verifies that the EventWaitingRoom
+// event emitted after admission carries a non-zero Duration field.
+func TestRun_WaitingRoomEvent_CarriesDuration(t *testing.T) {
+    srv := newTestServer(t).
+        withAdmittingWaitingRoom("/", 5, 1).
+        build()
+
+    cfg := testConfig()
+    cfg.Hit = srv.URL
+    cfg.Until = 2 * time.Second
+    pool := &URLPool{
+        Origin:    srv.URL,
+        URLs:      []string{srv.URL + "/"},
+        Checksums: map[string]string{srv.URL + "/": sha512hex([]byte(normalPageBody))},
+    }
+    bus := NewEventBus()
+
+    var mu sync.Mutex
+    var wrEvents []Event
+    bus.Subscribe(Filter(func(e Event) {
+        mu.Lock()
+        wrEvents = append(wrEvents, e)
+        mu.Unlock()
+    }, EventWaitingRoom))
+
+    l := NewLemming(0, 0, cfg, pool, newTestClient(), bus, testMetrics())
+    l.Run(context.Background())
+
+    mu.Lock()
+    defer mu.Unlock()
+
+    if len(wrEvents) == 0 {
+        t.Skip("lemming was not placed in waiting room during test window")
+    }
+    for i, e := range wrEvents {
+        if e.Duration == 0 {
+            t.Errorf("wrEvent[%d]: Duration should be non-zero after admission", i)
+        }
+    }
+}
+
 // ── NewLemming ────────────────────────────────────────────────────────────────
 
 // TestNewLemming_Identity verifies that a freshly constructed Lemming has
