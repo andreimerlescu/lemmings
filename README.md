@@ -500,18 +500,6 @@ The short version:
 
 ---
 
-## v1.1.0 Roadmap
-
-The Navigator interface is designed for extension. The following targets are
-planned for v1.1.0:
-
-- **MySQL** — connect via DSN, discover tables, issue read and write queries
-- **PostgreSQL** — same as MySQL with postgres-specific query patterns
-- **MongoDB** — discover collections, issue find and insert operations
-- **SQLite** — local database load testing for embedded applications
-
----
-
 ## Contributing
 
 Lemmings is open source under the Apache 2.0 license. Contributions are welcome.
