@@ -25,6 +25,11 @@ const (
 	defaultDashboardPort int           = 4000
 	defaultTTY           bool          = true  // ← new
 
+	defaultObserve         bool   = false
+	defaultMetricsPort     int    = 9090
+	defaultMetricsURLLabel string = "path"
+
+
 	warnTotalLemmings   int64 = 100_000
 	warnTotalGoroutines int64 = 10_000
 
