@@ -118,50 +118,71 @@ func (r *Reporter) Ingest(ll LifeLog) {
 }
 
 // Write renders the .md and .html report files to the configured destination.
-func (r *Reporter) Write(saveTo string) error {
+// Write renders the report and delivers it to all registered targets
+// concurrently. Returns a combined error if any target fails — successful
+// targets are not affected by the failure of others.
+//
+// The context is passed to each target's Deliver method. Cancelling the
+// context aborts in-progress deliveries (S3 uploads, SMTP connections)
+// but does not affect targets that have already completed.
+//
+// Usage:
+//
+//	if err := reporter.Write(ctx); err != nil {
+//	    log.Printf("report delivery error: %v", err)
+//	}
+//
+// Warning: Write must be called after Run completes. Calling it while
+// lemmings are still running produces a report of incomplete data.
+func (r *Reporter) Write(ctx context.Context) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	data := r.buildReportData()
+	r.mu.Unlock()
 
-	// Render markdown
 	md, err := renderMarkdown(data)
 	if err != nil {
 		return fmt.Errorf("render markdown: %w", err)
 	}
 
-	// Render HTML
-	htmlOut, err := renderHTML(data)
+	html, err := renderHTML(data)
 	if err != nil {
 		return fmt.Errorf("render html: %w", err)
 	}
 
-	// Resolve save destination
-	dest, err := resolveSavePath(saveTo, r.cfg.Hit)
-	if err != nil {
-		return fmt.Errorf("resolve save path: %w", err)
+	filename := r.buildFilename()
+
+	if len(r.targets) == 0 {
+		// No targets registered — fall back to stdout
+		fmt.Println(md)
+		return nil
 	}
 
-	if err := os.MkdirAll(dest, 0755); err != nil {
-		return fmt.Errorf("create output directory %s: %w", dest, err)
+	type result struct {
+		name string
+		err  error
 	}
 
-	date := time.Now().Format(reportDateFormat)
-	domain := domainFromURL(r.cfg.Hit)
-
-	mdPath := filepath.Join(dest, fmt.Sprintf("lemmings.%s.%s.md", date, domain))
-	htmlPath := filepath.Join(dest, fmt.Sprintf("lemmings.%s.%s.html", date, domain))
-
-	if err := os.WriteFile(mdPath, []byte(md), 0644); err != nil {
-		return fmt.Errorf("write markdown report: %w", err)
+	results := make(chan result, len(r.targets))
+	for _, target := range r.targets {
+		target := target
+		go func() {
+			err := target.Deliver(ctx, filename, md, html)
+			results <- result{name: target.Name(), err: err}
+		}()
 	}
-	fmt.Printf("  report (md):   %s\n", mdPath)
 
-	if err := os.WriteFile(htmlPath, []byte(htmlOut), 0644); err != nil {
-		return fmt.Errorf("write html report: %w", err)
+	var errs []string
+	for i := 0; i < len(r.targets); i++ {
+		res := <-results
+		if res.err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", res.name, res.err))
+			fmt.Printf("  ⚠ delivery failed [%s]: %v\n", res.name, res.err)
+		}
 	}
-	fmt.Printf("  report (html): %s\n", htmlPath)
 
+	if len(errs) > 0 {
+		return fmt.Errorf("report delivery errors:\n  %s", strings.Join(errs, "\n  "))
+	}
 	return nil
 }
 
