@@ -1162,34 +1162,6 @@ func freeMetricsPort() int {
 	return p
 }
 
-// mockObserver is a test implementation of the Observer interface that
-// records whether Attach and Detach were called and can be configured
-// to return errors.
-type mockObserver struct {
-	attached  bool
-	detached  bool
-	attachErr error
-	detachErr error
-}
-
-func (m *mockObserver) Attach(ctx context.Context, bus *EventBus) error {
-	if m.attachErr != nil {
-		return m.attachErr
-	}
-	m.attached = true
-	return nil
-}
-
-func (m *mockObserver) Detach() error {
-	if m.detachErr != nil {
-		return m.detachErr
-	}
-	m.detached = true
-	return nil
-}
-
-func (m *mockObserver) Name() string { return "mock" }
-
 // ── Prometheus metric reading helpers ─────────────────────────────────────────
 // These functions extract numeric values from Prometheus collectors for
 // use in test assertions. They use the prometheus/client_model DTOs rather
