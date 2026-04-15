@@ -132,6 +132,18 @@ func NewSwarm(ctx context.Context, cfg SwarmConfig) (*Swarm, error) {
 	}
 
 	s.reporter = NewReporter(cfg)
+	for _, dest := range cfg.SaveTo {
+    target, err := ParseTarget(dest)
+    if err != nil {
+        cancel()
+        return nil, fmt.Errorf("invalid save-to target %q: %w", dest, err)
+    }
+    // Inject SMTP overrides from flags into MailTarget
+    if mt, ok := target.(*MailTarget); ok {
+        applyFlagSMTPOverrides(mt, cfg)
+    }
+    s.reporter.AddTarget(target)
+}
 	s.dashboard = NewDashboard(cfg, bus, &s.metrics, token)
 
 	if cfg.Observe {
@@ -453,8 +465,29 @@ func (s *Swarm) printFinalSummary() {
 }
 
 // Report triggers the reporter to write output files.
-func (s *Swarm) Report() error {
-	return s.reporter.Write(s.cfg.SaveTo)
+func (s *Swarm) Report(ctx context.Context) error {
+    return s.reporter.Write(ctx)
+}
+
+// applyFlagSMTPOverrides copies non-zero flag values from SwarmConfig
+// into a MailTarget's SMTPConfig, overriding environment variables.
+// This is only called when the target is a *MailTarget.
+func applyFlagSMTPOverrides(mt *MailTarget, cfg SwarmConfig) {
+    if cfg.SMTPHost != "" {
+        mt.smtpCfg.Host = cfg.SMTPHost
+    }
+    if cfg.SMTPPort != 0 {
+        mt.smtpCfg.Port = cfg.SMTPPort
+    }
+    if cfg.SMTPUser != "" {
+        mt.smtpCfg.User = cfg.SMTPUser
+    }
+    if cfg.SMTPPass != "" {
+        mt.smtpCfg.Pass = cfg.SMTPPass
+    }
+    if cfg.SMTPFrom != "" {
+        mt.smtpCfg.From = cfg.SMTPFrom
+    }
 }
 
 // generateToken produces a cryptographically random 64-char hex string.
