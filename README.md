@@ -364,8 +364,6 @@ planned for v1.1.0:
 - **PostgreSQL** — same as MySQL with postgres-specific query patterns
 - **MongoDB** — discover collections, issue find and insert operations
 - **SQLite** — local database load testing for embedded applications
-- **Prometheus** — plug the EventBus into a metrics exporter directly
-- **S3 report upload** — fully implemented upload, not just path resolution
 
 ---
 
