@@ -73,6 +73,7 @@ type Swarm struct {
 	token     string
 	startedAt time.Time
 	mu        sync.Mutex
+	observers []Observer
 }
 
 // NewSwarm constructs and indexes the swarm but does not start lemmings yet.
@@ -129,7 +130,40 @@ func NewSwarm(ctx context.Context, cfg SwarmConfig) (*Swarm, error) {
 	s.reporter = NewReporter(cfg)
 	s.dashboard = NewDashboard(cfg, bus, &s.metrics, token)
 
+	if cfg.Observe {
+	    obs := NewPrometheusObserver(cfg)
+    	if err := s.RegisterObserver(obs); err != nil {
+    	    cancel()
+    	    return nil, fmt.Errorf("prometheus observer: %w", err)
+    	}
+	}
+
 	return s, nil
+}
+
+// RegisterObserver attaches an Observer to the swarm's EventBus and
+// appends it to the internal observer list for automatic cleanup when
+// Run completes.
+//
+// Must be called after NewSwarm and before Run. Not safe for concurrent
+// use — call RegisterObserver sequentially during swarm setup.
+//
+// Usage:
+//
+//	obs := NewPrometheusObserver(cfg)
+//	if err := swarm.RegisterObserver(obs); err != nil {
+//	    log.Fatal(err)
+//	}
+//
+// Warning: if Attach returns an error the observer is not appended to
+// the list and RegisterObserver returns the error. Run will not attempt
+// to call Detach on an observer that was never successfully attached.
+func (s *Swarm) RegisterObserver(o Observer) error {
+	if err := o.Attach(s.ctx, s.events); err != nil {
+		return fmt.Errorf("observer %s attach: %w", o.Name(), err)
+	}
+	s.observers = append(s.observers, o)
+	return nil
 }
 
 // sendLifeLog is the non-blocking death drain. Primary first, overflow second,
@@ -153,6 +187,13 @@ func (s *Swarm) sendLifeLog(ll LifeLog) {
 // Blocks until all lemmings are dead and results are collected.
 func (s *Swarm) Run() error {
 	s.startedAt = time.Now()
+	defer func() {
+	    for _, o := range s.observers {
+	        if err := o.Detach(); err != nil {
+	            log.Printf("observer %s detach error: %v", o.Name(), err)
+	        }
+	    }
+	}()
 
 	go func() {
 		if err := s.dashboard.Serve(s.ctx); err != nil {
