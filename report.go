@@ -20,11 +20,38 @@ const reportDateFormat = "2006.01.02"
 // output files when Write is called. All ingestion is safe for concurrent
 // use — lemmings die in parallel and all call Ingest simultaneously.
 type Reporter struct {
-	cfg     SwarmConfig
-	mu      sync.Mutex
-	byPath  map[string]*pathStats // per-URL aggregated metrics
-	all     []LifeLog             // full log archive for percentile calc
+	cfg       SwarmConfig
+	mu        sync.Mutex
+	byPath    map[string]*pathStats
+	all       []LifeLog
 	startedAt time.Time
+	targets   []ReportTarget // delivery targets, populated via AddTarget
+}
+
+// AddTarget registers a ReportTarget to receive the rendered report
+// when Write is called. Multiple targets can be registered — all receive
+// the same rendered content delivered concurrently.
+//
+// Usage:
+//
+//	r.AddTarget(&LocalTarget{basePath: "."})
+//	r.AddTarget(s3target)
+//	r.AddTarget(mailTarget)
+//
+// Warning: AddTarget is not safe for concurrent use. Call it during
+// swarm setup before Run is invoked.
+func (r *Reporter) AddTarget(t ReportTarget) {
+	r.targets = append(r.targets, t)
+}
+
+// buildFilename constructs the base report filename from the current date
+// and the domain extracted from the hit URL.
+//
+// Format: lemmings.YYYY.MM.DD.domain
+func (r *Reporter) buildFilename() string {
+	date := time.Now().Format(reportDateFormat)
+	domain := domainFromURL(r.cfg.Hit)
+	return fmt.Sprintf("lemmings.%s.%s", date, domain)
 }
 
 // pathStats holds aggregated metrics for a single URL path.
