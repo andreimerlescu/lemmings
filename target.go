@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -137,12 +138,12 @@ func (t *LocalTarget) Deliver(_ context.Context, filename, md, html string) erro
 // resolveDir computes the output directory from the base path and the
 // domain embedded in the filename.
 func (t *LocalTarget) resolveDir(filename string) (string, error) {
-	// filename is like "lemmings.2026.04.14.example.com"
-	// domain is the last dot-separated segment(s) after the date
-	parts := strings.SplitN(filename, ".", 4)
+	// filename is "lemmings.YYYY.MM.DD.domain"
+	// Skip "lemmings" + 3 date components = 4 dot-separated parts
+	parts := strings.SplitN(filename, ".", 5)
 	domain := "unknown"
-	if len(parts) == 4 {
-		domain = parts[3]
+	if len(parts) == 5 {
+		domain = parts[4]
 	}
 	return filepath.Join(t.basePath, "lemmings", domain), nil
 }
@@ -441,6 +442,9 @@ func (t *MailTarget) Name() string {
 //
 // TLS mode is selected automatically from the configured port.
 func (t *MailTarget) Deliver(_ context.Context, filename, md, html string) error {
+	_, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	msg, err := t.buildMessage(filename, md, html)
 	if err != nil {
 		return fmt.Errorf("mail target: build message: %w", err)
@@ -631,7 +635,9 @@ func (t *MailTarget) sendViaSMTPConn(client *smtp.Client, msg []byte) error {
 // parseInt parses a string to int, returning 0 on failure.
 // Used for permissive port number parsing from environment variables.
 func parseInt(s string) int {
-	var n int
-	fmt.Sscanf(s, "%d", &n)
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0
+	}
 	return n
 }

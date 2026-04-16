@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"sync"
+	"time"
 
 	"github.com/andreimerlescu/sema"
 	"golang.org/x/net/publicsuffix"
@@ -67,7 +68,10 @@ func (t *Terrain) Wait() {
 func (t *Terrain) spawnLemming(ctx context.Context, packIndex int64) {
 	defer t.wg.Done() // handles ALL exit paths cleanly
 
-	if err := t.sem.AcquireWith(ctx); err != nil {
+	// Add a timeout to prevent hanging if AcquireWith blocks forever
+	acquireCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+	if err := t.sem.AcquireWith(acquireCtx); err != nil {
 		t.metrics.LemmingsFailed.Add(1)
 		t.bus.Emit(Event{
 			Kind:    EventLemmingFailed,

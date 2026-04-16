@@ -398,21 +398,13 @@ func (ts *testServer) build() *httptest.Server {
 
 	// Default fallback — returns 404 with a diagnostic body so test
 	// failures clearly identify which path was unexpectedly requested.
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Only fire the 404 for paths not explicitly registered.
-		// The "/" route itself may be registered — check routes map.
-		ts.mu.RLock()
-		_, registered := ts.routes[r.URL.Path]
-		ts.mu.RUnlock()
-		if !registered {
+	// Only register if "/" was not already explicitly configured.
+	if _, hasRoot := ts.routes["/"]; !hasRoot {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			fmt.Fprintf(w, "testServer: no route registered for %s", r.URL.Path)
-			return
-		}
-		// Registered "/" handler — already handled by explicit route above.
-		// This branch should not be reached but is here for safety.
-		w.WriteHeader(http.StatusOK)
-	})
+		})
+	}
 
 	srv := httptest.NewServer(mux)
 	ts.t.Cleanup(srv.Close)

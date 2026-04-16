@@ -115,13 +115,10 @@ func TestPrometheusObserver_Attach_RegistersSubscriber(t *testing.T) {
 	}
 	defer o.Detach()
 
-	// Emit a born event and verify the alive gauge incremented
 	bus.Emit(Event{Kind: EventLemmingBorn})
-
-	// Give the synchronous bus time to deliver
 	time.Sleep(10 * time.Millisecond)
 
-	val := gaugeValue(t, o.alive.With(prometheus.Labels{}))
+	val := simpleGaugeValue(t, o.alive)
 	if val != 1 {
 		t.Errorf("expected alive=1 after EventLemmingBorn, got %v", val)
 	}
@@ -207,7 +204,6 @@ func TestPrometheusObserver_Detach_UnregistersSubscriber(t *testing.T) {
 		t.Fatalf("Attach error: %v", err)
 	}
 
-	// Confirm it is receiving events
 	bus.Emit(Event{Kind: EventLemmingBorn})
 	time.Sleep(10 * time.Millisecond)
 
@@ -215,12 +211,11 @@ func TestPrometheusObserver_Detach_UnregistersSubscriber(t *testing.T) {
 		t.Fatalf("Detach error: %v", err)
 	}
 
-	// Emit another born event after detach — should not increment
 	bus.Emit(Event{Kind: EventLemmingBorn})
 	time.Sleep(10 * time.Millisecond)
 
 	// alive should still be 1, not 2
-	val := gaugeValue(t, o.alive.With(prometheus.Labels{}))
+	val := simpleGaugeValue(t, o.alive)
 	if val != 1 {
 		t.Errorf("expected alive=1 (pre-detach value), got %v after post-detach emit", val)
 	}
@@ -290,7 +285,7 @@ func TestObserver_LemmingBorn_IncrementsAlive(t *testing.T) {
 	bus.Emit(Event{Kind: EventLemmingBorn})
 	time.Sleep(10 * time.Millisecond)
 
-	if val := gaugeValue(t, o.alive.With(prometheus.Labels{})); val != 1 {
+	if val := simpleGaugeValue(t, o.alive); val != 1 {
 		t.Errorf("expected alive=1, got %v", val)
 	}
 }
@@ -306,7 +301,7 @@ func TestObserver_LemmingDied_DecrementsAlive(t *testing.T) {
 	bus.Emit(Event{Kind: EventLemmingDied})
 	time.Sleep(10 * time.Millisecond)
 
-	if val := gaugeValue(t, o.alive.With(prometheus.Labels{})); val != 1 {
+	if val := simpleGaugeValue(t, o.alive); val != 1 {
 		t.Errorf("expected alive=1 after 2 born + 1 died, got %v", val)
 	}
 	if val := counterValue(t, o.completed); val != 1 {
@@ -1077,11 +1072,11 @@ func gaugeValue(tb testing.TB, g prometheus.Gauge) float64 {
 	return m.GetGauge().GetValue()
 }
 
-// simpleGaugeValue reads the current float64 value from a plain prometheus.Gauge.
+// simpleGaugeValue reads the current float64 value from a plain *prometheus.Gauge.
 func simpleGaugeValue(tb testing.TB, g prometheus.Gauge) float64 {
 	tb.Helper()
 	var m dto.Metric
-	if err := g.Write(&m); err != nil {
+	if err := g.(prometheus.Metric).Write(&m); err != nil {
 		tb.Fatalf("simpleGaugeValue: Write error: %v", err)
 	}
 	return m.GetGauge().GetValue()
@@ -1116,7 +1111,11 @@ func histogramSampleCount(tb testing.TB, hv *prometheus.HistogramVec, labels pro
 	if err != nil {
 		tb.Fatalf("histogramSampleCount: GetMetricWith error: %v", err)
 	}
-	return simpleHistogramSampleCount(tb, h)
+	hist, ok := h.(prometheus.Histogram)
+	if !ok {
+		tb.Fatalf("histogramSampleCount: metric is not a Histogram")
+	}
+	return simpleHistogramSampleCount(tb, hist)
 }
 
 // simpleHistogramSampleCount reads the sample count from a plain

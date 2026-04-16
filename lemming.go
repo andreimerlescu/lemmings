@@ -38,10 +38,10 @@ const (
 
 // Identity is the lemming's persistent persona for its entire lifespan.
 type Identity struct {
-	ID        string // UUID-style hex identifier
-	Terrain   int64
-	Pack      int64
-	BornAt    time.Time
+	ID      string // UUID-style hex identifier
+	Terrain int64
+	Pack    int64
+	BornAt  time.Time
 }
 
 // WaitingRoomMetric captures everything about a lemming's time in a queue.
@@ -161,14 +161,14 @@ func (l *Lemming) Run(parent context.Context) LifeLog {
 			visits = append(visits, visit)
 
 			l.bus.Emit(Event{
-    			Kind:       EventVisitComplete,
-    			LemmingID:  l.identity.ID,
-    			Terrain:    int(l.identity.Terrain),
-    			Pack:       int(l.identity.Pack),
-    			URL:        url,
-    			StatusCode: visit.StatusCode,
-    			BytesIn:    visit.BytesIn,
-    			Duration:   visit.Duration,
+				Kind:       EventVisitComplete,
+				LemmingID:  l.identity.ID,
+				Terrain:    int(l.identity.Terrain),
+				Pack:       int(l.identity.Pack),
+				URL:        url,
+				StatusCode: visit.StatusCode,
+				BytesIn:    visit.BytesIn,
+				Duration:   visit.Duration,
 			})
 
 		}
@@ -349,7 +349,7 @@ func detectWaitingRoom(body []byte) (bool, int) {
 	}
 
 	pos, err := strconv.Atoi(strings.TrimSpace(s[start : start+end]))
-	if err != nil {
+	if err != nil || pos < 0 { // ← clamp negative to 0
 		return true, 0
 	}
 

@@ -93,7 +93,7 @@ type PrometheusObserver struct {
 
 	// lemmings_alive tracks the current number of running lemmings.
 	// Incremented on EventLemmingBorn, decremented on EventLemmingDied.
-	alive *prometheus.GaugeVec
+	alive prometheus.Gauge
 
 	// lemmings_completed_total counts lemmings that completed normally.
 	completed prometheus.Counter
@@ -162,10 +162,10 @@ func NewPrometheusObserver(cfg SwarmConfig) *PrometheusObserver {
 
 	// ── Lemming lifecycle ─────────────────────────────────────────────
 
-	o.alive = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	o.alive = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "lemmings_alive",
 		Help: "Number of lemmings currently running.",
-	}, []string{})
+	})
 
 	o.completed = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "lemmings_completed_total",
@@ -303,26 +303,33 @@ func (o *PrometheusObserver) Attach(ctx context.Context, bus *EventBus) error {
 		http.Redirect(w, r, "/metrics", http.StatusMovedPermanently)
 	})
 
-	o.server = &http.Server{
+	srv := &http.Server{
 		Addr:         fmt.Sprintf("localhost:%d", o.cfg.MetricsPort),
 		Handler:      mux,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+	o.server = srv
 
 	// Start server in background — shut down when context cancels
 	go func() {
 		<-ctx.Done()
+		o.mu.Lock()
+		s := o.server
+		o.mu.Unlock()
+		if s == nil {
+			return
+		}
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := o.server.Shutdown(shutCtx); err != nil {
+		if err := s.Shutdown(shutCtx); err != nil {
 			log.Printf("prometheus observer shutdown error: %v", err)
 		}
 	}()
 
 	go func() {
-		if err := o.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("prometheus observer server error: %v", err)
 		}
 	}()
@@ -369,10 +376,10 @@ func (o *PrometheusObserver) handleEvent(e Event) {
 	switch e.Kind {
 
 	case EventLemmingBorn:
-		o.alive.With(prometheus.Labels{}).Inc()
+		o.alive.Inc()
 
 	case EventLemmingDied:
-		o.alive.With(prometheus.Labels{}).Dec()
+		o.alive.Dec()
 		o.completed.Inc()
 
 		// Record visit-level metrics from the event if populated.
@@ -415,8 +422,8 @@ func (o *PrometheusObserver) handleEvent(e Event) {
 // label value "other" and a one-time warning is logged.
 func (o *PrometheusObserver) recordVisit(e Event) {
 	// Status class label
-	statusClass := statusClass(e.StatusCode)
-	o.visits.With(prometheus.Labels{"status_class": statusClass}).Inc()
+	statusclass := statusClass(e.StatusCode)
+	o.visits.With(prometheus.Labels{"status_class": statusclass}).Inc()
 
 	// Duration observation
 	if e.Duration > 0 {
@@ -491,7 +498,7 @@ func statusClass(code int) string {
 		return "3xx"
 	case code >= 400 && code < 500:
 		return "4xx"
-	case code >= 500:
+	case code >= 500 && code < 600:
 		return "5xx"
 	default:
 		return "unknown"

@@ -734,9 +734,9 @@ func TestReporterWrite_CreatesFiles(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testConfig()
 	cfg.Hit = "http://localhost:8080/"
-	cfg.SaveTo = append(cfg.SaveTo, dir)
 
 	r := NewReporter(cfg)
+	r.AddTarget(&LocalTarget{basePath: dir})
 	r.Ingest(makeLifeLog("http://localhost:8080/", 5, http.StatusOK, false, nil))
 
 	if err := r.Write(context.Background()); err != nil {
@@ -763,14 +763,14 @@ func TestReporterWrite_CreatesFiles(t *testing.T) {
 // the output directory tree if it does not already exist.
 func TestReporterWrite_CreatesDirectoryIfAbsent(t *testing.T) {
 	base := t.TempDir()
-	// Use a nested path that definitely does not exist yet
 	dir := filepath.Join(base, "deep", "nested", "path")
 
 	cfg := testConfig()
 	cfg.Hit = "http://localhost:8080/"
 	r := NewReporter(cfg)
+	r.AddTarget(&LocalTarget{basePath: dir})
 
-	if err := r.Write(dir); err != nil {
+	if err := r.Write(context.Background()); err != nil {
 		t.Fatalf("Write should create missing directories, got error: %v", err)
 	}
 }
@@ -783,9 +783,10 @@ func TestReporterWrite_FilesNonEmpty(t *testing.T) {
 	cfg.Hit = "http://localhost:8080/"
 
 	r := NewReporter(cfg)
+	r.AddTarget(&LocalTarget{basePath: dir})
 	r.Ingest(makeLifeLog("http://localhost:8080/", 3, http.StatusOK, false, nil))
 
-	if err := r.Write(dir); err != nil {
+	if err := r.Write(context.Background()); err != nil {
 		t.Fatalf("Write error: %v", err)
 	}
 
@@ -952,9 +953,9 @@ func makeTestReportData() ReportData {
 				URL:   "http://localhost:8080/",
 				Hits:  600,
 				Bytes: "600 KB",
-				xx2:   580,
-				xx4:   15,
-				xx5:   5,
+				XX2:   580,
+				XX4:   15,
+				XX5:   5,
 				P50:   18 * time.Millisecond,
 				P99:   380 * time.Millisecond,
 			},
@@ -962,8 +963,8 @@ func makeTestReportData() ReportData {
 				URL:         "http://localhost:8080/about",
 				Hits:        400,
 				Bytes:       "400 KB",
-				xx2:         370,
-				xx3:         30,
+				XX2:         370,
+				XX3:         30,
 				WaitingRoom: 10,
 				P50:         22 * time.Millisecond,
 				P99:         420 * time.Millisecond,
@@ -981,8 +982,8 @@ func makeLargeReportData(n int) ReportData {
 			URL:   fmt.Sprintf("http://localhost:8080/page-%d", i),
 			Hits:  int64(100 - i),
 			Bytes: "100 KB",
-			xx2:   int64(90 - i),
-			xx4:   int64(i),
+			XX2:   int64(90 - i),
+			XX4:   int64(i),
 			P50:   time.Duration(i+1) * time.Millisecond,
 			P99:   time.Duration(i+10) * time.Millisecond,
 		}

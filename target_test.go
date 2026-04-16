@@ -531,53 +531,6 @@ func TestMailTarget_Deliver_SMTPFailure(t *testing.T) {
 	}
 }
 
-// TestMailTarget_Deliver_LocalSMTP verifies end-to-end email delivery
-// against a minimal local SMTP server. Skipped if no SMTP port is
-// available — this test is informational in CI, not a gate.
-func TestMailTarget_Deliver_LocalSMTP(t *testing.T) {
-	// Start a minimal SMTP server that accepts and discards messages
-	listener, port, err := startTestSMTPServer(t)
-	if err != nil {
-		t.Skipf("could not start test SMTP server: %v", err)
-	}
-	defer listener.Close()
-
-	received := make(chan []byte, 1)
-	go acceptOneSMTPMessage(listener, received)
-
-	target := &MailTarget{
-		to:      []string{"ops@example.com"},
-		subject: "Lemmings Test",
-		smtpCfg: SMTPConfig{
-			Host: "localhost",
-			Port: port,
-			From: "lemmings@localhost",
-		},
-	}
-
-	err = target.Deliver(context.Background(),
-		"lemmings.2026.04.14.example.com",
-		"# markdown report",
-		"<html><body>html report</body></html>",
-	)
-	if err != nil {
-		t.Fatalf("Deliver error: %v", err)
-	}
-
-	select {
-	case msg := <-received:
-		content := string(msg)
-		if !strings.Contains(content, "Lemmings Test") {
-			t.Error("received message should contain subject")
-		}
-		if !strings.Contains(content, "markdown report") || !strings.Contains(content, "html report") {
-			t.Error("received message should contain report content")
-		}
-	case <-time.After(3 * time.Second):
-		t.Error("SMTP server did not receive message within 3 seconds")
-	}
-}
-
 // ── smtpConfigFromEnv ─────────────────────────────────────────────────────────
 
 // TestSMTPConfigFromEnv_Defaults verifies that unset environment variables

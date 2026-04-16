@@ -53,20 +53,20 @@ type sseEvent struct {
 
 // metricsSnapshot is the payload sent to the browser every second.
 type metricsSnapshot struct {
-	Alive        int64  `json:"alive"`
-	Completed    int64  `json:"completed"`
-	Failed       int64  `json:"failed"`
-	TerrainsOnline int64 `json:"terrains_online"`
-	TotalVisits  int64  `json:"total_visits"`
-	TotalBytes   string `json:"total_bytes"`
-	WaitingRoom  int64  `json:"waiting_room"`
-	Xx2          int64  `json:"xx2"`
-	Xx3          int64  `json:"xx3"`
-	Xx4          int64  `json:"xx4"`
-	Xx5          int64  `json:"xx5"`
-	OverflowLogs int64  `json:"overflow_logs"`
-	DroppedLogs  int64  `json:"dropped_logs"`
-	ElapsedSecs  int64  `json:"elapsed_secs"`
+	Alive          int64  `json:"alive"`
+	Completed      int64  `json:"completed"`
+	Failed         int64  `json:"failed"`
+	TerrainsOnline int64  `json:"terrains_online"`
+	TotalVisits    int64  `json:"total_visits"`
+	TotalBytes     string `json:"total_bytes"`
+	WaitingRoom    int64  `json:"waiting_room"`
+	Xx2            int64  `json:"XX2"`
+	Xx3            int64  `json:"XX3"`
+	Xx4            int64  `json:"XX4"`
+	Xx5            int64  `json:"XX5"`
+	OverflowLogs   int64  `json:"overflow_logs"`
+	DroppedLogs    int64  `json:"dropped_logs"`
+	ElapsedSecs    int64  `json:"elapsed_secs"`
 }
 
 // NewDashboard constructs a Dashboard.
@@ -499,7 +499,7 @@ h1 { font-size:1.2rem;
 .event { font-size:0.78rem; color:var(--muted); padding:0.2rem 0;
   border-bottom:1px solid var(--border); font-family:monospace; }
 .event:last-child { border-bottom:none; }
-.dot { display:inline-block; width:6px; height:6px; border-radius:50%;
+.dot { display:inline-block; width:6px; height:6px; border-radius:50%%;
   margin-right:6px; vertical-align:middle; }
 .dot-born { background:var(--success); }
 .dot-died { background:var(--muted); }
@@ -552,19 +552,19 @@ h1 { font-size:1.2rem;
   </div>
   <div class="stat">
     <div class="stat-label">2xx</div>
-    <div class="stat-value success" id="xx2">—</div>
+    <div class="stat-value success" id="XX2">—</div>
   </div>
   <div class="stat">
     <div class="stat-label">3xx</div>
-    <div class="stat-value warn" id="xx3">—</div>
+    <div class="stat-value warn" id="XX3">—</div>
   </div>
   <div class="stat">
     <div class="stat-label">4xx</div>
-    <div class="stat-value danger" id="xx4">—</div>
+    <div class="stat-value danger" id="XX4">—</div>
   </div>
   <div class="stat">
     <div class="stat-label">5xx</div>
-    <div class="stat-value danger" id="xx5">—</div>
+    <div class="stat-value danger" id="XX5">—</div>
   </div>
 </div>
 
@@ -597,10 +597,10 @@ function applyMetrics(d) {
   document.getElementById('visits').textContent      = fmt(d.total_visits);
   document.getElementById('bytes').textContent       = d.total_bytes;
   document.getElementById('wr').textContent          = fmt(d.waiting_room);
-  document.getElementById('xx2').textContent         = fmt(d.xx2);
-  document.getElementById('xx3').textContent         = fmt(d.xx3);
-  document.getElementById('xx4').textContent         = fmt(d.xx4);
-  document.getElementById('xx5').textContent         = fmt(d.xx5);
+  document.getElementById('XX2').textContent         = fmt(d.XX2);
+  document.getElementById('XX3').textContent         = fmt(d.XX3);
+  document.getElementById('XX4').textContent         = fmt(d.XX4);
+  document.getElementById('XX5').textContent         = fmt(d.XX5);
   document.getElementById('elapsed').textContent     = elapsed(d.elapsed_secs);
   if (d.dropped_logs > 0) {
     document.getElementById('warn-bar').style.display = 'block';

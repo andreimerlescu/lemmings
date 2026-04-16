@@ -223,10 +223,10 @@ type PathReport struct {
 	URL         string
 	Hits        int64
 	Bytes       string // human-readable
-	xx2         int64
-	xx3         int64
-	xx4         int64
-	xx5         int64
+	XX2         int64
+	XX3         int64
+	XX4         int64
+	XX5         int64
 	WaitingRoom int64
 	Errors      int64
 	P50         time.Duration
@@ -262,10 +262,10 @@ func (r *Reporter) buildReportData() ReportData {
 			URL:         ps.URL,
 			Hits:        ps.Hits,
 			Bytes:       formatBytes(ps.Bytes),
-			xx2:         ps.xx2,
-			xx3:         ps.xx3,
-			xx4:         ps.xx4,
-			xx5:         ps.xx5,
+			XX2:         ps.xx2,
+			XX3:         ps.xx3,
+			XX4:         ps.xx4,
+			XX5:         ps.xx5,
 			WaitingRoom: ps.waitingRoom,
 			Errors:      ps.errors,
 			P50:         percentile(ps.durations, 50),
@@ -350,7 +350,7 @@ var markdownTemplate = template.Must(template.New("md").Funcs(templateFuncs).Par
 ### {{.URL}}
 
 {{.URL}}: {{formatInt .Hits}} hits | {{.Bytes}} | p50: {{.P50}} | p99: {{.P99}}  
-{{formatInt .xx2}} 2xx | {{formatInt .xx3}} 3xx | {{formatInt .xx4}} 4xx | {{formatInt .xx5}} 5xx  
+{{formatInt .XX2}} 2xx | {{formatInt .XX3}} 3xx | {{formatInt .XX4}} 4xx | {{formatInt .XX5}} 5xx  
 {{if gt .WaitingRoom 0}}waiting room: {{formatInt .WaitingRoom}} lemmings held  
 {{end -}}
 {{if gt .Errors 0}}errors: {{formatInt .Errors}}  
@@ -466,10 +466,10 @@ footer { margin-top: 3rem; color: var(--muted); font-size: 0.8rem;
     <td>{{.Bytes}}</td>
     <td>{{.P50}}</td>
     <td>{{.P99}}</td>
-    <td><span class="badge badge-2xx">{{formatInt .xx2}}</span></td>
-    <td><span class="badge badge-3xx">{{formatInt .xx3}}</span></td>
-    <td><span class="badge badge-4xx">{{formatInt .xx4}}</span></td>
-    <td><span class="badge badge-5xx">{{formatInt .xx5}}</span></td>
+    <td><span class="badge badge-2xx">{{formatInt .XX2}}</span></td>
+    <td><span class="badge badge-3xx">{{formatInt .XX3}}</span></td>
+    <td><span class="badge badge-4xx">{{formatInt .XX4}}</span></td>
+    <td><span class="badge badge-5xx">{{formatInt .XX5}}</span></td>
     <td>{{if gt .WaitingRoom 0}}<span class="badge badge-wr">{{formatInt .WaitingRoom}}</span>{{else}}—{{end}}</td>
     <td>{{if gt .Errors 0}}{{formatInt .Errors}}{{else}}—{{end}}</td>
   </tr>

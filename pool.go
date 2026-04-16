@@ -201,7 +201,7 @@ func indexSitemap(ctx context.Context, client *http.Client, sitemapURL string) (
 // We parse manually rather than using encoding/xml to avoid struct
 // coupling to specific sitemap schema versions.
 func extractSitemapLocs(body string) []string {
-	var urls []string
+	urls := []string{} // ← non-nil empty slice instead of var declaration
 	remaining := body
 	for {
 		start := strings.Index(remaining, "<loc>")
@@ -324,7 +324,7 @@ func crawlOrigin(
 // extractHTMLLinks parses an HTML body and returns all href values that
 // are scoped to origin. Relative paths are resolved to absolute URLs.
 func extractHTMLLinks(body []byte, origin string) []string {
-	var links []string
+	links := []string{}
 	seen := make(map[string]bool)
 
 	doc, err := html.Parse(strings.NewReader(string(body)))
@@ -359,7 +359,7 @@ func extractHTMLLinks(body []byte, origin string) []string {
 // deduplicates them, and normalises trailing slashes.
 func scopeToOrigin(origin string, urls []string) []string {
 	seen := make(map[string]bool)
-	var scoped []string
+	scoped := make([]string, 0) // non-nil empty slice
 
 	for _, u := range urls {
 		u = strings.TrimSpace(u)

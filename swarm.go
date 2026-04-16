@@ -206,6 +206,7 @@ func (s *Swarm) sendLifeLog(ll LifeLog) {
 // Run starts the dashboard, ramp scheduler, collector, and STDOUT ticker.
 // Blocks until all lemmings are dead and results are collected.
 func (s *Swarm) Run() error {
+	defer s.cancel()
 	s.startedAt = time.Now()
 	defer func() {
 		for _, o := range s.observers {

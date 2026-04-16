@@ -986,10 +986,10 @@ func TestDashboardHTML_ContainsMetricElements(t *testing.T) {
 		`id="failed"`,
 		`id="visits"`,
 		`id="bytes"`,
-		`id="xx2"`,
-		`id="xx3"`,
-		`id="xx4"`,
-		`id="xx5"`,
+		`id="XX2"`,
+		`id="XX3"`,
+		`id="XX4"`,
+		`id="XX5"`,
 		`id="elapsed"`,
 	}
 	for _, id := range ids {
