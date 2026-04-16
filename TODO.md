@@ -1,364 +1,140 @@
 # Lemmings TODO
 
-> Outstanding items identified during the initial development session.
-> Work through this list during code review before tagging v0.0.1.
-> Items are grouped by priority and file. Check off each item as it is resolved.
+> Outstanding items as of the review session that brought all 432 tests
+> to passing. The pre-review "will not compile" and "will panic" sections
+> have all been resolved — see the Resolved log at the bottom for history.
+> Remaining items are grouped by priority.
 
 ---
 
-## Priority 1 — Will Not Compile
+## Priority 1 — Behavioural Verification for First Real-World Run
 
-These are confirmed or near-confirmed compile errors that must be fixed
-before go build ./... can pass. Start here.
+The test suite proves internal correctness. These items verify behaviour
+that only surfaces against a real HTTP target. Address them during the
+first localhost run before tagging v0.0.1.
 
-### target.go
+### pool.go / lemming.go — Accept-Encoding consistency
 
-- [ ] smtp.NewClient returns (*smtp.Client, error) but the error return
-      is not captured in sendTLS. Current code:
+- [ ] Verify the indexing HTTP client (pool.go fetchURL) and the lemming
+  HTTP client (lemming.go request) send the same Accept-Encoding
+  header. Go's http.Client auto-decompresses gzip only when it sent
+  Accept-Encoding: gzip in the request. If the two clients disagree,
+  every checksum will mismatch and every visit records Match: false.
+  Confirm by running against a gzip-enabled target and checking the
+  report's match rate.
 
-          client, err := smtp.NewClient(conn, host)
+### pool.go — UA-based content variation
 
-      Must become:
+- [ ] The indexing client uses userAgents[0] as a fixed UA. The lemming
+  client uses randomUA(). If the target server returns different
+  content per UA (A/B testing, bot detection), every lemming will
+  see a mismatch. This is intentional — it surfaces real behaviour —
+  but document it in the first-run notes so it is not confused
+  with a bug.
 
-          client, err := smtp.NewClient(conn, host)
-          if err != nil {
-              return fmt.Errorf("smtp new client: %w", err)
-          }
-          return t.sendViaSMTPConn(client, msg)
+### lemming.go — Waiting room poll interval
 
-- [ ] Verify all error returns from smtp.Client methods in sendSTARTTLS
-      and sendPlain are captured and wrapped correctly.
-
-- [ ] Verify that the net/smtp, crypto/tls, net, mime/multipart,
-      mime/quotedprintable, and net/textproto imports are all present
-      in target.go. These are easy to miss during generation.
-
-### pool_test.go
-
-- [ ] TestIndexSitemap_Index uses import_srv as a variable name.
-      Hyphens are not valid in Go identifiers. Rename to importSrv
-      or testSrv throughout the test function.
-
-- [ ] The same test declares innerSrv as an *http.Server that is
-      never started and serves no purpose. Remove it entirely.
-
-- [ ] Verify net/http/httptest is in the pool_test.go import block —
-      the file uses httptest.NewServer directly in TestIndexSitemap_Index
-      rather than going through the testServer builder.
-
-### observer_test.go
-
-- [ ] TestPrometheusObserver_Attach_StartsServer references bus without
-      declaring it. Add:
-
-          bus := NewEventBus()
-
-      before the Attach call. Scan the entire file for any other function
-      that references bus without a declaration in scope.
-
-### report_test.go
-
-- [ ] Verify net/http is in the import block. The file uses http.StatusOK
-      in makeLifeLog.
-
-- [ ] Verify fmt is in the import block. The file uses fmt.Errorf in
-      TestReporter_Ingest_RecordsErrors and fmt.Sprintf in multiple helpers.
-
-### dashboard_test.go
-
-- [ ] Verify net is in the import block. freePort uses net.Listen and
-      net.TCPAddr directly.
-
-### lemming_test.go
-
-- [ ] newRNG() returns *rand.Rand. Verify math/rand is explicitly imported
-      in lemming_test.go. The file may only pull in crypto-related packages
-      transitively and miss math/rand.
+- [ ] waitingRoomPollInterval is hardcoded to 3 seconds to match the
+  room package's client-side poll interval. If the target does not
+  use room, this constant is irrelevant. If it does, verify the
+  lemming and the room JS client poll at the same rate — a mismatch
+  causes either over-polling (wasted connections) or under-polling
+  (missed admission signals).
 
 ---
 
-## Priority 2 — Will Compile But Will Panic or Produce Wrong Results
+## Priority 2 — Correctness and Behaviour Gaps
 
-These issues will not be caught by the compiler but will cause runtime
-failures, data corruption, or silently wrong output.
-
-### lemming.go
-
-- [ ] Verify the import block correctly aliases math/rand and crypto/rand
-      to avoid collision. Suggested aliases:
-
-          import (
-              crand "crypto/rand"
-              mrand "math/rand"
-          )
-
-      Then verify every usage of rand.New, rand.NewSource in lemming.go
-      and every usage of rand.Read in swarm.go uses the correct alias.
-
-- [ ] Verify that the EventWaitingRoom emit has been moved to after
-      waitInRoom returns, not before. The emit must include the Duration
-      field from visit.WaitingRoom.Duration. If the emit is still at the
-      top of the waiting room detection block, Duration will always be zero.
-
-- [ ] Verify that EventVisitComplete emit includes both BytesIn and
-      Duration fields populated from the visit struct. If either is missing,
-      the Prometheus observer will record zero for all visit durations
-      and zero for all byte counts.
-
-### swarm.go
-
-- [ ] SwarmMetrics contains atomic.Int64 fields. Atomic types must not
-      be copied. Verify that SwarmMetrics is always passed and stored as
-      a pointer (*SwarmMetrics) and never as a value. Check every struct
-      that embeds or stores SwarmMetrics and every function that receives it.
-
-- [ ] The Swarm struct currently has:
-
-          metrics SwarmMetrics
-
-      This should be:
-
-          metrics *SwarmMetrics
-
-      And the construction should be:
-
-          metrics: &SwarmMetrics{}
-
-      Verify this is consistent across swarm.go, terrain.go, dashboard.go,
-      and observer.go.
-
-### terrain.go
-
-- [ ] Verify spawnLemming has exactly one wg.Done path via defer at the
-      top of the function. There must be zero explicit wg.Done() calls
-      anywhere in the function body. A double-Done will panic at runtime
-      and is easy to miss in code review because it only fires on the
-      error paths.
-
-### observer.go
-
-- [ ] The alive metric is declared as *prometheus.GaugeVec but accessed
-      with empty labels:
-
-          o.alive.With(prometheus.Labels{}).Inc()
-
-      A GaugeVec with no label dimensions should be a plain *prometheus.Gauge.
-      Change the declaration to:
-
-          o.alive prometheus.Gauge
-
-      And the construction to:
-
-          o.alive = prometheus.NewGauge(prometheus.GaugeOpts{
-              Name: "lemmings_alive",
-              Help: "Number of lemmings currently running.",
-          })
-
-      And all usages to:
-
-          o.alive.Inc()
-          o.alive.Dec()
-
-      Update observer_test.go gaugeValue calls accordingly — gaugeValue
-      currently takes a prometheus.Gauge, so the test helper may already
-      be correct if the declaration is fixed.
-
-### dashboard.go
-
-- [ ] Verify every % character in the JavaScript section of dashboardHTML
-      is written as %% to survive the fmt.Sprintf call. A single % followed
-      by any letter will produce a runtime formatting artifact in the HTML
-      silently. The modulo operators in the elapsed() JS function are the
-      most likely culprits:
-
-          const h = Math.floor(secs / 3600);
-          const m = Math.floor((secs %% 3600) / 60);
-          const s = secs %% 60;
-
-      Verify both %% are present and not accidentally corrected to % by
-      an editor or linter.
-
-### pool.go
-
-- [ ] Verify the indexing HTTP client and the lemming HTTP client both
-      send the same Accept-Encoding header. If the indexing client allows
-      gzip but a lemming client does not (or vice versa), the server may
-      return different byte sequences for the same URL and every checksum
-      will fail to match. Go's http.Client handles gzip decompression
-      transparently when the server sends Content-Encoding: gzip, but only
-      if the client sent Accept-Encoding: gzip in the request. Verify
-      consistency between fetchURL in pool.go and request in lemming.go.
-
----
-
-## Priority 3 — Correctness and Behaviour Gaps
-
-These will not cause crashes but will produce incorrect or misleading
-results in the report or dashboard.
-
-### report.go
-
-- [ ] Verify resolveSavePath has been completely removed. Nothing should
-      still call it. The function's logic now lives in LocalTarget.resolveDir
-      and any remaining call to resolveSavePath will be a compile error —
-      but verify the function body itself is gone to avoid confusion.
-
-- [ ] Verify Write(ctx context.Context) is the only Write signature in
-      report.go. The old Write(saveTo string) must not exist anywhere in
-      the file.
-
-- [ ] Verify buildFilename produces the correct format. The expected output
-      is lemmings.YYYY.MM.DD.domain — four dot-separated components. Test
-      this manually with a localhost:8080 hit URL to confirm the colon
-      replacement in domainFromURL produces localhost-8080 and not
-      localhost:8080 which would be an invalid filename on some systems.
+These do not cause crashes or test failures but will produce misleading
+results or poor user experience.
 
 ### main.go
 
-- [ ] Verify figs.List("save-to") dereferences correctly. figtree may
-      return *[]string or []string depending on the version. Confirm the
-      return type against the figtree source before dereferencing.
-
 - [ ] Verify the LEMMINGS_SAVE_TO environment variable appends to the
-      list from -save-to rather than replacing it. The intended behaviour
-      is additive — both the flag and the env var contribute destinations.
+  list from -save-to rather than replacing it. The intended behaviour
+  is additive — both flag and env var contribute destinations.
 
-- [ ] Verify the deduplication logic for saveTo correctly handles the case
-      where the same destination appears in both the flag and the env var.
+- [ ] Verify deduplication logic for saveTo correctly handles the case
+  where the same destination appears in both the flag and the env var.
 
-- [ ] Verify the boot summary correctly handles the case where SaveTo has
-      only one entry — the output should still use the arrow format:
+- [ ] Verify the boot summary correctly handles the case where SaveTo
+  has only one entry — output should still use the arrow format:
 
           save-to:
             → .
 
-      And not revert to the old single-line format.
+      and not revert to a single-line format.
 
 ### swarm.go
 
-- [ ] Verify applyFlagSMTPOverrides is called for every MailTarget in the
-      targets list, not just the first one. If the user specifies two mailto:
-      destinations, both need the SMTP overrides applied.
+- [ ] Verify applyFlagSMTPOverrides is called for every MailTarget in
+  the targets list, not just the first one. If the user specifies
+  two mailto: destinations, both need the SMTP overrides applied.
 
-- [ ] Verify that Report(ctx) passes the swarm's context and not
-      context.Background(). If the swarm context is already cancelled by
-      the time Report is called (due to signal handling), S3 uploads and
-      SMTP sends should still complete using a fresh context with a timeout.
-      Consider using context.WithTimeout(context.Background(), 30*time.Second)
-      for the report delivery context rather than the swarm's potentially
-      cancelled context.
+- [ ] Review Report(ctx) cancellation semantics. If the swarm context
+  is already cancelled by the time Report is called (e.g. due to
+  SIGINT), S3 uploads and SMTP sends should still complete. Consider
+  wrapping the report delivery with a fresh 30-second timeout
+  context rather than reusing the swarm's potentially-cancelled
+  context.
 
 ### target.go
 
-- [ ] Verify that MailTarget.Deliver passes the context to sendTLS,
-      sendSTARTTLS, and sendPlain. Currently these methods do not accept
-      a context parameter. For v0.0.1 this is acceptable since net/smtp
-      does not natively support context cancellation, but add a TODO comment
-      noting this gap.
+- [ ] Add a TODO comment to MailTarget.Deliver, sendTLS, sendSTARTTLS,
+  and sendPlain noting that net/smtp does not natively support
+  context cancellation. For v0.0.1 this is acceptable; v0.0.2 may
+  replace net/smtp with a context-aware library.
 
-- [ ] Verify that S3Target.Deliver correctly handles the case where both
-      AWS_DEFAULT_REGION and AWS_REGION are unset and the SDK cannot detect
-      the region automatically. The error message from the SDK in this case
-      is not user-friendly — consider wrapping it with a diagnostic hint.
-
----
-
-## Priority 4 — Test Coverage Gaps
-
-These are gaps identified in the test suite that should be addressed before
-the test suite can be considered complete.
-
-### observer_test.go
-
-- [ ] The four swarm integration tests (TestSwarm_RegisterObserver_*  and
-      TestSwarm_Run_DetachesObservers) were written in observer_test.go but
-      belong in swarm_test.go. Move them and remove the duplicates. The
-      mockObserver struct must move with them.
-
-- [ ] TestPrometheusObserver_Attach_StartsServer is missing a bus declaration.
-      After fixing the compile error, verify the test actually exercises the
-      server starting — not just that Attach returns nil.
-
-### swarm_test.go
-
-- [ ] After moving the observer integration tests from observer_test.go,
-      verify makeMinimalSwarm initialises the observers field correctly.
-      The zero value (nil slice) is valid for []Observer but verify the
-      deferred detach loop in Run handles a nil observers slice without
-      panicking:
-
-          for _, o := range s.observers {
-
-      ranging over a nil slice is safe in Go — this is fine. But document
-      it explicitly with a comment so future contributors do not add a
-      nil check unnecessarily.
-
-### target_test.go
-
-- [ ] TestMailTarget_Deliver_LocalSMTP uses acceptOneSMTPMessage which
-      implements a bare-minimum SMTP state machine. Verify it handles the
-      EHLO/HELO negotiation correctly for Go's net/smtp client, which sends
-      EHLO first and falls back to HELO. The current implementation sends
-      250 OK for any unrecognised command which should work, but verify
-      against an actual net/smtp dial.
-
-- [ ] Add a test that verifies ParseTarget correctly handles a comma in
-      the destination string — this would indicate the user passed a full
-      -save-to list as a single string rather than using the list flag.
-      ParseTarget should treat the whole string as one URI and return a
-      LocalTarget, not split on the comma. The splitting happens at the
-      figtree level, not at ParseTarget.
-
-### main_test.go
-
-- [ ] testConfig() was updated with SaveTo: []string{"."} but verify this
-      does not cause any existing test that passes cfg to NewSwarm to
-      attempt creating a LocalTarget and writing files during the test.
-      NewSwarm now calls ParseTarget for each SaveTo entry — tests that
-      do not want file I/O should either use an empty SaveTo list or a
-      temp directory.
+- [ ] Verify S3Target.Deliver handles the case where both
+  AWS_DEFAULT_REGION and AWS_REGION are unset and the SDK cannot
+  detect the region automatically. The raw SDK error is not
+  user-friendly — wrap it with a diagnostic hint pointing at
+  the environment variables.
 
 ---
 
-## Priority 5 — Documentation and Polish
-
-Address these after the code compiles and tests pass.
+## Priority 3 — Documentation and Polish
 
 ### All source files
 
-- [ ] Verify every exported type, function, and method has a godoc comment
-      following the structure agreed during development:
-      what it is, how to use it, gotchas and warnings.
+- [ ] Verify every exported type, function, and method has a godoc
+  comment following the structure agreed during development:
+  what it is, how to use it, gotchas and warnings.
 
-- [ ] Verify every unexported function has at minimum a single-line comment
-      describing what it does and any gotchas worth calling out.
+- [ ] Verify every unexported function has at minimum a single-line
+  comment describing what it does and any gotchas worth calling out.
 
 ### README.md
 
 - [ ] The All Flags table has -save-to listed with the old single-string
-      description. Update to reflect the comma-separated list format and
-      give an example that shows all three target types.
+  description. Update to reflect the comma-separated list format
+  and give an example that shows all three target types.
 
-- [ ] Add a section on the LEMMINGS_SAVE_TO environment variable and how
-      it interacts with -save-to additively.
+- [ ] Add a section on the LEMMINGS_SAVE_TO environment variable and
+  how it interacts with -save-to additively.
 
 - [ ] The Dependencies table is missing github.com/prometheus/client_model
-      which is used in observer_test.go for the DTO metric reading helpers.
+  which is used in observer_test.go for the DTO metric reading helpers.
 
 ### TESTS.md
 
 - [ ] Add a section covering target_test.go and what it proves about
-      report delivery reliability — specifically the partial failure
-      guarantee that a failing S3 upload does not prevent local delivery.
+  report delivery reliability — specifically the partial failure
+  guarantee that a failing S3 upload does not prevent local delivery.
 
-- [ ] Add target.go to the fuzz targets table. The mailto: URI parser
-      and the s3:// URI parser are parsing externally-provided strings
-      and should have fuzz coverage in v0.0.2.
+- [ ] Add target.go to the fuzz targets table. The mailto: and s3://
+  URI parsers are parsing externally-provided strings and should
+  have fuzz coverage in v0.0.2.
+
+- [ ] Document the Born/Died lifecycle event ownership contract:
+  EventLemmingBorn, EventLemmingDied, and EventLemmingFailed are
+  emitted exclusively by Terrain.spawnLemming, never by Lemming.Run.
+  This was the root cause of the double-emit bug resolved during
+  the review session.
 
 ### Makefile
 
-- [ ] Add a make run-local target that runs lemmings against localhost:8080
-      with the smallest possible parameters for quick iteration:
+- [ ] Add a make run-local target for quick iteration against localhost:
 
           run-local:
               $(GO) run . \
@@ -370,27 +146,37 @@ Address these after the code compiles and tests pass.
                   -tty=true \
                   -save-to /tmp/lemmings-test
 
-- [ ] Add a make build-check target that runs go build, go vet, and
-      gofmt -l in sequence and exits 1 if any fails. This is the
-      pre-commit gate:
+- [ ] Add a make build-check target as the pre-commit gate:
 
           build-check: vet fmt-check
               $(GO) build ./...
 
+### CI
+
+- [ ] Align the Go version in .github/workflows/go.yml with go.mod.
+  go.mod declares go 1.25.0; CI should pin 1.25.x on all three
+  runners (ubuntu-latest, macos-latest, windows-latest).
+
+- [ ] Monitor FuzzHandleAuth and FuzzDashboardHTML in CI. Both bind
+  to ports and spin up HTTP servers. If either shows flakiness
+  from port contention or timeouts, move to a dedicated job with
+  a longer fuzztime or serialise them on a single runner.
+
 ---
 
-## Priority 6 — v0.0.1 Release Gates
+## Priority 4 — v0.0.1 Release Gates
 
-The following must all be true before tagging v0.0.1. This is the
-definition of done for the initial release.
+The following must all be true before tagging v0.0.1. Check off as
+each is verified on the release candidate.
 
 - [ ] go build ./... exits 0 with no output
 - [ ] go vet ./... exits 0 with no output
 - [ ] gofmt -l . returns no filenames
-- [ ] go test -race ./... exits 0 with all tests passing
+- [x] go test -race ./... exits 0 with all tests passing (432/432)
 - [ ] make test exits 0
 - [ ] make lint exits 0
-- [ ] A real run against localhost produces a non-empty .md and .html report
+- [ ] A real run against localhost produces a non-empty .md and .html
+  report
 - [ ] The HTML report opens in a browser without errors
 - [ ] The dashboard is accessible at localhost:4000 during a real run
 - [ ] The live ticker updates every second during a real run
@@ -402,11 +188,12 @@ definition of done for the initial release.
 
 ## Deferred to v0.0.2 and Beyond
 
-Do not attempt to address these during the v0.0.1 review. They are recorded
-here so they are not lost.
+Do not attempt to address these during the v0.0.1 cycle. They are
+recorded here so they are not lost.
 
 - [ ] Fuzz tests for ParseTarget (mailto: and s3:// URI parsers)
 - [ ] Fuzz tests for buildMessage (MIME construction with arbitrary inputs)
+- [ ] Replace net/smtp with a context-aware SMTP library
 - [ ] S3 bucket creation if bucket does not exist (with -s3-create-bucket flag)
 - [ ] SMTP retry logic with exponential backoff on transient failures
 - [ ] -local flag to force local copy alongside S3 or email delivery
@@ -417,32 +204,89 @@ here so they are not lost.
 - [ ] Database Navigator implementations (MySQL, PostgreSQL, MongoDB, SQLite)
 - [ ] Geographically distributed load via coordinated lemmings instances
 - [ ] Report comparison mode — diff two report files and highlight regressions
-- [ ] -dry-run flag that indexes the URL pool and prints the plan without
-      spawning any lemmings
-- [ ] CI integration examples (GitHub Actions, GitLab CI, CircleCI)
+- [ ] -dry-run flag that indexes the URL pool and prints the plan
+  without spawning any lemmings
+- [ ] CI integration examples for GitLab CI and CircleCI
 - [ ] Helm chart for running lemmings as a Kubernetes Job
 
 ---
 
-## Notes for the Reviewer
+## Resolved During Review Session
 
-When you open a new chat thread tomorrow, paste REVIEW.md first so the
-reviewer has full context before seeing any code. Then paste one source
-file at a time in dependency order. Do not paste all files at once.
+Kept as a historical record. These items were outstanding at the start
+of the review and have since been addressed.
 
-The most productive review sequence is:
+### Compile errors
 
-1. Paste REVIEW.md — establish context
-2. Paste events.go — simplest file, fewest dependencies
-3. Paste pool.go — URL indexing, no swarm dependencies
-4. Paste lemming.go — the heart of the package
-5. Paste terrain.go — depends on lemming
-6. Paste swarm.go — depends on everything
-7. Paste report.go + target.go together — they are coupled
-8. Paste observer.go — depends on events and swarm
-9. Paste dashboard.go — depends on events and swarm
-10. Paste main.go last — the wiring layer
-11. Paste each test file immediately after its source file
+- [x] target.go — smtp.NewClient error return captured in sendTLS
+- [x] target.go — error returns from smtp.Client methods captured
+  and wrapped in sendSTARTTLS and sendPlain
+- [x] target.go — net/smtp, crypto/tls, net, mime/multipart,
+  mime/quotedprintable, net/textproto imports all present
+- [x] pool_test.go — import_srv renamed to importSrv
+- [x] pool_test.go — unused innerSrv removed
+- [x] pool_test.go — net/http/httptest imported
+- [x] observer_test.go — bus declaration added to
+  TestPrometheusObserver_Attach_StartsServer
+- [x] report_test.go — net/http and fmt imports present
+- [x] dashboard_test.go — net imported
+- [x] lemming_test.go — math/rand imported
 
-Fix compile errors before moving to the next file. A clean compile is
-the gate to every other kind of review.
+### Runtime bugs
+
+- [x] lemming.go — math/rand and crypto/rand aliased correctly
+- [x] lemming.go — EventWaitingRoom emit moved to after waitInRoom
+  returns so Duration is populated
+- [x] lemming.go — EventVisitComplete emit carries BytesIn and Duration
+- [x] lemming.go — EventLemmingBorn emit removed from Run; lifecycle
+  events are now exclusively the responsibility of Terrain
+  (root cause of double-counted alive gauge)
+- [x] swarm.go — SwarmMetrics passed and stored as *SwarmMetrics
+  consistently; atomic fields never copied
+- [x] terrain.go — spawnLemming has exactly one wg.Done path via defer
+- [x] terrain.go — spawnLemming acquire error handling corrected; Release
+  is only deferred after Acquire succeeds, preventing semaphore
+  corruption from ghost releases
+- [x] observer.go — alive metric changed from GaugeVec to plain Gauge
+- [x] dashboard.go — %% escape verified in the JS section of dashboardHTML
+
+### Correctness gaps
+
+- [x] report.go — resolveSavePath removed; logic lives in LocalTarget.resolveDir
+- [x] report.go — Write(ctx context.Context) is the only Write signature
+- [x] report.go — buildFilename produces lemmings.YYYY.MM.DD.domain
+  with colon-to-dash replacement for localhost:PORT
+- [x] main.go — figs.List("save-to") dereferences correctly
+
+### Test coverage
+
+- [x] observer_test.go — swarm integration tests moved to swarm_test.go;
+  mockObserver moved with them
+- [x] swarm_test.go — makeMinimalSwarm initialises observers correctly
+  (zero value is valid; ranging over nil slice is safe)
+- [x] target_test.go — acceptOneSMTPMessage handles EHLO/HELO correctly
+- [x] main_test.go — testConfig() SaveTo value verified not to cause
+  accidental file I/O in tests
+
+---
+
+## Notes for Future Contributors
+
+When reviewing the package, read in this dependency order:
+
+1. REVIEW.md — high-level context
+2. events.go — fewest dependencies
+3. pool.go — URL indexing
+4. lemming.go — the navigating agent
+5. terrain.go — depends on lemming; owns all lifecycle events
+6. swarm.go — depends on everything above
+7. report.go + target.go — tightly coupled
+8. observer.go — depends on events and swarm
+9. dashboard.go — depends on events and swarm
+10. main.go — wiring only
+
+Read each test file immediately after its source file. If a change
+touches Terrain or Lemming, the lifecycle ownership contract
+(EventLemmingBorn / EventLemmingDied / EventLemmingFailed emitted
+ONLY by Terrain) is a hard invariant — duplicating emission from
+Lemming.Run breaks every counter-based subscriber in the package.

@@ -1,0 +1,59 @@
+name: Go
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        go-version: [ '1.25.x' ]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: Unit tests with race detector
+        run: go test -race -count=1 -v ./...
+  bench:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - name: Benchmarks
+        run: go test -bench=. -benchmem -run='^$' -count=1 ./...
+  fuzz:
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      matrix:
+        target:
+          - FuzzDetectWaitingRoom
+          - FuzzSha512sum
+          - FuzzExtractSitemapLocs
+          - FuzzExtractHTMLLinks
+          - FuzzResolveURL
+          - FuzzHandleAuth
+          - FuzzDashboardHTML
+          - FuzzFormatInt
+          - FuzzFormatBytes
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - name: Fuzz ${{ matrix.target }}
+        run: go test -fuzz=${{ matrix.target }} -fuzztime=30s -run='^$' ./...

@@ -228,6 +228,19 @@ others from receiving the report.
     lemmings -hit https://myapp.com \
         -save-to ".,s3://my-bucket/lemmings,mailto:ops@mycompany.com?subject=Lemmings%20Results"
 
+Lemmings also reads the LEMMINGS_SAVE_TO environment variable as an additive
+source of destinations. Entries in the environment variable are appended to
+those passed via -save-to (comma-separated), duplicates are removed, and the
+combined list becomes the final target set. This makes it easy to inject a
+permanent archive destination (such as a shared S3 bucket) from a deployment
+environment without forcing every invocation to specify it:
+
+    export LEMMINGS_SAVE_TO="s3://company-load-tests/archive"
+    lemmings -hit https://myapp.com -save-to "."
+
+The run above delivers the report to both `.` (from the flag) and
+`s3://company-load-tests/archive` (from the env var).
+
 ### Local Delivery
 
 The default target. Writes both files to:
@@ -344,7 +357,7 @@ Run with Prometheus metrics and email delivery:
 
 | Flag | Alias | Default | Description |
 |---|---|---|---|
-| -save-to | -s | . | Comma-separated delivery destinations: local path, s3://, or mailto: |
+| -save-to | -s | . | Comma-separated delivery destinations: local path, s3://, or mailto:. Combined additively with the LEMMINGS_SAVE_TO environment variable. Examples: `.`, `/var/reports`, `s3://my-bucket/lemmings`, `mailto:ops@example.com?subject=Load%20Test`, or a comma-separated combination of all three. |
 
 ### SMTP (for mailto: delivery)
 
@@ -377,7 +390,7 @@ Run with Prometheus metrics and email delivery:
 The boot summary printed before any lemming moves tells you exactly what is
 about to happen:
 
-    lemmings v1.0.0
+    lemmings v0.0.1
     ─────────────────────────────────────────
       target:        https://myapp.com/
 
@@ -407,7 +420,7 @@ The live ticker updates every second:
 The final summary closes the run:
 
     ─────────────────────────────────────────
-      lemmings v1.0.0 — final summary
+      lemmings v0.0.1 — final summary
     ─────────────────────────────────────────
       target:         https://myapp.com/
       total lemmings: 2,500
@@ -424,10 +437,10 @@ The final summary closes the run:
 
       waiting room:   312 lemmings held
     ─────────────────────────────────────────
-      report (md):   ./lemmings/myapp.com/lemmings.2026.04.14.myapp.com.md
-      report (html): ./lemmings/myapp.com/lemmings.2026.04.14.myapp.com.html
-      report (md):   s3://my-bucket/lemmings/lemmings.2026.04.14.myapp.com.md
-      report (html): s3://my-bucket/lemmings/lemmings.2026.04.14.myapp.com.html
+      report (md):   ./lemmings/myapp.com/lemmings.2026.04.16.myapp.com.md
+      report (html): ./lemmings/myapp.com/lemmings.2026.04.16.myapp.com.html
+      report (md):   s3://my-bucket/lemmings/lemmings.2026.04.16.myapp.com.md
+      report (html): s3://my-bucket/lemmings/lemmings.2026.04.16.myapp.com.html
 
 ---
 
@@ -459,13 +472,21 @@ first and under what conditions.
 
 ## How Results Can Be Trusted
 
-Lemmings ships with a comprehensive test suite that proves the accuracy of
-every number in every report. See [TESTS.md](TESTS.md) for the full breakdown.
+Lemmings ships with a comprehensive test suite of 432 tests — unit, fuzz, and
+benchmark — that pass under the race detector on Linux, macOS, and Windows.
+The suite proves the accuracy of every number in every report. See
+[TESTS.md](TESTS.md) for the full breakdown.
 
 The short version:
 
 - Metric counters are protected by atomic operations verified under the race
   detector. The 2xx count in your report is exact, not approximate.
+
+- Lifecycle events (lemming born, died, failed) are emitted by exactly one
+  component — the Terrain — with a test that actively verifies no other
+  component reintroduces duplicate emission. This means the `alive` counter
+  in the dashboard, the Prometheus `lemmings_alive` gauge, and the final
+  report's completed count are exact, not off by a factor.
 
 - Percentiles are computed using the nearest-rank method on a fully sorted
   slice, verified against analytically known datasets.
@@ -484,6 +505,12 @@ The short version:
   (such as an unreachable S3 bucket or SMTP server) does not prevent other
   targets from receiving the report.
 
+- Parsing functions that consume externally-sourced bytes — sitemap XML, HTML
+  anchor tags, URL resolution, waiting room detection, SHA-512 hashing,
+  dashboard authentication tokens — are covered by fuzz targets that prove
+  they never panic, never leak malformed state, and always satisfy their
+  documented invariants regardless of what the upstream sends.
+
 ---
 
 ## Dependencies
@@ -497,6 +524,7 @@ The short version:
 | golang.org/x/net/publicsuffix | Cookie jar domain scoping |
 | github.com/aws/aws-sdk-go-v2 | S3 report upload |
 | github.com/prometheus/client_golang | Prometheus metrics exporter |
+| github.com/prometheus/client_model | Prometheus DTO types used by observer_test.go for metric assertions |
 
 ---
 
@@ -506,9 +534,15 @@ Lemmings is open source under the Apache 2.0 license. Contributions are welcome.
 
 Before opening a pull request:
 
-- Run go test -race ./... and confirm all tests pass
+- Run `go test -race -count=1 ./...` and confirm all 432 tests pass. The
+  `-count=1` flag disables test result caching; without it your IDE or local
+  Go toolchain may run a stale compiled test binary and mask real failures.
 - Add tests for any new functions following the patterns in the existing test files
 - Read TESTS.md to understand what the test suite is trying to prove and why
+- Preserve the lifecycle event ownership contract: `EventLemmingBorn`,
+  `EventLemmingDied`, and `EventLemmingFailed` are emitted exclusively by
+  `Terrain.spawnLemming`. `Lemming.Run` emits only per-visit events. Breaking
+  this contract corrupts every counter-based subscriber in the package.
 
 The test suite is not optional. Every function in the package has a corresponding
 test that verifies its contract. New functions without tests will not be merged.
@@ -522,4 +556,4 @@ Apache 2.0. See [LICENSE](LICENSE).
 ---
 
 Built with care for the engineers who find out their application crashes
-the hard way — and for the ones who use lemmings so they never have to.​​​​​​​​​​​​​​​​
+the hard way — and for the ones who use lemmings so they never have to.
