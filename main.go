@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,18 +24,33 @@ const (
 	defaultCrawlDepth    int           = 3
 	defaultSaveTo        string        = "."
 	defaultDashboardPort int           = 4000
-	defaultTTY           bool          = true  // ← new
+	defaultTTY           bool          = true // ← new
 
 	defaultObserve         bool   = false
 	defaultMetricsPort     int    = 9090
 	defaultMetricsURLLabel string = "path"
-
 
 	warnTotalLemmings   int64 = 100_000
 	warnTotalGoroutines int64 = 10_000
 
 	version = "1.0.0"
 )
+
+var AssureStringInSet = func(set ...string) figtree.FigValidatorFunc {
+	return func(value interface{}) error {
+		v := figtree.NewFlesh(value)
+		if v.IsString() {
+			s := v.ToString()
+			for _, allowed := range set {
+				if s == allowed {
+					return nil
+				}
+			}
+			return fmt.Errorf("string must be one of %v, got %q", set, s)
+		}
+		return figtree.ErrInvalidType{Wanted: "String", Got: value}
+	}
+}
 
 func main() {
 	ctx, cancel := signal.NotifyContext(
@@ -81,48 +97,43 @@ func main() {
 		WithAlias("crawl-depth", "cd").
 		WithValidator("crawl-depth", figtree.AssureIntInRange(1, 100))
 
-	// Remove:
-figs.NewString("save-to", defaultSaveTo, ...)
+	figs.NewList("save-to", []string{defaultSaveTo},
+		"Report destinations — comma-separated list of local paths, "+
+			"s3:// URIs, or mailto: URIs. "+
+			"Env: LEMMINGS_SAVE_TO").
+		WithAlias("save-to", "s").
+		WithValidator("save-to", figtree.AssureListNotEmpty)
 
-// Replace with:
-figs.NewList("save-to", []string{defaultSaveTo},
-    "Report destinations — comma-separated list of local paths, "+
-        "s3:// URIs, or mailto: URIs. "+
-        "Env: LEMMINGS_SAVE_TO").
-    WithAlias("save-to", "s").
-    WithValidator("save-to", figtree.AssureListNotEmpty)
+	figs.NewString("smtp-host", "", "SMTP server hostname. Overrides LEMMINGS_SMTP_HOST").
+		WithAlias("smtp-host", "sh")
 
-figs.NewString("smtp-host", "", "SMTP server hostname. Overrides LEMMINGS_SMTP_HOST").
-    WithAlias("smtp-host", "sh")
+	figs.NewInt("smtp-port", 0, "SMTP server port (465=TLS, 587=STARTTLS, 25=plain). Overrides LEMMINGS_SMTP_PORT").
+		WithAlias("smtp-port", "sp").
+		WithValidator("smtp-port", figtree.AssureIntInRange(0, 65535))
 
-figs.NewInt("smtp-port", 0, "SMTP server port (465=TLS, 587=STARTTLS, 25=plain). Overrides LEMMINGS_SMTP_PORT").
-    WithAlias("smtp-port", "sp").
-    WithValidator("smtp-port", figtree.AssureIntInRange(0, 65535))
+	figs.NewString("smtp-user", "", "SMTP username. Overrides LEMMINGS_SMTP_USER").
+		WithAlias("smtp-user", "su")
 
-figs.NewString("smtp-user", "", "SMTP username. Overrides LEMMINGS_SMTP_USER").
-    WithAlias("smtp-user", "su")
+	figs.NewString("smtp-pass", "", "SMTP password. Overrides LEMMINGS_SMTP_PASS").
+		WithAlias("smtp-pass", "spw")
 
-figs.NewString("smtp-pass", "", "SMTP password. Overrides LEMMINGS_SMTP_PASS").
-    WithAlias("smtp-pass", "spw")
+	figs.NewString("smtp-from", "", "SMTP from address. Overrides LEMMINGS_SMTP_FROM").
+		WithAlias("smtp-from", "sf")
 
-figs.NewString("smtp-from", "", "SMTP from address. Overrides LEMMINGS_SMTP_FROM").
-    WithAlias("smtp-from", "sf")
-
-	
 	figs.NewInt("dashboard-port", defaultDashboardPort, "Port for the live dashboard").
 		WithAlias("dashboard-port", "dp").
 		WithValidator("dashboard-port", figtree.AssureIntInRange(1024, 65535))
 
 	figs.NewBool("observe", defaultObserve, "Enable Prometheus metrics exporter on -metrics-port").
-         WithAlias("observe", "obs")
+		WithAlias("observe", "obs")
 
 	figs.NewInt("metrics-port", defaultMetricsPort, "Port for the Prometheus /metrics endpoint").
-	     WithAlias("metrics-port", "mp").
-	     WithValidator("metrics-port", figtree.AssureIntInRange(1024, 65535))
+		WithAlias("metrics-port", "mp").
+		WithValidator("metrics-port", figtree.AssureIntInRange(1024, 65535))
 
 	figs.NewString("metrics-url-label", defaultMetricsURLLabel, "URL label granularity on visit duration histogram: full, path, or none. Capped at 999 distinct values. Use none for sites with large URL surfaces.").
-         WithAlias("metrics-url-label", "mul").
-         WithValidator("metrics-url-label", figtree.AssureStringInSet("full", "path", "none"))
+		WithAlias("metrics-url-label", "mul").
+		WithValidator("metrics-url-label", AssureStringInSet("full", "path", "none"))
 
 	figs.NewBool("tty", defaultTTY,
 		"Use carriage return for live STDOUT updates. Set false for CI pipelines")
@@ -140,43 +151,43 @@ figs.NewString("smtp-from", "", "SMTP from address. Overrides LEMMINGS_SMTP_FROM
 
 	saveTo := *figs.List("save-to")
 	if env := os.Getenv("LEMMINGS_SAVE_TO"); env != "" {
-	    for _, s := range strings.Split(env, ",") {
-        	s = strings.TrimSpace(s)
-        	if s != "" {
-        	    saveTo = append(saveTo, s)
-        	}
-    	}
+		for _, s := range strings.Split(env, ",") {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				saveTo = append(saveTo, s)
+			}
+		}
 	}
 
 	// Deduplicate
 	seen := make(map[string]bool)
 	var dedupSaveTo []string
 	for _, s := range saveTo {
-	    if !seen[s] {	
-	        seen[s] = true
-	        dedupSaveTo = append(dedupSaveTo, s)
-	    }
+		if !seen[s] {
+			seen[s] = true
+			dedupSaveTo = append(dedupSaveTo, s)
+		}
 	}
 	saveTo = dedupSaveTo
 
 	cfg := SwarmConfig{
-		Hit:           *figs.String("hit"),
-		Terrain:       *figs.Int64("terrain"),
-		Pack:          *figs.Int64("pack"),
-		Limit:         *figs.Int("limit"),
-		Until:         *figs.Duration("until"),
-		Ramp:          *figs.Duration("ramp"),
-		Crawl:         *figs.Bool("crawl"),
-		CrawlDepth:    *figs.Int("crawl-depth"),
-		SaveTo:   saveTo,
-		SMTPHost: *figs.String("smtp-host"),
-		SMTPPort: *figs.Int("smtp-port"),
-		SMTPUser: *figs.String("smtp-user"),
-		SMTPPass: *figs.String("smtp-pass"),
-		SMTPFrom: *figs.String("smtp-from"),
-		DashboardPort: *figs.Int("dashboard-port"),
-		TTY:           *figs.Bool("tty"), // ← new
-		Version:       version,
+		Hit:             *figs.String("hit"),
+		Terrain:         *figs.Int64("terrain"),
+		Pack:            *figs.Int64("pack"),
+		Limit:           *figs.Int("limit"),
+		Until:           *figs.Duration("until"),
+		Ramp:            *figs.Duration("ramp"),
+		Crawl:           *figs.Bool("crawl"),
+		CrawlDepth:      *figs.Int("crawl-depth"),
+		SaveTo:          saveTo,
+		SMTPHost:        *figs.String("smtp-host"),
+		SMTPPort:        *figs.Int("smtp-port"),
+		SMTPUser:        *figs.String("smtp-user"),
+		SMTPPass:        *figs.String("smtp-pass"),
+		SMTPFrom:        *figs.String("smtp-from"),
+		DashboardPort:   *figs.Int("dashboard-port"),
+		TTY:             *figs.Bool("tty"), // ← new
+		Version:         version,
 		Observe:         *figs.Bool("observe"),
 		MetricsPort:     *figs.Int("metrics-port"),
 		MetricsURLLabel: *figs.String("metrics-url-label"),
@@ -224,15 +235,15 @@ func printBootSummary(cfg SwarmConfig) {
 	// Replace with:
 	fmt.Printf("  save-to:\n")
 	for _, dest := range cfg.SaveTo {
-	    fmt.Printf("    → %s\n", dest)
+		fmt.Printf("    → %s\n", dest)
 	}
 
-	fmt.Printf("  tty:           %v\n", cfg.TTY)          // ← new
+	fmt.Printf("  tty:           %v\n", cfg.TTY) // ← new
 	fmt.Printf("  dashboard:     http://localhost:%d\n", cfg.DashboardPort)
 	fmt.Printf("  observe:       %v\n", cfg.Observe)
 	if cfg.Observe {
-	    fmt.Printf("  metrics:     http://localhost:%d/metrics\n", cfg.MetricsPort)
-	    fmt.Printf("  url-label:   %s\n", cfg.MetricsURLLabel)
+		fmt.Printf("  metrics:     http://localhost:%d/metrics\n", cfg.MetricsPort)
+		fmt.Printf("  url-label:   %s\n", cfg.MetricsURLLabel)
 	}
 	fmt.Println()
 

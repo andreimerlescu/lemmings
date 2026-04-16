@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -725,7 +724,7 @@ func TestReporter_Write_ContinuesOnPartialFailure(t *testing.T) {
 	var mu sync.Mutex
 
 	r.AddTarget(&mockTarget{
-		name:      "failing",
+		name: "failing",
 		deliverFn: func(_ context.Context, _, _, _ string) error {
 			return fmt.Errorf("delivery failed")
 		},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -125,9 +126,9 @@ func TestScopeToOrigin_FiltersOffOrigin(t *testing.T) {
 	origin := "https://example.com"
 	urls := []string{
 		"https://example.com/page",
-		"https://other.com/page",     // off-origin
-		"http://example.com/page",    // different scheme
-		"https://sub.example.com/",   // subdomain — off-origin
+		"https://other.com/page",   // off-origin
+		"http://example.com/page",  // different scheme
+		"https://sub.example.com/", // subdomain — off-origin
 		"https://example.com/about",
 	}
 
@@ -580,7 +581,7 @@ func TestIndexSitemap_Index(t *testing.T) {
 	child1URLs := []string{"https://example.com/a", "https://example.com/b"}
 	child2URLs := []string{"https://example.com/c", "https://example.com/d"}
 
-	srv := newTestServer(t).build() // build first to get URL
+	newTestServer(t).build() // build first to get URL // removed the var assignment
 	// We need a server that knows its own URL for the index entries
 	// Use a fresh server with explicit routes
 	mux := http.NewServeMux()
@@ -872,11 +873,9 @@ func BenchmarkExtractHTMLLinks(b *testing.B) {
 
 // BenchmarkBuildURLPool measures the full pool construction time against
 // a local httptest server with a 50-URL sitemap.
-//
-//go:build bench
 func BenchmarkBuildURLPool(b *testing.B) {
 	urls := makeSitemapURLs(50)
-	srv := newTestServer(b).
+	srv := newBenchServer(b).
 		withSitemap("/sitemap.xml", urls).
 		withNormalPage("/").
 		build()

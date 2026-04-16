@@ -67,7 +67,7 @@ func (t *Terrain) Wait() {
 func (t *Terrain) spawnLemming(ctx context.Context, packIndex int64) {
 	defer t.wg.Done() // handles ALL exit paths cleanly
 
-	if err := t.sem.Acquire(ctx); err != nil {
+	if err := t.sem.AcquireWith(ctx); err != nil {
 		t.metrics.LemmingsFailed.Add(1)
 		t.bus.Emit(Event{
 			Kind:    EventLemmingFailed,

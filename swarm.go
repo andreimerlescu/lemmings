@@ -16,26 +16,26 @@ import (
 
 // SwarmConfig is the single source of truth flowing from CLI into every layer.
 type SwarmConfig struct {
-	Hit           string
-	Terrain       int64
-	Pack          int64
-	Limit         int
-	Until         time.Duration
-	Ramp          time.Duration
-	Crawl         bool
-	CrawlDepth    int
-	DashboardPort int
-	TTY           bool
-	Version       string
+	Hit             string
+	Terrain         int64
+	Pack            int64
+	Limit           int
+	Until           time.Duration
+	Ramp            time.Duration
+	Crawl           bool
+	CrawlDepth      int
+	DashboardPort   int
+	TTY             bool
+	Version         string
 	Observe         bool
 	MetricsPort     int
 	MetricsURLLabel string
-	SaveTo   []string
-	SMTPHost string
-	SMTPPort int
-	SMTPUser string
-	SMTPPass string
-	SMTPFrom string
+	SaveTo          []string
+	SMTPHost        string
+	SMTPPort        int
+	SMTPUser        string
+	SMTPPass        string
+	SMTPFrom        string
 }
 
 // SwarmMetrics holds live atomic counters readable by the ticker and dashboard.
@@ -94,7 +94,11 @@ func NewSwarm(ctx context.Context, cfg SwarmConfig) (*Swarm, error) {
 	if limit == -1 {
 		limit = int(cfg.Terrain * cfg.Pack)
 	}
-	sem := sema.New(limit)
+	sem, err := sema.New(limit)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to initialize semaphore: %w", err)
+	}
 
 	// Primary channel: sized to actual total, capped at primaryChanCap
 	primarySize := int(cfg.Terrain * cfg.Pack)
@@ -133,25 +137,25 @@ func NewSwarm(ctx context.Context, cfg SwarmConfig) (*Swarm, error) {
 
 	s.reporter = NewReporter(cfg)
 	for _, dest := range cfg.SaveTo {
-    target, err := ParseTarget(dest)
-    if err != nil {
-        cancel()
-        return nil, fmt.Errorf("invalid save-to target %q: %w", dest, err)
-    }
-    // Inject SMTP overrides from flags into MailTarget
-    if mt, ok := target.(*MailTarget); ok {
-        applyFlagSMTPOverrides(mt, cfg)
-    }
-    s.reporter.AddTarget(target)
-}
+		target, err := ParseTarget(dest)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("invalid save-to target %q: %w", dest, err)
+		}
+		// Inject SMTP overrides from flags into MailTarget
+		if mt, ok := target.(*MailTarget); ok {
+			applyFlagSMTPOverrides(mt, cfg)
+		}
+		s.reporter.AddTarget(target)
+	}
 	s.dashboard = NewDashboard(cfg, bus, &s.metrics, token)
 
 	if cfg.Observe {
-	    obs := NewPrometheusObserver(cfg)
-    	if err := s.RegisterObserver(obs); err != nil {
-    	    cancel()
-    	    return nil, fmt.Errorf("prometheus observer: %w", err)
-    	}
+		obs := NewPrometheusObserver(cfg)
+		if err := s.RegisterObserver(obs); err != nil {
+			cancel()
+			return nil, fmt.Errorf("prometheus observer: %w", err)
+		}
 	}
 
 	return s, nil
@@ -204,11 +208,11 @@ func (s *Swarm) sendLifeLog(ll LifeLog) {
 func (s *Swarm) Run() error {
 	s.startedAt = time.Now()
 	defer func() {
-	    for _, o := range s.observers {
-	        if err := o.Detach(); err != nil {
-	            log.Printf("observer %s detach error: %v", o.Name(), err)
-	        }
-	    }
+		for _, o := range s.observers {
+			if err := o.Detach(); err != nil {
+				log.Printf("observer %s detach error: %v", o.Name(), err)
+			}
+		}
 	}()
 
 	go func() {
@@ -466,28 +470,28 @@ func (s *Swarm) printFinalSummary() {
 
 // Report triggers the reporter to write output files.
 func (s *Swarm) Report(ctx context.Context) error {
-    return s.reporter.Write(ctx)
+	return s.reporter.Write(ctx)
 }
 
 // applyFlagSMTPOverrides copies non-zero flag values from SwarmConfig
 // into a MailTarget's SMTPConfig, overriding environment variables.
 // This is only called when the target is a *MailTarget.
 func applyFlagSMTPOverrides(mt *MailTarget, cfg SwarmConfig) {
-    if cfg.SMTPHost != "" {
-        mt.smtpCfg.Host = cfg.SMTPHost
-    }
-    if cfg.SMTPPort != 0 {
-        mt.smtpCfg.Port = cfg.SMTPPort
-    }
-    if cfg.SMTPUser != "" {
-        mt.smtpCfg.User = cfg.SMTPUser
-    }
-    if cfg.SMTPPass != "" {
-        mt.smtpCfg.Pass = cfg.SMTPPass
-    }
-    if cfg.SMTPFrom != "" {
-        mt.smtpCfg.From = cfg.SMTPFrom
-    }
+	if cfg.SMTPHost != "" {
+		mt.smtpCfg.Host = cfg.SMTPHost
+	}
+	if cfg.SMTPPort != 0 {
+		mt.smtpCfg.Port = cfg.SMTPPort
+	}
+	if cfg.SMTPUser != "" {
+		mt.smtpCfg.User = cfg.SMTPUser
+	}
+	if cfg.SMTPPass != "" {
+		mt.smtpCfg.Pass = cfg.SMTPPass
+	}
+	if cfg.SMTPFrom != "" {
+		mt.smtpCfg.From = cfg.SMTPFrom
+	}
 }
 
 // generateToken produces a cryptographically random 64-char hex string.

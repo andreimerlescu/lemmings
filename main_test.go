@@ -58,23 +58,22 @@ const (
 //	cfg := testConfig()
 //	cfg.Hit = srv.URL
 func testConfig() SwarmConfig {
-    return SwarmConfig{
-        Hit:            "http://localhost:8080/",
-        Terrain:        2,
-        Pack:           2,
-        Limit:          10,
-        Until:          testUntil,
-        Ramp:           testRamp,
-        Crawl:          false,
-        CrawlDepth:     testCrawlDepth,
-        SaveTo:         ".",
-        DashboardPort:  0,
-        TTY:            false,
-        Observe:        false,   // new
-        MetricsPort:    0,       // new — 0 means no metrics server in tests
-        MetricsURLLabel: "path", // new
-        Version:        "test",
-    }
+	return SwarmConfig{
+		Hit:             "http://localhost:8080/",
+		Terrain:         2,
+		Pack:            2,
+		Limit:           10,
+		Until:           testUntil,
+		Ramp:            testRamp,
+		Crawl:           false,
+		CrawlDepth:      testCrawlDepth,
+		DashboardPort:   0,
+		TTY:             false,
+		Observe:         false,  // new
+		MetricsPort:     0,      // new — 0 means no metrics server in tests
+		MetricsURLLabel: "path", // new
+		Version:         "test",
+	}
 }
 
 // ── URLPool helper ────────────────────────────────────────────────────────────
@@ -166,6 +165,9 @@ func testMetrics() *SwarmMetrics {
 //	// srv.URL is the base URL to pass to testConfig or testPool.
 type testServer struct {
 	t      *testing.T
+	tb     *testing.TB
+	b      *testing.B
+	f      *testing.F
 	mu     sync.RWMutex
 	routes map[string]http.HandlerFunc
 }
@@ -176,6 +178,38 @@ func newTestServer(t *testing.T) *testServer {
 	t.Helper()
 	return &testServer{
 		t:      t,
+		routes: make(map[string]http.HandlerFunc),
+	}
+}
+
+// newTestServer constructs a testServer with no routes configured.
+// At least one route should be added before calling Build.
+func newTestBenchServer(t testing.TB) *testServer {
+	return &testServer{
+		tb:     &t,
+		routes: make(map[string]http.HandlerFunc),
+	}
+}
+
+// newFuzzServer constructs a testServer with no routes configured.
+// At least one route should be added before calling Build.
+func newFuzzServer(f *testing.F) *testServer {
+	f.Helper()
+	return &testServer{
+		t:      nil,
+		b:      nil,
+		f:      f,
+		routes: make(map[string]http.HandlerFunc),
+	}
+}
+
+// newBenchServer constructs a testServer with no routes configured.
+// At least one route should be added before calling Build.
+func newBenchServer(b *testing.B) *testServer {
+	b.Helper()
+	return &testServer{
+		t:      nil,
+		b:      b,
 		routes: make(map[string]http.HandlerFunc),
 	}
 }

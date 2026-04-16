@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -731,12 +734,12 @@ func TestReporterWrite_CreatesFiles(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testConfig()
 	cfg.Hit = "http://localhost:8080/"
-	cfg.SaveTo = dir
+	cfg.SaveTo = append(cfg.SaveTo, dir)
 
 	r := NewReporter(cfg)
 	r.Ingest(makeLifeLog("http://localhost:8080/", 5, http.StatusOK, false, nil))
 
-	if err := r.Write(dir); err != nil {
+	if err := r.Write(context.Background()); err != nil {
 		t.Fatalf("Write error: %v", err)
 	}
 
@@ -811,8 +814,6 @@ func TestReporterWrite_FilesNonEmpty(t *testing.T) {
 
 // BenchmarkReporter_Ingest measures Ingest throughput under concurrent
 // load from 20 goroutines — representative of a large swarm completing.
-//
-//go:build bench
 func BenchmarkReporter_Ingest_Concurrent(b *testing.B) {
 	r := NewReporter(testConfig())
 	ll := makeLifeLog("http://example.com/", 10, http.StatusOK, false, nil)
@@ -827,8 +828,6 @@ func BenchmarkReporter_Ingest_Concurrent(b *testing.B) {
 
 // BenchmarkBuildReportData measures report data aggregation time with
 // 10000 visits across 20 paths — a large but realistic run.
-//
-//go:build bench
 func BenchmarkBuildReportData(b *testing.B) {
 	r := NewReporter(testConfig())
 	paths := make([]string, 20)
@@ -860,8 +859,6 @@ func BenchmarkBuildReportData(b *testing.B) {
 
 // BenchmarkRenderMarkdown measures markdown rendering time for a report
 // with 50 paths — representative of a large sitemap run.
-//
-//go:build bench
 func BenchmarkRenderMarkdown(b *testing.B) {
 	data := makeLargeReportData(50)
 	b.ResetTimer()
@@ -875,8 +872,6 @@ func BenchmarkRenderMarkdown(b *testing.B) {
 
 // BenchmarkRenderHTML measures HTML rendering time for a report with
 // 50 paths.
-//
-//go:build bench
 func BenchmarkRenderHTML(b *testing.B) {
 	data := makeLargeReportData(50)
 	b.ResetTimer()
@@ -890,8 +885,6 @@ func BenchmarkRenderHTML(b *testing.B) {
 
 // BenchmarkPercentile_1M measures percentile computation on a 1M duration
 // slice — worst case for a very long run with many lemmings.
-//
-//go:build bench
 func BenchmarkPercentile_1M(b *testing.B) {
 	d := make([]time.Duration, 1_000_000)
 	for i := range d {
@@ -936,24 +929,24 @@ func makeLifeLog(url string, n int, statusCode int, waitingRoom bool, err error)
 // makeTestReportData returns a minimal but valid ReportData for template tests.
 func makeTestReportData() ReportData {
 	return ReportData{
-		Version:       "test",
-		GeneratedAt:   time.Now(),
-		Duration:      30 * time.Second,
-		Config:        testConfig(),
-		TotalLemmings: 100,
-		TotalVisits:   1000,
-		TotalBytes:    1024 * 1024,
-		Total2xx:      950,
-		Total3xx:      30,
-		Total4xx:      15,
-		Total5xx:      5,
+		Version:          "test",
+		GeneratedAt:      time.Now(),
+		Duration:         30 * time.Second,
+		Config:           testConfig(),
+		TotalLemmings:    100,
+		TotalVisits:      1000,
+		TotalBytes:       1024 * 1024,
+		Total2xx:         950,
+		Total3xx:         30,
+		Total4xx:         15,
+		Total5xx:         5,
 		TotalWaitingRoom: 10,
-		Fastest:       1 * time.Millisecond,
-		Slowest:       500 * time.Millisecond,
-		P50:           20 * time.Millisecond,
-		P90:           100 * time.Millisecond,
-		P95:           200 * time.Millisecond,
-		P99:           400 * time.Millisecond,
+		Fastest:          1 * time.Millisecond,
+		Slowest:          500 * time.Millisecond,
+		P50:              20 * time.Millisecond,
+		P90:              100 * time.Millisecond,
+		P95:              200 * time.Millisecond,
+		P99:              400 * time.Millisecond,
 		Paths: []PathReport{
 			{
 				URL:   "http://localhost:8080/",

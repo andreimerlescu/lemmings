@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -1173,8 +1174,6 @@ func BenchmarkClientRegistry_Broadcast_OneClient(b *testing.B) {
 
 // BenchmarkClientRegistry_Broadcast_HundredClients measures broadcast
 // throughput with 100 connected clients — a heavily monitored run.
-//
-//go:build bench
 func BenchmarkClientRegistry_Broadcast_HundredClients(b *testing.B) {
 	cr := &clientRegistry{clients: make(map[uint64]chan sseEvent)}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1205,8 +1204,6 @@ func BenchmarkClientRegistry_Broadcast_HundredClients(b *testing.B) {
 
 // BenchmarkHandleMetrics_Concurrent measures /metrics handler throughput
 // under concurrent authenticated requests.
-//
-//go:build bench
 func BenchmarkHandleMetrics_Concurrent(b *testing.B) {
 	raw := testToken()
 	d, _ := newTestDashboardWithToken(b, raw)
@@ -1225,8 +1222,6 @@ func BenchmarkHandleMetrics_Concurrent(b *testing.B) {
 // BenchmarkSnapshot_Concurrent measures snapshot throughput under concurrent
 // metric updates — simulates a live swarm updating counters while the
 // dashboard reads them.
-//
-//go:build bench
 func BenchmarkSnapshot_Concurrent(b *testing.B) {
 	d, _ := newTestDashboard(b)
 
@@ -1280,11 +1275,11 @@ func FuzzHandleAuth(f *testing.F) {
 
 		// Must return a valid HTTP status
 		validStatuses := map[int]bool{
-			http.StatusOK:              true,
-			http.StatusBadRequest:      true,
-			http.StatusUnauthorized:    true,
+			http.StatusOK:               true,
+			http.StatusBadRequest:       true,
+			http.StatusUnauthorized:     true,
 			http.StatusMethodNotAllowed: true,
-			http.StatusSeeOther:        true,
+			http.StatusSeeOther:         true,
 		}
 		if !validStatuses[w.Code] {
 			t.Errorf("handleAuth returned unexpected status %d for token %q",

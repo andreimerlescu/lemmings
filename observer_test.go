@@ -130,6 +130,8 @@ func TestPrometheusObserver_Attach_RegistersSubscriber(t *testing.T) {
 // TestPrometheusObserver_Attach_StartsServer verifies that after Attach
 // returns, the /metrics HTTP endpoint responds with 200 OK.
 func TestPrometheusObserver_Attach_StartsServer(t *testing.T) {
+	bus, _, unsub := testBus()
+	defer unsub()
 	cfg := testObserverConfig()
 	o := NewPrometheusObserver(cfg)
 
@@ -913,109 +915,6 @@ func TestObserver_Metrics_ContainsExpectedNames(t *testing.T) {
 		if !strings.Contains(content, name) {
 			t.Errorf("metrics output should contain %q", name)
 		}
-	}
-}
-
-// ── swarm integration ─────────────────────────────────────────────────────────
-
-// TestSwarm_RegisterObserver_AppendsToList verifies that RegisterObserver
-// appends the observer to s.observers.
-func TestSwarm_RegisterObserver_AppendsToList(t *testing.T) {
-	srv := newTestServer(t).withNormalPage("/").build()
-	cfg := testConfig()
-	cfg.Hit = srv.URL + "/"
-
-	swarm, err := NewSwarm(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("NewSwarm error: %v", err)
-	}
-
-	obs := &mockObserver{}
-	if err := swarm.RegisterObserver(obs); err != nil {
-		t.Fatalf("RegisterObserver error: %v", err)
-	}
-
-	if len(swarm.observers) != 1 {
-		t.Errorf("expected 1 observer, got %d", len(swarm.observers))
-	}
-	if swarm.observers[0] != obs {
-		t.Error("observer in list should be the one registered")
-	}
-}
-
-// TestSwarm_RegisterObserver_CallsAttach verifies that RegisterObserver
-// calls Attach on the observer with the swarm's context and EventBus.
-func TestSwarm_RegisterObserver_CallsAttach(t *testing.T) {
-	srv := newTestServer(t).withNormalPage("/").build()
-	cfg := testConfig()
-	cfg.Hit = srv.URL + "/"
-
-	swarm, err := NewSwarm(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("NewSwarm error: %v", err)
-	}
-
-	obs := &mockObserver{}
-	if err := swarm.RegisterObserver(obs); err != nil {
-		t.Fatalf("RegisterObserver error: %v", err)
-	}
-
-	if !obs.attached {
-		t.Error("RegisterObserver should call Attach on the observer")
-	}
-}
-
-// TestSwarm_Run_DetachesObservers verifies that after Run completes,
-// Detach has been called on all registered observers.
-func TestSwarm_Run_DetachesObservers(t *testing.T) {
-	srv := newTestServer(t).withNormalPage("/").build()
-
-	cfg := testConfig()
-	cfg.Hit = srv.URL + "/"
-	cfg.Terrain = 1
-	cfg.Pack = 1
-	cfg.Until = 50 * time.Millisecond
-	cfg.Ramp = 10 * time.Millisecond
-
-	swarm, err := NewSwarm(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("NewSwarm error: %v", err)
-	}
-
-	obs := &mockObserver{}
-	if err := swarm.RegisterObserver(obs); err != nil {
-		t.Fatalf("RegisterObserver error: %v", err)
-	}
-
-	if err := swarm.Run(); err != nil {
-		t.Fatalf("Run error: %v", err)
-	}
-
-	if !obs.detached {
-		t.Error("Run should call Detach on all observers after completion")
-	}
-}
-
-// TestSwarm_RegisterObserver_AttachError verifies that when Attach returns
-// an error, RegisterObserver propagates the error and does not append the
-// observer to the list.
-func TestSwarm_RegisterObserver_AttachError(t *testing.T) {
-	srv := newTestServer(t).withNormalPage("/").build()
-	cfg := testConfig()
-	cfg.Hit = srv.URL + "/"
-
-	swarm, err := NewSwarm(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("NewSwarm error: %v", err)
-	}
-
-	obs := &mockObserver{attachErr: fmt.Errorf("attach failed")}
-	err = swarm.RegisterObserver(obs)
-	if err == nil {
-		t.Error("expected error from RegisterObserver when Attach fails")
-	}
-	if len(swarm.observers) != 0 {
-		t.Errorf("failed observer should not be appended to list, got %d", len(swarm.observers))
 	}
 }
 

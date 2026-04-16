@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/andreimerlescu/sema"
 )
 
 // ── NewTerrain ────────────────────────────────────────────────────────────────
@@ -423,7 +425,7 @@ func TestSpawnLemming_EmitsFailedOnSemaphoreTimeout(t *testing.T) {
 	// Pre-fill the semaphore by acquiring it with a background context
 	// then cancel a child context for the terrain
 	bgCtx := context.Background()
-	_ = sem.Acquire(bgCtx) // holds the one slot
+	_ = sem.AcquireWith(bgCtx) // holds the one slot
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately so Acquire fails
@@ -645,10 +647,8 @@ func TestTerrain_ZeroPackSize(t *testing.T) {
 
 // BenchmarkTerrain_Launch_Pack100 measures the time to launch 100 lemmings
 // and wait for all of them to complete against a local httptest server.
-//
-//go:build bench
 func BenchmarkTerrain_Launch_Pack100(b *testing.B) {
-	srv := newTestServer(b).
+	srv := newBenchServer(b).
 		withNormalPage("/").
 		withNormalPage("/about").
 		withNormalPage("/pricing").
@@ -674,10 +674,8 @@ func BenchmarkTerrain_Launch_Pack100(b *testing.B) {
 // BenchmarkTerrain_Launch_Pack1000 measures the time to launch 1000 lemmings
 // and wait for all of them to complete. Tests scheduler and semaphore pressure
 // at scale.
-//
-//go:build bench
 func BenchmarkTerrain_Launch_Pack1000(b *testing.B) {
-	srv := newTestServer(b).
+	srv := newBenchServer(b).
 		withNormalPage("/").
 		withNormalPage("/about").
 		withNormalPage("/pricing").
@@ -710,5 +708,9 @@ var noopSend = func(ll LifeLog) {}
 // newTestSema constructs a sema.Semaphore with the given limit for use
 // in terrain tests. Wraps sema.New to keep test code concise.
 func newTestSema(limit int) sema.Semaphore {
-	return sema.New(limit)
+	sem, err := sema.New(limit)
+	if err != nil {
+		panic(err)
+	}
+	return sem
 }

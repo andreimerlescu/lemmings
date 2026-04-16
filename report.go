@@ -2,9 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -56,16 +56,16 @@ func (r *Reporter) buildFilename() string {
 
 // pathStats holds aggregated metrics for a single URL path.
 type pathStats struct {
-	URL       string
-	Hits      int64
-	Bytes     int64
-	xx2       int64
-	xx3       int64
-	xx4       int64
-	xx5       int64
-	durations []time.Duration // kept for percentile calculation
-	waitingRoom int64         // lemmings that hit a waiting room on this path
-	errors    int64
+	URL         string
+	Hits        int64
+	Bytes       int64
+	xx2         int64
+	xx3         int64
+	xx4         int64
+	xx5         int64
+	durations   []time.Duration // kept for percentile calculation
+	waitingRoom int64           // lemmings that hit a waiting room on this path
+	errors      int64
 }
 
 // NewReporter constructs a Reporter.
@@ -196,23 +196,23 @@ type ReportData struct {
 	Config      SwarmConfig
 
 	// Swarm-level aggregates
-	TotalLemmings   int64
-	TotalVisits     int64
-	TotalBytes      int64
+	TotalLemmings    int64
+	TotalVisits      int64
+	TotalBytes       int64
 	TotalWaitingRoom int64
-	Total2xx        int64
-	Total3xx        int64
-	Total4xx        int64
-	Total5xx        int64
-	TotalErrors     int64
+	Total2xx         int64
+	Total3xx         int64
+	Total4xx         int64
+	Total5xx         int64
+	TotalErrors      int64
 
 	// Timing percentiles across all visits
-	Fastest    time.Duration
-	Slowest    time.Duration
-	P50        time.Duration
-	P90        time.Duration
-	P95        time.Duration
-	P99        time.Duration
+	Fastest time.Duration
+	Slowest time.Duration
+	P50     time.Duration
+	P90     time.Duration
+	P95     time.Duration
+	P99     time.Duration
 
 	// Per-path breakdown, sorted by hit count descending
 	Paths []PathReport

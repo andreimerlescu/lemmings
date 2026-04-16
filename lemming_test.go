@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -13,79 +14,79 @@ import (
 // events emitted by Run carry non-zero BytesIn and Duration fields so that
 // observers can record metrics without reading from a separate channel.
 func TestRun_VisitCompleteEvent_CarriesMetrics(t *testing.T) {
-    srv := newTestServer(t).withNormalPage("/").build()
-    cfg := testConfig()
-    cfg.Hit = srv.URL
-    cfg.Until = 200 * time.Millisecond
-    pool := testPool(srv.URL)
-    bus := NewEventBus()
+	srv := newTestServer(t).withNormalPage("/").build()
+	cfg := testConfig()
+	cfg.Hit = srv.URL
+	cfg.Until = 200 * time.Millisecond
+	pool := testPool(srv.URL)
+	bus := NewEventBus()
 
-    var mu sync.Mutex
-    var visitEvents []Event
-    bus.Subscribe(Filter(func(e Event) {
-        mu.Lock()
-        visitEvents = append(visitEvents, e)
-        mu.Unlock()
-    }, EventVisitComplete))
+	var mu sync.Mutex
+	var visitEvents []Event
+	bus.Subscribe(Filter(func(e Event) {
+		mu.Lock()
+		visitEvents = append(visitEvents, e)
+		mu.Unlock()
+	}, EventVisitComplete))
 
-    l := NewLemming(0, 0, cfg, pool, newTestClient(), bus, testMetrics())
-    l.Run(context.Background())
+	l := NewLemming(0, 0, cfg, pool, newTestClient(), bus, testMetrics())
+	l.Run(context.Background())
 
-    mu.Lock()
-    defer mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 
-    if len(visitEvents) == 0 {
-        t.Fatal("expected at least one EventVisitComplete")
-    }
-    for i, e := range visitEvents {
-        if e.Duration == 0 {
-            t.Errorf("visit[%d]: Duration should be non-zero on EventVisitComplete", i)
-        }
-        if e.StatusCode == 0 {
-            t.Errorf("visit[%d]: StatusCode should be non-zero on EventVisitComplete", i)
-        }
-    }
+	if len(visitEvents) == 0 {
+		t.Fatal("expected at least one EventVisitComplete")
+	}
+	for i, e := range visitEvents {
+		if e.Duration == 0 {
+			t.Errorf("visit[%d]: Duration should be non-zero on EventVisitComplete", i)
+		}
+		if e.StatusCode == 0 {
+			t.Errorf("visit[%d]: StatusCode should be non-zero on EventVisitComplete", i)
+		}
+	}
 }
 
 // TestRun_WaitingRoomEvent_CarriesDuration verifies that the EventWaitingRoom
 // event emitted after admission carries a non-zero Duration field.
 func TestRun_WaitingRoomEvent_CarriesDuration(t *testing.T) {
-    srv := newTestServer(t).
-        withAdmittingWaitingRoom("/", 5, 1).
-        build()
+	srv := newTestServer(t).
+		withAdmittingWaitingRoom("/", 5, 1).
+		build()
 
-    cfg := testConfig()
-    cfg.Hit = srv.URL
-    cfg.Until = 2 * time.Second
-    pool := &URLPool{
-        Origin:    srv.URL,
-        URLs:      []string{srv.URL + "/"},
-        Checksums: map[string]string{srv.URL + "/": sha512hex([]byte(normalPageBody))},
-    }
-    bus := NewEventBus()
+	cfg := testConfig()
+	cfg.Hit = srv.URL
+	cfg.Until = 2 * time.Second
+	pool := &URLPool{
+		Origin:    srv.URL,
+		URLs:      []string{srv.URL + "/"},
+		Checksums: map[string]string{srv.URL + "/": sha512hex([]byte(normalPageBody))},
+	}
+	bus := NewEventBus()
 
-    var mu sync.Mutex
-    var wrEvents []Event
-    bus.Subscribe(Filter(func(e Event) {
-        mu.Lock()
-        wrEvents = append(wrEvents, e)
-        mu.Unlock()
-    }, EventWaitingRoom))
+	var mu sync.Mutex
+	var wrEvents []Event
+	bus.Subscribe(Filter(func(e Event) {
+		mu.Lock()
+		wrEvents = append(wrEvents, e)
+		mu.Unlock()
+	}, EventWaitingRoom))
 
-    l := NewLemming(0, 0, cfg, pool, newTestClient(), bus, testMetrics())
-    l.Run(context.Background())
+	l := NewLemming(0, 0, cfg, pool, newTestClient(), bus, testMetrics())
+	l.Run(context.Background())
 
-    mu.Lock()
-    defer mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 
-    if len(wrEvents) == 0 {
-        t.Skip("lemming was not placed in waiting room during test window")
-    }
-    for i, e := range wrEvents {
-        if e.Duration == 0 {
-            t.Errorf("wrEvent[%d]: Duration should be non-zero after admission", i)
-        }
-    }
+	if len(wrEvents) == 0 {
+		t.Skip("lemming was not placed in waiting room during test window")
+	}
+	for i, e := range wrEvents {
+		if e.Duration == 0 {
+			t.Errorf("wrEvent[%d]: Duration should be non-zero after admission", i)
+		}
+	}
 }
 
 // ── NewLemming ────────────────────────────────────────────────────────────────
@@ -949,10 +950,8 @@ func BenchmarkDetectWaitingRoom_WaitingRoom(b *testing.B) {
 
 // BenchmarkRun measures a lemming's full Run lifecycle against a local
 // httptest server with a 3-URL pool.
-//
-//go:build bench
 func BenchmarkRun(b *testing.B) {
-	srv := newTestServer(b).
+	srv := newBenchServer(b).
 		withNormalPage("/").
 		withNormalPage("/about").
 		withNormalPage("/pricing").
@@ -1028,7 +1027,7 @@ func FuzzSha512sum(f *testing.F) {
 // need a real server. Uses testConfig defaults and a 3-URL pool.
 func newTestLemming(t testing.TB) *Lemming {
 	t.Helper()
-	srv := newTestServer(t).
+	srv := newTestBenchServer(t).
 		withNormalPage("/").
 		withNormalPage("/about").
 		withNormalPage("/pricing").

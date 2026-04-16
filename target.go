@@ -543,7 +543,11 @@ func (t *MailTarget) sendTLS(addr string, msg []byte) error {
 	}
 	defer conn.Close()
 
-	return t.sendViaSMTPConn(smtp.NewClient(conn, host), msg)
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return fmt.Errorf("smtp new client: %w", err)
+	}
+	return t.sendViaSMTPConn(client, msg)
 }
 
 // sendSTARTTLS sends the email using STARTTLS negotiation (port 587).
@@ -571,7 +575,7 @@ func (t *MailTarget) sendSTARTTLS(addr string, msg []byte) error {
 // Warning: sendPlain transmits credentials in plaintext if SMTP auth is
 // configured. Use only in trusted network environments.
 func (t *MailTarget) sendPlain(addr string, msg []byte) error {
-	host, _, err := net.SplitHostPort(addr)
+	_, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fmt.Errorf("split host/port: %w", err)
 	}
