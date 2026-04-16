@@ -125,19 +125,19 @@ func NewLemming(
 // Run is the lemming's entire life. It derives a deadline context from
 // cfg.Until and navigates the URLPool until the deadline expires.
 // It returns a fully populated LifeLog.
+//
+// Lifecycle events (EventLemmingBorn and EventLemmingDied) are emitted
+// by the Terrain, not by Run. This keeps the birth/death counters
+// accurate — exactly one increment and one decrement per lemming — and
+// ensures only one component in the package owns lifecycle signaling.
+// Run only emits per-visit events (EventVisitComplete, EventWaitingRoom)
+// that are specific to the lemming's in-flight work.
 func (l *Lemming) Run(parent context.Context) LifeLog {
 	ctx, cancel := context.WithTimeout(parent, l.cfg.Until)
 	defer cancel()
 
 	bornAt := time.Now()
 	visits := make([]Visit, 0, 16) // pre-allocate reasonable capacity
-
-	l.bus.Emit(Event{
-		Kind:      EventLemmingBorn,
-		LemmingID: l.identity.ID,
-		Terrain:   int(l.identity.Terrain),
-		Pack:      int(l.identity.Pack),
-	})
 
 	// Navigation loop — runs until context deadline
 	for {

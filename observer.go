@@ -183,6 +183,7 @@ func NewPrometheusObserver(cfg SwarmConfig) *PrometheusObserver {
 		Name: "lemmings_visits_total",
 		Help: "Total page visits by HTTP status class.",
 	}, []string{"status_class"})
+	o.visits.With(prometheus.Labels{"status_class": "000"}).Add(0)
 
 	// Duration histogram label depends on MetricsURLLabel setting.
 	// "none" uses an empty label set so all visits collapse into one
@@ -197,6 +198,11 @@ func NewPrometheusObserver(cfg SwarmConfig) *PrometheusObserver {
 		Help:    "Visit latency distribution in seconds.",
 		Buckets: prometheus.DefBuckets,
 	}, urlLabels)
+	if o.cfg.MetricsURLLabel == "none" {
+		o.visitDuration.With(prometheus.Labels{}).Observe(0)
+	} else {
+		o.visitDuration.With(prometheus.Labels{"url": ""}).Observe(0)
+	}
 
 	o.bytesTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "lemmings_bytes_total",

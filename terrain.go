@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"sync"
-	"time"
 
 	"github.com/andreimerlescu/sema"
 	"golang.org/x/net/publicsuffix"
@@ -65,13 +64,24 @@ func (t *Terrain) Wait() {
 
 // spawnLemming acquires the semaphore, constructs the lemming, runs it,
 // and sends its LifeLog home when it dies.
+//
+// Semaphore discipline: Release is only registered as a deferred call
+// AFTER Acquire succeeds. If Acquire fails for any reason (including
+// context cancellation or deadline), the slot was never held, so we MUST
+// NOT call Release — doing so would return ErrReleaseExceedsCount and,
+// worse, any successful Release would corrupt the semaphore count by
+// freeing a slot that another goroutine legitimately held. This was the
+// root cause of TestTerrain_Launch_SemaphoreRespected failing with
+// max concurrent=4 under a limit=2 semaphore.
 func (t *Terrain) spawnLemming(ctx context.Context, packIndex int64) {
 	defer t.wg.Done() // handles ALL exit paths cleanly
 
-	// Add a timeout to prevent hanging if AcquireWith blocks forever
-	acquireCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
-	defer cancel()
-	if err := t.sem.AcquireWith(acquireCtx); err != nil {
+	// Acquire using the parent context directly. Any error means the
+	// slot was never held. The previous implementation wrapped ctx in
+	// a 1-second WithTimeout and only returned for ErrAcquireCancelled,
+	// allowing other error types to fall through to Release — corrupting
+	// the semaphore. Treat every acquire error as terminal failure.
+	if err := t.sem.AcquireWith(ctx); err != nil {
 		t.metrics.LemmingsFailed.Add(1)
 		t.bus.Emit(Event{
 			Kind:    EventLemmingFailed,
@@ -79,9 +89,16 @@ func (t *Terrain) spawnLemming(ctx context.Context, packIndex int64) {
 			Pack:    int(packIndex),
 			Err:     err,
 		})
-		return // defer fires here cleanly
+		return
 	}
-	defer t.sem.Release()
+
+	// Slot is held. Register Release now, and only now. The error from
+	// Release is discarded on this defer — in normal operation it will
+	// always be nil because we hold exactly one slot. A non-nil return
+	// indicates a logic bug elsewhere in the package.
+	defer func() {
+		_ = t.sem.Release()
+	}()
 
 	jar, err := cookiejar.New(&cookiejar.Options{
 		PublicSuffixList: publicsuffix.List,
@@ -94,7 +111,7 @@ func (t *Terrain) spawnLemming(ctx context.Context, packIndex int64) {
 			Pack:    int(packIndex),
 			Err:     err,
 		})
-		return // defer fires here cleanly
+		return
 	}
 
 	client := &http.Client{

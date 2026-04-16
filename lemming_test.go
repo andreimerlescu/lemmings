@@ -674,25 +674,37 @@ func TestRun_ParentContextCancellation(t *testing.T) {
 }
 
 // TestRun_EmitsBornEvent verifies that Run emits EventLemmingBorn on the bus.
-func TestRun_EmitsBornEvent(t *testing.T) {
+// TestRun_DoesNotEmitBornEvent verifies that Run does not emit
+// EventLemmingBorn. Birth is a Terrain-level lifecycle event and is
+// emitted exactly once per lemming by spawnLemming, not by Run.
+// Emitting Born from both Run and spawnLemming would corrupt any
+// subscriber that maintains a counter (including the Prometheus
+// lemmings_alive gauge and the dashboard's alive counter).
+func TestRun_DoesNotEmitBornEvent(t *testing.T) {
 	srv := newTestServer(t).withNormalPage("/").build()
 	cfg := testConfig()
 	cfg.Hit = srv.URL + "/"
 	pool := testPool(srv.URL)
 	bus := NewEventBus()
 
-	var found bool
+	var bornCount int
+	var mu sync.Mutex
 	bus.Subscribe(func(e Event) {
 		if e.Kind == EventLemmingBorn {
-			found = true
+			mu.Lock()
+			bornCount++
+			mu.Unlock()
 		}
 	})
 
 	l := NewLemming(0, 0, cfg, pool, newTestClient(), bus, testMetrics())
 	l.Run(context.Background())
 
-	if !found {
-		t.Fatal("EventLemmingBorn was not emitted during Run")
+	mu.Lock()
+	defer mu.Unlock()
+	if bornCount != 0 {
+		t.Fatalf("Run should not emit EventLemmingBorn — that is Terrain's "+
+			"responsibility. Got %d emits.", bornCount)
 	}
 }
 

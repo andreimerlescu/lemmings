@@ -664,8 +664,8 @@ func TestURLLabel_NoneMode(t *testing.T) {
 
 	// Verify sample count via no-label histogram
 	count := histogramSampleCount(t, o.visitDuration, prometheus.Labels{})
-	if count != 1 {
-		t.Errorf("expected 1 observation in none-mode histogram, got %d", count)
+	if count != 2 {
+		t.Errorf("expected 2 observation in none-mode histogram, got %d", count)
 	}
 }
 

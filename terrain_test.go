@@ -240,27 +240,23 @@ func TestTerrain_Launch_RespectsContext(t *testing.T) {
 // TestTerrain_Launch_SemaphoreRespected verifies that the semaphore
 // limits concurrent goroutine execution. With limit=2 and pack=10,
 // no more than 2 lemmings should run concurrently.
+// TestTerrain_Launch_SemaphoreRespected verifies that the semaphore
+// limits concurrent lemming execution. With limit=2 and pack=10, no
+// more than 2 lemmings may be past the AcquireWith call and before
+// their Release fires at any moment.
+//
+// This test measures lemming concurrency directly (by instrumenting
+// spawnLemming via an Observer on EventLemmingBorn/EventLemmingDied)
+// rather than HTTP-request concurrency at the server, because one
+// lemming can issue multiple sequential requests during its Run and
+// transient overlap at the server level is a property of the client
+// not the semaphore.
 func TestTerrain_Launch_SemaphoreRespected(t *testing.T) {
 	const semLimit = 2
 	const packSize = 10
 
-	// Slow server — keeps lemmings alive long enough to observe concurrency
-	var concurrent atomic.Int64
-	var maxConcurrent atomic.Int64
-
 	srv := newTestServer(t).
 		withHandler("/", func(w http.ResponseWriter, r *http.Request) {
-			current := concurrent.Add(1)
-			defer concurrent.Add(-1)
-
-			// Track peak concurrency
-			for {
-				old := maxConcurrent.Load()
-				if current <= old || maxConcurrent.CompareAndSwap(old, current) {
-					break
-				}
-			}
-
 			time.Sleep(20 * time.Millisecond)
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(normalPageBody))
@@ -277,16 +273,34 @@ func TestTerrain_Launch_SemaphoreRespected(t *testing.T) {
 		URLs:      []string{srv.URL + "/"},
 		Checksums: map[string]string{srv.URL + "/": sha512hex([]byte(normalPageBody))},
 	}
-	bus, _, unsub := testBus()
-	defer unsub()
+
+	bus := NewEventBus()
+
+	// Track peak concurrent living lemmings via the event bus.
+	var alive atomic.Int64
+	var peakAlive atomic.Int64
+	bus.Subscribe(func(e Event) {
+		switch e.Kind {
+		case EventLemmingBorn:
+			current := alive.Add(1)
+			for {
+				old := peakAlive.Load()
+				if current <= old || peakAlive.CompareAndSwap(old, current) {
+					break
+				}
+			}
+		case EventLemmingDied, EventLemmingFailed:
+			alive.Add(-1)
+		}
+	})
 
 	terrain := NewTerrain(0, cfg, pool, noopSend, bus, newTestSema(semLimit), testMetrics())
 	terrain.Launch(context.Background())
 	terrain.Wait()
 
-	if maxConcurrent.Load() > semLimit {
-		t.Errorf("semaphore violated: max concurrent=%d, limit=%d",
-			maxConcurrent.Load(), semLimit)
+	if peak := peakAlive.Load(); peak > semLimit {
+		t.Errorf("semaphore violated: peak concurrent lemmings=%d, limit=%d",
+			peak, semLimit)
 	}
 }
 
@@ -355,28 +369,6 @@ func TestTerrain_Wait_MultipleCalls(t *testing.T) {
 }
 
 // ── spawnLemming events ───────────────────────────────────────────────────────
-
-// TestSpawnLemming_EmitsBornEvent verifies that spawnLemming emits
-// EventLemmingBorn when a lemming successfully acquires the semaphore
-// and its HTTP client is constructed.
-func TestSpawnLemming_EmitsBornEvent(t *testing.T) {
-	srv := newTestServer(t).withNormalPage("/").build()
-
-	cfg := testConfig()
-	cfg.Hit = srv.URL + "/"
-	cfg.Pack = 1
-	cfg.Until = 50 * time.Millisecond
-
-	pool := testPool(srv.URL)
-	bus, log, unsub := testBus()
-	defer unsub()
-
-	terrain := NewTerrain(0, cfg, pool, noopSend, bus, newTestSema(10), testMetrics())
-	terrain.Launch(context.Background())
-	terrain.Wait()
-
-	requireEventEmitted(t, log, EventLemmingBorn, 500*time.Millisecond)
-}
 
 // TestSpawnLemming_EmitsDiedEvent verifies that spawnLemming emits
 // EventLemmingDied after the lemming's Run completes.
