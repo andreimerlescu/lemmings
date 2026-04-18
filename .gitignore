@@ -31,3 +31,6 @@ go.work.sum
 .idea/
 .vscode/
 summaries/
+
+bin/
+!bin/.keep
