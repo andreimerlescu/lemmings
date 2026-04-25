@@ -26,13 +26,13 @@ jobs:
         run: go test -race -count=1 -v ./...
         
       - name: Run test coverage
-        run: go test -covermode=atomic -coverprofile=coverage.txt './...'
+        run: go test -covermode=atomic -coverprofile=coverage './...'
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage.txt
+          files: ./coverage
           flags: ${{ matrix.os }}
           fail_ci_if_error: false # dont fail if codecov is offline
   bench:
