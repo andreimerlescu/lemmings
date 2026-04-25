@@ -196,7 +196,11 @@ func (l *Lemming) hit(ctx context.Context, url string) Visit {
 	visit.Error = err
 
 	if err != nil {
-		visit.Duration = time.Since(start)
+		if d := time.Since(start); d > 0 {
+    		visit.Duration = d
+		} else {
+    		visit.Duration = 1 // sub-clock-resolution hit; guarantee non-zero
+		}
 		return visit
 	}
 
@@ -227,7 +231,11 @@ func (l *Lemming) hit(ctx context.Context, url string) Visit {
 		})
 	}
 
-	visit.Duration = time.Since(start)
+	if d := time.Since(start); d > 0 {
+    	visit.Duration = d
+	} else {
+    	visit.Duration = 1 // sub-clock-resolution hit; guarantee non-zero
+	}
 	return visit
 }
 
