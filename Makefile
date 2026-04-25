@@ -15,7 +15,7 @@ all: lint test build
 
 .PHONY: build
 build:
-	$(GO) build -o $(BINARY) .
+	$(GO) build -o bin/$(BINARY) .
 
 .PHONY: install
 install:

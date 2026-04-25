@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"log"
 	"os"
@@ -14,28 +15,66 @@ import (
 )
 
 const (
-	defaultHit           string        = "http://localhost:8080/"
-	defaultTerrain       int64         = 50
-	defaultPack          int64         = 50
-	defaultLimit         int           = 100
-	defaultUntil         time.Duration = 30 * time.Second
-	defaultRamp          time.Duration = 5 * time.Minute
-	defaultCrawl         bool          = false
-	defaultCrawlDepth    int           = 3
-	defaultSaveTo        string        = "."
-	defaultDashboardPort int           = 4000
-	defaultTTY           bool          = true // ← new
+	// arguments
+	argHit, aliasHit                         string = "hit", "h"
+	argTerrain, aliasTerrain                 string = "terrain", "t"
+	argPack, aliasPack                       string = "pack", "p"
+	argLimit, aliasLimit                     string = "limit", "l"
+	argUntil, aliasUntil                     string = "until", "u"
+	argRamp, aliasRamp                       string = "ramp", "r"
+	argCrawl, aliasCrawl                     string = "crawl", "c"
+	argCrawlDepth, aliasCrawlDepth           string = "crawl-depth", "cd"
+	argSaveTo, aliasSaveTo                   string = "save-to", "st"
+	argDashboardPort, aliasDashboardPort     string = "dashboard-port", "dp"
+	argTTY                                   string = "tty"
+	argObserve, aliasObserve                 string = "observe", "o"
+	argMetricsPort, aliasMetricsPort         string = "metrics-port", "mp"
+	argMetricsUrlLabel, aliasMetricsUrlLabel string = "metrics-url", "mul"
+	argVersion, aliasVersion                 string = "version", "v"
+	argSmtpHost, aliasSmtpHost               string = "smtp-host", "sho"
+	argSmtpPort, aliasSmtpPort               string = "smtp-port", "spo"
+	argSmtpFrom, aliasSmtpFrom               string = "smtp-from", "sfr"
+	argSmtpUser, aliasSmtpUser               string = "smtp-user", "sus"
+	argSmtpPass, aliasSmtpPass               string = "smtp-pass", "spa"
 
-	defaultObserve         bool   = false
-	defaultMetricsPort     int    = 9090
-	defaultMetricsURLLabel string = "path"
+	// defaults
+	defaultHit             string        = "http://localhost:8080/"
+	defaultTerrain         int64         = 50
+	defaultPack            int64         = 50
+	defaultLimit           int           = 100
+	defaultUntil           time.Duration = 30 * time.Second
+	defaultRamp            time.Duration = 5 * time.Minute
+	defaultCrawl           bool          = false
+	defaultCrawlDepth      int           = 3
+	defaultSaveTo          string        = "."
+	defaultDashboardPort   int           = 4000
+	defaultTTY             bool          = true // ← new
+	defaultObserve         bool          = false
+	defaultMetricsPort     int           = 9090
+	defaultMetricsURLLabel string        = "path"
 
+	// warnings
 	warnTotalLemmings   int64 = 100_000
 	warnTotalGoroutines int64 = 10_000
-
-	version = "1.0.0"
 )
 
+//go:embed VERSION
+var versionBytes embed.FS
+
+var currentVersion string
+
+func Version() string {
+	if len(currentVersion) == 0 {
+		versionBytes, err := versionBytes.ReadFile("VERSION")
+		if err != nil {
+			return ""
+		}
+		currentVersion = strings.TrimSpace(string(versionBytes))
+	}
+	return currentVersion
+}
+
+// AssureStringInSet is a figtree.FigValidatorFunc that is used in conjunction with figtree.Plant for fruit validations
 var AssureStringInSet = func(set ...string) figtree.FigValidatorFunc {
 	return func(value interface{}) error {
 		v := figtree.NewFlesh(value)
@@ -62,81 +101,79 @@ func main() {
 
 	figs := figtree.Grow()
 
-	figs.NewString("hit", defaultHit, "Origin URL for lemmings to traverse").
-		WithAlias("hit", "h").
-		WithValidator("hit", figtree.AssureStringNotEmpty).
-		WithValidator("hit", figtree.AssureStringHasPrefix("http"))
+	figs.NewString(argHit, defaultHit, "Origin URL for lemmings to traverse").
+		WithAlias(argHit, aliasHit).
+		WithValidator(argHit, figtree.AssureStringNotEmpty).
+		WithValidator(argHit, figtree.AssureStringHasPrefix("http"))
 
-	figs.NewInt64("terrain", defaultTerrain, "Number of terrain goroutine groups (states)").
-		WithAlias("terrain", "t").
-		WithValidator("terrain", figtree.AssureInt64InRange(1, 10_000))
+	figs.NewInt64(argTerrain, defaultTerrain, "Number of terrain goroutine groups (states)").
+		WithAlias(argTerrain, aliasTerrain).
+		WithValidator(argTerrain, figtree.AssureInt64InRange(1, 10_000))
 
-	figs.NewInt64("pack", defaultPack, "Number of lemmings per terrain group (cities)").
-		WithAlias("pack", "p").
-		WithValidator("pack", figtree.AssureInt64InRange(1, 100_000))
+	figs.NewInt64(argPack, defaultPack, "Number of lemmings per terrain group (cities)").
+		WithAlias(argPack, aliasPack).
+		WithValidator(argPack, figtree.AssureInt64InRange(1, 100_000))
 
-	figs.NewInt("limit", defaultLimit,
+	figs.NewInt(argLimit, defaultLimit,
 		"Semaphore ceiling for concurrent goroutines. -1 disables the ceiling entirely (dangerous)").
-		WithAlias("limit", "l").
-		WithValidator("limit", figtree.AssureIntInRange(-1, 1_000_000))
+		WithAlias(argLimit, aliasLimit).
+		WithValidator(argLimit, figtree.AssureIntInRange(-1, 1_000_000))
 
-	figs.NewDuration("until", defaultUntil, "How long each lemming lives").
-		WithAlias("until", "u").
-		WithValidator("until", figtree.AssureDurationGreaterThan(0)).
-		WithValidator("until", figtree.AssureDurationLessThan(24*time.Hour))
+	figs.NewDuration(argUntil, defaultUntil, "How long each lemming lives").
+		WithAlias(argUntil, aliasUntil).
+		WithValidator(argUntil, figtree.AssureDurationGreaterThan(0)).
+		WithValidator(argUntil, figtree.AssureDurationLessThan(24*time.Hour))
 
-	figs.NewDuration("ramp", defaultRamp, "Duration to bring all terrain groups online").
-		WithAlias("ramp", "r").
-		WithValidator("ramp", figtree.AssureDurationGreaterThan(0)).
-		WithValidator("ramp", figtree.AssureDurationLessThan(24*time.Hour))
+	figs.NewDuration(argRamp, defaultRamp, "Duration to bring all terrain groups online").
+		WithAlias(argRamp, aliasRamp).
+		WithValidator(argRamp, figtree.AssureDurationGreaterThan(0)).
+		WithValidator(argRamp, figtree.AssureDurationLessThan(24*time.Hour))
 
-	figs.NewBool("crawl", defaultCrawl, "Crawl origin for links when sitemap unavailable").
-		WithAlias("crawl", "c")
+	figs.NewBool(argCrawl, defaultCrawl, "Crawl origin for links when sitemap unavailable").
+		WithAlias(argCrawl, aliasCrawl)
 
-	figs.NewInt("crawl-depth", defaultCrawlDepth, "How many links deep to crawl").
-		WithAlias("crawl-depth", "cd").
-		WithValidator("crawl-depth", figtree.AssureIntInRange(1, 100))
+	figs.NewInt(argCrawlDepth, defaultCrawlDepth, "How many links deep to crawl").
+		WithAlias(argCrawlDepth, aliasCrawl).
+		WithValidator(argCrawlDepth, figtree.AssureIntInRange(1, 100))
 
-	figs.NewList("save-to", []string{defaultSaveTo},
-		"Report destinations — comma-separated list of local paths, "+
-			"s3:// URIs, or mailto: URIs. "+
-			"Env: LEMMINGS_SAVE_TO").
-		WithAlias("save-to", "s").
-		WithValidator("save-to", figtree.AssureListNotEmpty)
+	figs.NewList(argSaveTo, []string{defaultSaveTo}, "Report destinations — comma-separated list of local paths, s3:// URIs, or mailto: URIs.").
+		WithAlias(argSaveTo, aliasSaveTo).
+		WithValidator(argSaveTo, figtree.AssureListNotEmpty)
 
-	figs.NewString("smtp-host", "", "SMTP server hostname. Overrides LEMMINGS_SMTP_HOST").
-		WithAlias("smtp-host", "sh")
+	figs.NewString(argSmtpHost, "", "SMTP server hostname. Overrides LEMMINGS_SMTP_HOST").
+		WithAlias(argSmtpHost, aliasSmtpHost)
 
-	figs.NewInt("smtp-port", 0, "SMTP server port (465=TLS, 587=STARTTLS, 25=plain). Overrides LEMMINGS_SMTP_PORT").
-		WithAlias("smtp-port", "sp").
-		WithValidator("smtp-port", figtree.AssureIntInRange(0, 65535))
+	figs.NewInt(argSmtpPort, 0, "SMTP server port (465=TLS, 587=STARTTLS, 25=plain). Overrides LEMMINGS_SMTP_PORT").
+		WithAlias(argSmtpPort, aliasSmtpPort).
+		WithValidator(argSmtpPort, figtree.AssureIntInRange(0, 65535))
 
-	figs.NewString("smtp-user", "", "SMTP username. Overrides LEMMINGS_SMTP_USER").
-		WithAlias("smtp-user", "su")
+	figs.NewString(argSmtpUser, "", "SMTP username. Overrides LEMMINGS_SMTP_USER").
+		WithAlias(argSmtpUser, aliasSmtpUser)
 
-	figs.NewString("smtp-pass", "", "SMTP password. Overrides LEMMINGS_SMTP_PASS").
-		WithAlias("smtp-pass", "spw")
+	figs.NewString(argSmtpPass, "", "SMTP password. Overrides LEMMINGS_SMTP_PASS").
+		WithAlias(argSmtpPass, aliasSmtpPass)
 
-	figs.NewString("smtp-from", "", "SMTP from address. Overrides LEMMINGS_SMTP_FROM").
-		WithAlias("smtp-from", "sf")
+	figs.NewString(argSmtpFrom, "", "SMTP from address. Overrides LEMMINGS_SMTP_FROM").
+		WithAlias(argSmtpFrom, aliasSmtpFrom)
 
-	figs.NewInt("dashboard-port", defaultDashboardPort, "Port for the live dashboard").
-		WithAlias("dashboard-port", "dp").
-		WithValidator("dashboard-port", figtree.AssureIntInRange(1024, 65535))
+	figs.NewInt(argDashboardPort, defaultDashboardPort, "Port for the live dashboard").
+		WithAlias(argDashboardPort, aliasDashboardPort).
+		WithValidator(argDashboardPort, figtree.AssureIntInRange(1024, 65535))
 
-	figs.NewBool("observe", defaultObserve, "Enable Prometheus metrics exporter on -metrics-port").
-		WithAlias("observe", "obs")
+	figs.NewBool(argObserve, defaultObserve, "Enable Prometheus metrics exporter on -metrics-port").
+		WithAlias(argObserve, aliasObserve)
 
-	figs.NewInt("metrics-port", defaultMetricsPort, "Port for the Prometheus /metrics endpoint").
-		WithAlias("metrics-port", "mp").
-		WithValidator("metrics-port", figtree.AssureIntInRange(1024, 65535))
+	figs.NewInt(argMetricsPort, defaultMetricsPort, "Port for the Prometheus /metrics endpoint").
+		WithAlias(argMetricsPort, aliasMetricsPort).
+		WithValidator(argMetricsPort, figtree.AssureIntInRange(1024, 65535))
 
-	figs.NewString("metrics-url-label", defaultMetricsURLLabel, "URL label granularity on visit duration histogram: full, path, or none. Capped at 999 distinct values. Use none for sites with large URL surfaces.").
-		WithAlias("metrics-url-label", "mul").
-		WithValidator("metrics-url-label", AssureStringInSet("full", "path", "none"))
+	figs.NewString(argMetricsUrlLabel, defaultMetricsURLLabel, "URL label granularity on visit duration histogram: full, path, or none - max urls 999.").
+		WithAlias(argMetricsUrlLabel, aliasMetricsUrlLabel).
+		WithValidator(argMetricsUrlLabel, AssureStringInSet("full", "path", "none"))
 
-	figs.NewBool("tty", defaultTTY,
-		"Use carriage return for live STDOUT updates. Set false for CI pipelines")
+	figs.NewBool(argVersion, false, "Show version").WithAlias(argVersion, aliasVersion)
+
+	figs.NewBool(argTTY, defaultTTY, "Use carriage return for live STDOUT updates. Set false for CI pipelines")
 
 	if problems := figs.Problems(); len(problems) > 0 {
 		for _, p := range problems {
@@ -149,7 +186,12 @@ func main() {
 		log.Fatalf("failed to load configuration: %v", err)
 	}
 
-	saveTo := *figs.List("save-to")
+	if *figs.Bool(argVersion) {
+		fmt.Println(Version())
+		os.Exit(0)
+	}
+
+	saveTo := *figs.List(argSaveTo)
 	if env := os.Getenv("LEMMINGS_SAVE_TO"); env != "" {
 		for _, s := range strings.Split(env, ",") {
 			s = strings.TrimSpace(s)
@@ -171,26 +213,26 @@ func main() {
 	saveTo = dedupSaveTo
 
 	cfg := SwarmConfig{
-		Hit:             *figs.String("hit"),
-		Terrain:         *figs.Int64("terrain"),
-		Pack:            *figs.Int64("pack"),
-		Limit:           *figs.Int("limit"),
-		Until:           *figs.Duration("until"),
-		Ramp:            *figs.Duration("ramp"),
-		Crawl:           *figs.Bool("crawl"),
-		CrawlDepth:      *figs.Int("crawl-depth"),
+		Hit:             *figs.String(argHit),
+		Terrain:         *figs.Int64(argTerrain),
+		Pack:            *figs.Int64(argPack),
+		Limit:           *figs.Int(argLimit),
+		Until:           *figs.Duration(argUntil),
+		Ramp:            *figs.Duration(argRamp),
+		Crawl:           *figs.Bool(argCrawl),
+		CrawlDepth:      *figs.Int(argCrawlDepth),
 		SaveTo:          saveTo,
-		SMTPHost:        *figs.String("smtp-host"),
-		SMTPPort:        *figs.Int("smtp-port"),
-		SMTPUser:        *figs.String("smtp-user"),
-		SMTPPass:        *figs.String("smtp-pass"),
-		SMTPFrom:        *figs.String("smtp-from"),
-		DashboardPort:   *figs.Int("dashboard-port"),
-		TTY:             *figs.Bool("tty"), // ← new
-		Version:         version,
-		Observe:         *figs.Bool("observe"),
-		MetricsPort:     *figs.Int("metrics-port"),
-		MetricsURLLabel: *figs.String("metrics-url-label"),
+		SMTPHost:        *figs.String(argSmtpHost),
+		SMTPPort:        *figs.Int(argSmtpPort),
+		SMTPUser:        *figs.String(argSmtpUser),
+		SMTPPass:        *figs.String(argSmtpPass),
+		SMTPFrom:        *figs.String(argSmtpFrom),
+		DashboardPort:   *figs.Int(argDashboardPort),
+		TTY:             *figs.Bool(argTTY), // ← new
+		Version:         Version(),
+		Observe:         *figs.Bool(argObserve),
+		MetricsPort:     *figs.Int(argMetricsPort),
+		MetricsURLLabel: *figs.String(argMetricsUrlLabel),
 	}
 
 	printBootSummary(cfg)

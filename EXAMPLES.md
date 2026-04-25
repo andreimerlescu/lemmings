@@ -493,6 +493,183 @@ def sort_scores(scores):
 # Verify: Test passes consistently
 ```
 
+### Example 4: CLI Flags using Figtree
+
+When implementing CLI flags and external dependencies are permitted, [figtree](https://github.com/andreimerlescu/figtree) should be used.
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+    "os"
+    
+    "github.com/andreimerlescu/figtree/v2"
+)
+
+const (
+	// -host
+    argHost, aliasHost, defaultHost, describeHost string = "host", "h", "example.com", "Host to connect to"
+	
+    // -port
+    argPort, aliasPort, describePort string = "port", "p", "Port to connect to"
+    defaultPort int = 8080
+    
+    // -user
+    argUser, aliasUser, defaultUser, describeUser string = "user", "u", "", "Username to log in with"
+)
+
+var (
+    figs figtree.Plant
+)
+
+func main() {
+	figs = figtree.Grow()
+	
+	// -host
+	figs.NewString(argHost, defaultHost, describeHost).
+         WithAlias(argHost, aliasHost).
+         WithValidator(argHost, figtree.AssureStringNotEmpty).
+         WithValidator(argHost, figtree.AssureStringHasPrefix("http"))
+	// -port
+	figs.NewInt(argPort, defaultPort, describePort).
+         WithAlias(argPort, aliasPort).WithValidator(argPort, figtree.AssureIntInRange(1,65535))
+	// -user
+    figs.NewString(argUser, defaultUser, describeUser).
+         WithAlias(argUser, aliasUser).
+         WithValidator(argUser, figtree.AssureStringLengthGreaterThan(3))
+
+	if problems := figs.Problems(); len(problems) > 0 {
+		for _, p := range problems {
+			fmt.Fprintln(os.Stderr, "config error:", p)
+		}
+		os.Exit(1)
+	}
+
+	if err := figs.Load(); err != nil {
+		log.Fatalf("failed to load configuration: %v", err)
+	}
+    
+    if *figs.Int(argPort) < 1024 {
+        fmt.Println("Cannot bind to a port under 1024")
+        os.Exit(1)
+    }
+    
+    host, user := *figs.String(aliasHost), *figs.String(argUser)
+    fmt.Println(host, user)
+
+}
+```
+
+**Available types:**
+
+| Mutagenesis     | Getter                                | Setter                                  | Fruit Getter            |
+|-----------------|---------------------------------------|-----------------------------------------|-------------------------|
+| `tString`       | `keyValue := *figs.String(key)`       | `figs.Store(tString, key, value)`       | `figs := figs.Fig(key)` |
+| `tInt`          | `keyValue := *figs.Int(key)`          | `figs.Store(tInt, key, value)`          | `figs := figs.Fig(key)` |
+| `tInt64`        | `keyValue := *figs.Int64(key)`        | `figs.Store(tInt64, key, value)`        | `figs := figs.Fig(key)` |
+| `tFloat64`      | `keyValue := *figs.Float64(key)`      | `figs.Store(tFloat64, key, value)`      | `figs := figs.Fig(key)` |
+| `tDuration`     | `keyValue := *figs.Duration(key)`     | `figs.Store(tDuration, key, value)`     | `figs := figs.Fig(key)` |
+| `tUnitDuration` | `keyValue := *figs.UnitDuration(key)` | `figs.Store(tUnitDuration, key, value)` | `figs := figs.Fig(key)` |
+| `tList`         | `keyValue := *figs.List(key)`         | `figs.Store(tList, key, value)`         | `figs := figs.Fig(key)` |
+| `tMap`          | `keyValue := *figs.Map(key)`          | `figs.Store(tMap, key, value)`          | `figs := figs.Fig(key)` |
+
+
+**Available rules:**
+
+| RuleKind                        | Notes                                                             |
+|---------------------------------|-------------------------------------------------------------------|
+| `RuleUndefined`                 | is default and does no action                                     |
+| `RulePreventChange`             | blocks Mutagensis Store methods                                   | 
+| `RulePanicOnChange`             | will throw a panic on the Mutagenesis Store methods               | 
+| `RuleNoValidations`             | will skip over all WithValidator assignments                      | 
+| `RuleNoCallbacks`               | will skip over all WithCallback assignments                       | 
+| `RuleCondemnedFromResurrection` | will panic if there is an attempt to resurrect a condemned fig    |
+| `RuleNoMaps`                    | blocks NewMap, StoreMap, and Map from being called on the Tree    | 
+| `RuleNoLists`                   | blocks NewList, StoreList, and List from being called on the Tree | 
+| `RuleNoFlags`                   | disables the flag package from the Tree                           |
+| `RuleNoEnv`                     | skips over all os.Getenv related logic                            |
+
+**Property validators:**
+
+| Mutagenesis | `figtree.ValidatorFunc`   | Notes                                                                            |
+|-------------|---------------------------|----------------------------------------------------------------------------------|
+| tString     | AssureStringLength        | Ensures a string is a specific length.                                           |
+| tString     | AssureStringNotLength     | Ensures a string is not a specific length.                                       |
+| tString     | AssureStringSubstring     | Ensures a string contains a specific substring (case-sensitive).                 |
+| tString     | AssureStringNotEmpty      | Ensures a string is not empty.                                                   |
+| tString     | AssureStringContains      | Ensures a string contains a specific substring.                                  |
+| tString     | AssureStringNotContains   | Ensures a string does not contains a specific substring.                         |
+| tString     | AssureStringHasPrefix     | Ensures a string has a prefix.                                                   |
+| tString     | AssureStringHasSuffix     | Ensures a string has a suffix.                                                   |
+| tString     | AssureStringNoPrefix      | Ensures a string does not have a prefix.                                         |
+| tString     | AssureStringNoSuffix      | Ensures a string does not have a suffix.                                         |
+| tString     | AssureStringNoPrefixes    | Ensures a string does not have a prefixes.                                       |
+| tString     | AssureStringNoSuffixes    | Ensures a string does not have a suffixes.                                       |
+| tBool       | AssureBoolTrue            | Ensures a boolean value is true.                                                 |
+| tBool       | AssureBoolFalse           | Ensures a boolean value is false.                                                |
+| tInt        | AssurePositiveInt         | Ensures an integer is positive (greater than zero).                              |
+| tInt        | AssureNegativeInt         | Ensures an integer is negative (less than zero).                                 |
+| tInt        | AssureIntGreaterThan      | Ensures an integer is greater than a specified value (exclusive).                |
+| tInt        | AssureIntLessThan         | Ensures an integer is less than a specified value (exclusive).                   |
+| tInt        | AssureIntInRange          | Ensures an integer is within a specified range (inclusive).                      |
+| tInt64      | AssureInt64GreaterThan    | Ensures an int64 is greater than a specified value (exclusive).                  |
+| tInt64      | AssureInt64LessThan       | Ensures an int64 is less than a specified value (exclusive).                     |
+| tInt64      | AssurePositiveInt64       | Ensures an int64 is positive (greater than zero).                                |
+| tInt64      | AssureInt64InRange        | Ensures an int64 is within a specified range (inclusive).                        |
+| tFloat64    | AssureFloat64Positive     | Ensures a float64 is positive (greater than zero).                               |
+| tFloat64    | AssureFloat64InRange      | Ensures a float64 is within a specified range (inclusive).                       |
+| tFloat64    | AssureFloat64GreaterThan  | Ensures a float64 is greater than a specified value (exclusive).                 |
+| tFloat64    | AssureFloat64LessThan     | Ensures a float64 is less than a specified value (exclusive).                    |
+| tFloat64    | AssureFloat64NotNaN       | Ensures a float64 is not NaN.                                                    |
+| tDuration   | AssureDurationGreaterThan | Ensures a time.Duration is greater than a specified value (exclusive).           |
+| tDuration   | AssureDurationLessThan    | Ensures a time.Duration is less than a specified value (exclusive).              |
+| tDuration   | AssureDurationPositive    | Ensures a time.Duration is positive (greater than zero).                         |
+| tDuration   | AssureDurationMax         | Ensures a time.Duration does not exceed a maximum value.                         |
+| tDuration   | AssureDurationMin         | Ensures a time.Duration is at least a minimum value.                             |
+| tList       | AssureListNotEmpty        | Ensures a list (*ListFlag, *[]string, or []string) is not empty.                 |
+| tList       | AssureListMinLength       | Ensures a list has at least a minimum number of elements.                        |
+| tList       | AssureListContains        | Ensures a list contains a specific string value.                                 |
+| tList       | AssureListNotContains     | Ensures a list does not contain a specific string value.                         |
+| tList       | AssureListContainsKey     | Ensures a list contains a specific string.                                       |
+| tList       | AssureListLength          | Ensures a list has exactly the specified length.                                 |
+| tList       | AssureListNotLength       | Ensures a list is not the specified length.                                      |
+| tMap        | AssureMapNotEmpty         | Ensures a map (*MapFlag, *map[string]string, or map[string]string) is not empty. |
+| tMap        | AssureMapHasKey           | Ensures a map contains a specific key.                                           |
+| tMap        | AssureMapValueMatches     | Ensures a map has a specific key with a matching value.                          |
+| tMap        | AssureMapHasKeys          | Ensures a map contains all specified keys.                                       |
+| tMap        | AssureMapLength           | Ensures a map has exactly the specified length.                                  |
+| tMap        | AssureMapNotLength        | Ensures a map not the specified length.                                          |
+
+**Callback choices:**
+
+| Option                 | When It's Triggered                                                                |
+|------------------------|------------------------------------------------------------------------------------|
+| `CallbackAfterVerify`  | Called on `.Parse()`, `.ParseFile()`, `Load()`, or `LoadFile()`                    | 
+| `CallbackAfterRead`    | Called on Mutagenesis Getters like `figs.String(key)` or `figs.<Mutagenesis>(key)` |
+| `CallbackAfterChanged` | Called on `.Store(Mutagenesis, key, value)` and `.Resurrect(key)`                  |
+
+**Initialization choices:**
+
+| Method                                          | Usage                                 |
+|-------------------------------------------------|---------------------------------------|
+| `figtree.New()`                                 | Does not perform `Mutation` tracking. |
+| `figtree.Grow()`                                | Provides `Mutation` tracking.         |
+| `figtree.With(figtree.Options{Tracking: true})` | Provides `Mutation` tracking.         |
+
+**Configurable `figtree.Options` for use with initializers:**
+
+| Option              | What It Does                                                                                  | 
+|---------------------|-----------------------------------------------------------------------------------------------|
+| `Pollinate`         | Read `os.Getenv(key)` when a Getter on a Mutagenesis is called                                |
+| `Harvest`           | Slice length of `Mutation` for `Pollinate`                                                    |
+| `IgnoreEnvironment` | Ignore `os.Getenv()` and use `os.Clearenv()` inside `With(opts Options)`                      |
+| `Germinate`         | Ignore command line flags that begin with `-test.`                                            |
+| `Tracking`          | Sends `Mutation` into a receiver channel on `figs.Mutations()` whenever a `Fig` value changes |
+| `ConfigFile`        | Path to your `config.yaml` or `config.ini` or `config.json` file                              |
+
+
 ---
 
 ## Anti-Patterns Summary

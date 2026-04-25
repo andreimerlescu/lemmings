@@ -34,3 +34,5 @@ summaries/
 
 bin/
 !bin/.keep
+.DS_Store
+
