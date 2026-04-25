@@ -214,6 +214,27 @@ func newBenchServer(b *testing.B) *testServer {
 	}
 }
 
+
+func (ts *testServer) buildB() *httptest.Server {
+    ts.b.Helper()
+    ts.mu.RLock()
+    defer ts.mu.RUnlock()
+
+    mux := http.NewServeMux()
+    for path, handler := range ts.routes {
+        mux.HandleFunc(path, handler)
+    }
+    if _, hasRoot := ts.routes["/"]; !hasRoot {
+        mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+            w.WriteHeader(http.StatusNotFound)
+            fmt.Fprintf(w, "testServer: no route registered for %s", r.URL.Path)
+        })
+    }
+    srv := httptest.NewServer(mux)
+    ts.b.Cleanup(srv.Close)
+    return srv
+}
+
 // withNormalPage registers a route that returns normalPageBody with a 200
 // status and Content-Type text/html. The checksum of this body matches
 // what testPool precomputes, so lemmings will record these visits as matches.
