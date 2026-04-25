@@ -977,7 +977,7 @@ func BenchmarkRun(b *testing.B) {
 		withNormalPage("/").
 		withNormalPage("/about").
 		withNormalPage("/pricing").
-		build()
+		buildB()
 
 	cfg := testConfig()
 	cfg.Hit = srv.URL
