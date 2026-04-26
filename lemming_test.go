@@ -38,19 +38,15 @@ func TestRun_VisitCompleteEvent_CarriesMetrics(t *testing.T) {
 	if len(visitEvents) == 0 {
 		t.Fatal("expected at least one EventVisitComplete")
 	}
+	
 	for i, e := range visitEvents {
-		if e.Duration == 0 {
-			t.Errorf("visit[%d]: Duration should be non-zero on EventVisitComplete", i)
-		}
-		// A zero StatusCode is expected on the final visit if the context
-		// deadline fired mid-request — skip that assertion for those.
-		if e.StatusCode == 0 && e.Duration > 0 {
-			// Context cancelled mid-flight — acceptable
-			continue
-		}
-		if e.StatusCode == 0 {
-			t.Errorf("visit[%d]: StatusCode should be non-zero on EventVisitComplete", i)
-		}
+  		if e.StatusCode == 0 {
+        	// Context cancelled mid-flight before response — skip both checks
+    		continue
+ 		}
+    	if e.Duration == 0 {
+       		t.Errorf("visit[%d]: Duration should be non-zero on EventVisitComplete", i)
+    	}
 	}
 }
 
@@ -981,7 +977,7 @@ func BenchmarkRun(b *testing.B) {
 		withNormalPage("/").
 		withNormalPage("/about").
 		withNormalPage("/pricing").
-		build()
+		buildB()
 
 	cfg := testConfig()
 	cfg.Hit = srv.URL

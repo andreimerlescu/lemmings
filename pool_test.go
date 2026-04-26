@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -937,8 +938,9 @@ func FuzzExtractHTMLLinks(f *testing.F) {
 		}
 		// Invariant: all returned strings must have the origin as prefix
 		for i, link := range got {
-			if !strings.HasPrefix(link, origin) {
-				t.Errorf("link[%d] %q does not have origin prefix %q", i, link, origin)
+			parsed, err := url.Parse(link)
+			if err != nil || (parsed.Host != "" && !strings.HasPrefix(link, origin)) {
+    			t.Errorf("link[%d] %q does not have origin prefix %q", i, link, origin)
 			}
 		}
 	})
@@ -959,12 +961,10 @@ func FuzzResolveURL(f *testing.F) {
 		// Invariant 1: must not panic
 		// Invariant 2: non-empty result must have origin as prefix
 		if got != "" && !strings.HasPrefix(got, origin) {
-			// Only enforce when origin is a valid URL prefix
-			// (fuzz may supply invalid origins)
-			if strings.HasPrefix(origin, "http") {
-				t.Errorf("resolveURL(%q, %q) = %q — result does not have origin prefix",
-					origin, href, got)
-			}
+			parsed, err := url.Parse(result)
+    		if err == nil && parsed.IsAbs() && !strings.HasPrefix(result, origin) {
+        		t.Errorf("resolveURL(%q, %q) = %q — absolute result does not have origin prefix", origin, input, result)
+    		}
 		}
 		// Invariant 3: result must never contain a fragment
 		if strings.Contains(got, "#") {

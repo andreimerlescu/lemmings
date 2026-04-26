@@ -16,12 +16,25 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
+      
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
+          
       - name: Unit tests with race detector
         run: go test -race -count=1 -v ./...
+        
+      - name: Run test coverage
+        run: go test -covermode=atomic -coverprofile=coverage './...'
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage
+          flags: ${{ matrix.os }}
+          fail_ci_if_error: false # dont fail if codecov is offline
   bench:
     runs-on: ubuntu-latest
     needs: test

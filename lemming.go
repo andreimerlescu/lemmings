@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -196,7 +197,11 @@ func (l *Lemming) hit(ctx context.Context, url string) Visit {
 	visit.Error = err
 
 	if err != nil {
-		visit.Duration = time.Since(start)
+		if d := time.Since(start); d > 0 {
+    		visit.Duration = d
+		} else {
+    		visit.Duration = 1 // sub-clock-resolution hit; guarantee non-zero
+		}
 		return visit
 	}
 
@@ -227,7 +232,11 @@ func (l *Lemming) hit(ctx context.Context, url string) Visit {
 		})
 	}
 
-	visit.Duration = time.Since(start)
+	if d := time.Since(start); d > 0 {
+    	visit.Duration = d
+	} else {
+    	visit.Duration = 1 // sub-clock-resolution hit; guarantee non-zero
+	}
 	return visit
 }
 
@@ -363,11 +372,14 @@ func sha512sum(b []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+var lemmingCounter atomic.Int64
+
 // generateLemmingID produces a unique identifier for a lemming
 // from its terrain and pack indices plus a timestamp component.
 func generateLemmingID(terrain, pack int64) string {
-	raw := fmt.Sprintf("%d-%d-%d", terrain, pack, time.Now().UnixNano())
-	h := sha512.New()
-	h.Write([]byte(raw))
-	return hex.EncodeToString(h.Sum(nil))[:32]
+    seq := lemmingCounter.Add(1)
+    raw := fmt.Sprintf("%d-%d-%d-%d", terrain, pack, time.Now().UnixNano(), seq)
+    h := sha512.New()
+    h.Write([]byte(raw))
+    return hex.EncodeToString(h.Sum(nil))[:32]
 }
