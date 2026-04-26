@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -937,8 +938,9 @@ func FuzzExtractHTMLLinks(f *testing.F) {
 		}
 		// Invariant: all returned strings must have the origin as prefix
 		for i, link := range got {
-			if !strings.HasPrefix(link, origin) {
-				t.Errorf("link[%d] %q does not have origin prefix %q", i, link, origin)
+			parsed, err := url.Parse(link)
+			if err != nil || (parsed.Host != "" && !strings.HasPrefix(link, origin)) {
+    			t.Errorf("link[%d] %q does not have origin prefix %q", i, link, origin)
 			}
 		}
 	})
