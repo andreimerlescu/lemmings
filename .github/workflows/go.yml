@@ -1,19 +1,39 @@
 name: Go Lemmings
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      os_target:
+        description: 'Operating system(s) to test'
+        required: true
+        default: 'ubuntu-only'
+        type: choice
+        options:
+          - 'ubuntu-only'
+          - 'all-os (ubuntu, macos, windows)'
+      run_benchmarks:
+        description: 'Run benchmark suite?'
+        required: true
+        default: false
+        type: boolean
+      run_fuzzing:
+        description: 'Run fuzz testing suite?'
+        required: true
+        default: false
+        type: boolean
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
-      matrix:
-        os: [ ubuntu-latest, macos-latest, windows-latest ]
-        go-version: [ '1.25.x' ]
       fail-fast: false
+      matrix:
+        os: >-
+          ${{ 
+            github.event.inputs.os_target == 'all-os (ubuntu, macos, windows)' 
+            && fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') 
+            || fromJSON('["ubuntu-latest"]') 
+          }}
+        go-version: [ '1.26.x' ]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
@@ -22,7 +42,9 @@ jobs:
           go-version: ${{ matrix.go-version }}
       - name: Unit tests with race detector
         run: go test -race -count=1 -v ./...
+
   bench:
+    if: ${{ github.event.inputs.run_benchmarks == 'true' }}
     runs-on: ubuntu-latest
     needs: test
     steps:
@@ -33,10 +55,13 @@ jobs:
           go-version: '1.25.x'
       - name: Benchmarks
         run: go test -bench=. -benchmem -run='^$' -count=1 ./...
+
   fuzz:
+    if: ${{ github.event.inputs.run_fuzzing == 'true' }}
     runs-on: ubuntu-latest
     needs: test
     strategy:
+      fail-fast: false
       matrix:
         target:
           - FuzzDetectWaitingRoom
@@ -48,7 +73,6 @@ jobs:
           - FuzzDashboardHTML
           - FuzzFormatInt
           - FuzzFormatBytes
-      fail-fast: false
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
