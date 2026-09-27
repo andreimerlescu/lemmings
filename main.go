@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -133,7 +134,7 @@ func main() {
 		WithAlias(argCrawl, aliasCrawl)
 
 	figs.NewInt(argCrawlDepth, defaultCrawlDepth, "How many links deep to crawl").
-		WithAlias(argCrawlDepth, aliasCrawl).
+		WithAlias(argCrawlDepth, aliasCrawlDepth).
 		WithValidator(argCrawlDepth, figtree.AssureIntInRange(1, 100))
 
 	figs.NewList(argSaveTo, []string{defaultSaveTo}, "Report destinations — comma-separated list of local paths, s3:// URIs, or mailto: URIs.").
@@ -174,6 +175,8 @@ func main() {
 	figs.NewBool(argVersion, false, "Show version").WithAlias(argVersion, aliasVersion)
 
 	figs.NewBool(argTTY, defaultTTY, "Use carriage return for live STDOUT updates. Set false for CI pipelines")
+
+	registerExperienceFlags(figs)
 
 	if problems := figs.Problems(); len(problems) > 0 {
 		for _, p := range problems {
@@ -229,12 +232,31 @@ func main() {
 		SMTPFrom:        *figs.String(argSmtpFrom),
 		DashboardPort:   *figs.Int(argDashboardPort),
 		TTY:             *figs.Bool(argTTY), // ← new
-		Version:         Version(),
+		Version:         strings.TrimPrefix(Version(), "v"),
 		Observe:         *figs.Bool(argObserve),
 		MetricsPort:     *figs.Int(argMetricsPort),
 		MetricsURLLabel: *figs.String(argMetricsUrlLabel),
 	}
 
+	rate, err := strconv.ParseFloat(*figs.String("max-failure-rate"), 64)
+	if err != nil {
+		log.Fatalf("max-failure-rate: %v", err)
+	}
+	cfg.Experience = ExperienceConfig{
+		ThinkMin: *figs.Duration("think-min"), ThinkMax: *figs.Duration("think-max"), RequestTimeout: *figs.Duration("request-timeout"),
+		MaxBodyBytes: *figs.Int64("max-body-bytes"), MaxPages: *figs.Int("max-pages"), Navigation: *figs.String("navigation"),
+		StrictChecksum: *figs.Bool("strict-checksum"), ScenarioFile: *figs.String("scenario"), TraceFile: *figs.String("trace-file"),
+		MaxFailureRate: rate, P95Budget: *figs.Duration("p95-budget"), BrowserUsers: *figs.Int("browser-users"), BrowserUntil: *figs.Duration("browser-until"),
+		BrowserScript: *figs.String("browser-script"), BrowserOutput: *figs.String("browser-output"),
+	}
+	if err := cfg.prepareExperience(); err != nil {
+		log.Fatalf("configuration: %v", err)
+	}
+	if cfg.Experience.BrowserUsers > 0 {
+		if err := checkBrowser(ctx, cfg); err != nil {
+			log.Fatalf("browser setup: %v", err)
+		}
+	}
 	printBootSummary(cfg)
 
 	swarm, err := NewSwarm(ctx, cfg)
@@ -246,14 +268,32 @@ func main() {
 		log.Fatalf("swarm error: %v", err)
 	}
 
-	if err := swarm.Report(ctx); err != nil {
+	reportCtx, reportCancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer reportCancel()
+	if err := swarm.Report(reportCtx); err != nil {
 		log.Fatalf("report error: %v", err)
+	}
+	swarm.reporter.mu.Lock()
+	data := swarm.reporter.buildReportData()
+	swarm.reporter.mu.Unlock()
+	for _, failure := range data.Experience.GateFailures {
+		fmt.Fprintln(os.Stderr, "FAIL:", failure)
+	}
+	if ctx.Err() != nil {
+		os.Exit(130)
+	}
+	if len(data.Experience.GateFailures) > 0 {
+		os.Exit(2)
 	}
 }
 
 func printBootSummary(cfg SwarmConfig) {
 	total := cfg.Terrain * cfg.Pack
-	wallClock := cfg.Ramp + cfg.Until
+	limit := int64(cfg.Limit)
+	if limit <= 0 {
+		limit = total
+	}
+	wallClock := cfg.Ramp + time.Duration((total+limit-1)/limit)*cfg.Until
 
 	fmt.Printf("\nlemmings v%s\n", cfg.Version)
 	fmt.Println("─────────────────────────────────────────")
@@ -273,6 +313,8 @@ func printBootSummary(cfg SwarmConfig) {
 		limitStr = "UNLIMITED (⚠ danger zone)"
 	}
 	fmt.Printf("  limit:         %s\n", limitStr)
+	fmt.Printf("  pacing:        %s–%s, %s navigation, max %d pages/session\n", cfg.Experience.ThinkMin, cfg.Experience.ThinkMax, cfg.Experience.Navigation, cfg.Experience.MaxPages)
+	fmt.Printf("  browser users: %d (additional cohort)\n", cfg.Experience.BrowserUsers)
 	fmt.Printf("  crawl:         %v (depth: %d)\n", cfg.Crawl, cfg.CrawlDepth)
 	// Replace with:
 	fmt.Printf("  save-to:\n")

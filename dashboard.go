@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -53,20 +54,22 @@ type sseEvent struct {
 
 // metricsSnapshot is the payload sent to the browser every second.
 type metricsSnapshot struct {
-	Alive          int64  `json:"alive"`
-	Completed      int64  `json:"completed"`
-	Failed         int64  `json:"failed"`
-	TerrainsOnline int64  `json:"terrains_online"`
-	TotalVisits    int64  `json:"total_visits"`
-	TotalBytes     string `json:"total_bytes"`
-	WaitingRoom    int64  `json:"waiting_room"`
-	Xx2            int64  `json:"XX2"`
-	Xx3            int64  `json:"XX3"`
-	Xx4            int64  `json:"XX4"`
-	Xx5            int64  `json:"XX5"`
-	OverflowLogs   int64  `json:"overflow_logs"`
-	DroppedLogs    int64  `json:"dropped_logs"`
-	ElapsedSecs    int64  `json:"elapsed_secs"`
+	Alive           int64  `json:"alive"`
+	Completed       int64  `json:"completed"`
+	FailedVisits    int64  `json:"failed_visits"`
+	CancelledVisits int64  `json:"cancelled_visits"`
+	Failed          int64  `json:"failed"`
+	TerrainsOnline  int64  `json:"terrains_online"`
+	TotalVisits     int64  `json:"total_visits"`
+	TotalBytes      string `json:"total_bytes"`
+	WaitingRoom     int64  `json:"waiting_room"`
+	Xx2             int64  `json:"XX2"`
+	Xx3             int64  `json:"XX3"`
+	Xx4             int64  `json:"XX4"`
+	Xx5             int64  `json:"XX5"`
+	OverflowLogs    int64  `json:"overflow_logs"`
+	DroppedLogs     int64  `json:"dropped_logs"`
+	ElapsedSecs     int64  `json:"elapsed_secs"`
 }
 
 // NewDashboard constructs a Dashboard.
@@ -315,6 +318,7 @@ func (d *Dashboard) handleEvent(e Event) {
 			"pack":        e.Pack,
 			"url":         e.URL,
 			"status_code": e.StatusCode,
+			"failed":      e.Failed, "cancelled": e.Cancelled, "error_kind": e.ErrorKind, "duration_ms": float64(e.Duration) / float64(time.Millisecond),
 			"occurred_at": e.OccurredAt.UnixMilli(),
 		},
 	}
@@ -346,20 +350,22 @@ func (d *Dashboard) broadcastMetrics(ctx context.Context) {
 // snapshot builds a metricsSnapshot from the current atomic counters.
 func (d *Dashboard) snapshot(elapsedSecs int64) metricsSnapshot {
 	return metricsSnapshot{
-		Alive:          d.metrics.LemmingsAlive.Load(),
-		Completed:      d.metrics.LemmingsCompleted.Load(),
-		Failed:         d.metrics.LemmingsFailed.Load(),
-		TerrainsOnline: d.metrics.TerrainsOnline.Load(),
-		TotalVisits:    d.metrics.TotalVisits.Load(),
-		TotalBytes:     formatBytes(d.metrics.TotalBytes.Load()),
-		WaitingRoom:    d.metrics.TotalWaitingRoom.Load(),
-		Xx2:            d.metrics.Total2xx.Load(),
-		Xx3:            d.metrics.Total3xx.Load(),
-		Xx4:            d.metrics.Total4xx.Load(),
-		Xx5:            d.metrics.Total5xx.Load(),
-		OverflowLogs:   d.metrics.OverflowLogs.Load(),
-		DroppedLogs:    d.metrics.DroppedLogs.Load(),
-		ElapsedSecs:    elapsedSecs,
+		Alive:           d.metrics.LemmingsAlive.Load(),
+		Completed:       d.metrics.LemmingsCompleted.Load(),
+		Failed:          d.metrics.LemmingsFailed.Load(),
+		FailedVisits:    d.metrics.FailedVisits.Load(),
+		CancelledVisits: d.metrics.CancelledVisits.Load(),
+		TerrainsOnline:  d.metrics.TerrainsOnline.Load(),
+		TotalVisits:     d.metrics.TotalVisits.Load(),
+		TotalBytes:      formatBytes(d.metrics.TotalBytes.Load()),
+		WaitingRoom:     d.metrics.TotalWaitingRoom.Load(),
+		Xx2:             d.metrics.Total2xx.Load(),
+		Xx3:             d.metrics.Total3xx.Load(),
+		Xx4:             d.metrics.Total4xx.Load(),
+		Xx5:             d.metrics.Total5xx.Load(),
+		OverflowLogs:    d.metrics.OverflowLogs.Load(),
+		DroppedLogs:     d.metrics.DroppedLogs.Load(),
+		ElapsedSecs:     elapsedSecs,
 	}
 }
 
@@ -459,6 +465,8 @@ button { width:100%; background:linear-gradient(135deg,var(--accent),var(--accen
 }
 
 func dashboardHTML(cfg SwarmConfig) string {
+	cfg.Hit = html.EscapeString(safeURL(cfg.Hit))
+	cfg.Version = html.EscapeString(cfg.Version)
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -566,6 +574,8 @@ h1 { font-size:1.2rem;
     <div class="stat-label">5xx</div>
     <div class="stat-value danger" id="XX5">—</div>
   </div>
+  <div class="stat"><div class="stat-label">failed page visits</div><div class="stat-value danger" id="failed-visits">—</div></div>
+  <div class="stat"><div class="stat-label">cancelled visits</div><div class="stat-value warn" id="cancelled-visits">—</div></div>
 </div>
 
 <div class="events">
@@ -597,6 +607,8 @@ function applyMetrics(d) {
   document.getElementById('visits').textContent      = fmt(d.total_visits);
   document.getElementById('bytes').textContent       = d.total_bytes;
   document.getElementById('wr').textContent          = fmt(d.waiting_room);
+  document.getElementById('failed-visits').textContent = fmt(d.failed_visits);
+  document.getElementById('cancelled-visits').textContent = fmt(d.cancelled_visits);
   document.getElementById('XX2').textContent         = fmt(d.XX2);
   document.getElementById('XX3').textContent         = fmt(d.XX3);
   document.getElementById('XX4').textContent         = fmt(d.XX4);

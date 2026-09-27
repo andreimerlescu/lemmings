@@ -1,3 +1,5 @@
+> Historical document from the supplied pre-upgrade snapshot. For current behavior, flags, tests and measurement limits, read [README.md](README.md) and [UPGRADE.md](UPGRADE.md).
+
 # Lemmings TODO
 
 > Outstanding items as of the review session that brought all 432 tests

@@ -105,7 +105,9 @@ type PrometheusObserver struct {
 
 	// lemmings_visits_total counts page visits by HTTP status class.
 	// Label: status_class with values "2xx", "3xx", "4xx", "5xx".
-	visits *prometheus.CounterVec
+	visits          *prometheus.CounterVec
+	failedVisits    prometheus.Counter
+	cancelledVisits prometheus.Counter
 
 	// lemmings_visit_duration_seconds records per-visit latency.
 	// Label: url — behaviour controlled by cfg.MetricsURLLabel.
@@ -199,9 +201,9 @@ func NewPrometheusObserver(cfg SwarmConfig) *PrometheusObserver {
 		Buckets: prometheus.DefBuckets,
 	}, urlLabels)
 	if o.cfg.MetricsURLLabel == "none" {
-		o.visitDuration.With(prometheus.Labels{}).Observe(0)
+		o.visitDuration.With(prometheus.Labels{})
 	} else {
-		o.visitDuration.With(prometheus.Labels{"url": ""}).Observe(0)
+		o.visitDuration.With(prometheus.Labels{"url": ""})
 	}
 
 	o.bytesTotal = prometheus.NewCounter(prometheus.CounterOpts{
@@ -243,12 +245,16 @@ func NewPrometheusObserver(cfg SwarmConfig) *PrometheusObserver {
 			"Non-zero values are a warning but do not indicate data loss.",
 	})
 
+	o.failedVisits = prometheus.NewCounter(prometheus.CounterOpts{Name: "lemmings_failed_visits_total", Help: "Page visits failing transport, status or configured assertions (cancellations excluded)."})
+	o.cancelledVisits = prometheus.NewCounter(prometheus.CounterOpts{Name: "lemmings_cancelled_visits_total", Help: "Page visits interrupted by session or run cancellation."})
 	// Register all collectors with the isolated registry
 	reg.MustRegister(
 		o.alive,
 		o.completed,
 		o.failed,
 		o.visits,
+		o.failedVisits,
+		o.cancelledVisits,
 		o.visitDuration,
 		o.bytesTotal,
 		o.waitingRoom,
@@ -427,6 +433,12 @@ func (o *PrometheusObserver) handleEvent(e Event) {
 // maxURLLabelCardinality, excess URLs are recorded under the synthetic
 // label value "other" and a one-time warning is logged.
 func (o *PrometheusObserver) recordVisit(e Event) {
+	o.bytesTotal.Add(float64(e.BytesIn))
+	if e.Cancelled {
+		o.cancelledVisits.Inc()
+	} else if e.Failed {
+		o.failedVisits.Inc()
+	}
 	// Status class label
 	statusclass := statusClass(e.StatusCode)
 	o.visits.With(prometheus.Labels{"status_class": statusclass}).Inc()

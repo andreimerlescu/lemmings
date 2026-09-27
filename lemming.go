@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/sha512"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"io"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -14,7 +14,7 @@ import (
 )
 
 // userAgents is the pool of realistic browser UA strings.
-// One is selected at random on every individual request.
+// One is selected once per session and remains stable for that user.
 var userAgents = []string{
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
@@ -38,10 +38,12 @@ const (
 
 // Identity is the lemming's persistent persona for its entire lifespan.
 type Identity struct {
-	ID      string // UUID-style hex identifier
-	Terrain int64
-	Pack    int64
-	BornAt  time.Time
+	ID        string // UUID-style hex identifier
+	Terrain   int64
+	Pack      int64
+	BornAt    time.Time
+	UserAgent string
+	Language  string
 }
 
 // WaitingRoomMetric captures everything about a lemming's time in a queue.
@@ -55,42 +57,67 @@ type WaitingRoomMetric struct {
 
 // Visit is the atomic unit of measurement — one page hit by one lemming.
 type Visit struct {
-	LemmingID   string
-	URL         string
-	StatusCode  int
-	BytesIn     int64
-	Duration    time.Duration // wall clock from request start to body close
-	Checksum    string        // SHA512 of actual response body
-	Expected    string        // SHA512 from URLPool at index time
-	Match       bool          // Checksum == Expected
-	WaitingRoom WaitingRoomMetric
-	CaptchaHit  bool
-	Error       error
-	Timestamp   time.Time
+	RetryAfter       time.Duration
+	LemmingID        string
+	URL              string
+	StatusCode       int
+	BytesIn          int64
+	Duration         time.Duration // wall clock from request start to body close
+	Checksum         string        // SHA512 of actual response body
+	Expected         string        // SHA512 from URLPool at index time
+	Match            bool          // Checksum == Expected
+	WaitingRoom      WaitingRoomMetric
+	CaptchaHit       bool
+	Error            error
+	Timestamp        time.Time
+	Sequence         int
+	Step             string
+	FinalURL         string
+	Referrer         string
+	CookieNames      []string
+	Timing           RequestTiming
+	ResponseCodes    map[int]int64
+	OmittedResponses int64
+	Responses        []ResponseHop
+	Page             PageEvidence
+	ErrorKind        string
+	Cancelled        bool
 }
 
-// LifeLog is the complete record of a lemming's life.
-// It is constructed during Run() and sent to the swarm at death.
+// LifeLog contains session totals and a bounded tail of the last 100 visits.
+// Complete visit aggregates are streamed separately while the user is alive.
 type LifeLog struct {
-	Identity Identity
-	Terrain  int
-	Pack     int
-	Visits   []Visit
-	Error    error // non-nil if lemming died abnormally
-	BornAt   time.Time
-	DiedAt   time.Time
-	Duration time.Duration
+	Identity        Identity
+	Terrain         int
+	Pack            int
+	Visits          []Visit
+	Error           error // non-nil if lemming died abnormally
+	BornAt          time.Time
+	DiedAt          time.Time
+	Duration        time.Duration
+	LiveRecorded    bool // lifecycle/visit counters were updated at the source
+	Streamed        bool // visits were already aggregated by the reporter
+	TotalVisits     int64
+	FailedVisits    int64
+	CancelledVisits int64
+	ExitReason      string
+	OmittedVisits   int64
 }
 
 // Lemming is a stateful navigating HTTP agent with its own session and identity.
 type Lemming struct {
-	identity Identity
-	cfg      SwarmConfig
-	pool     *URLPool
-	client   *http.Client
-	bus      *EventBus
-	metrics  *SwarmMetrics
-	rng      *rand.Rand // per-lemming rng, no lock needed
+	identity     Identity
+	cfg          SwarmConfig
+	pool         *URLPool
+	client       *http.Client
+	bus          *EventBus
+	metrics      *SwarmMetrics
+	rng          *rand.Rand // per-lemming rng, no lock needed
+	previousURL  string
+	nextLinks    []string
+	step         int
+	recordVisit  func(Visit)
+	lastResponse requestEvidence
 }
 
 // NewLemming constructs a Lemming. The HTTP client is provided by Terrain,
@@ -106,7 +133,7 @@ func NewLemming(
 ) *Lemming {
 	id := generateLemmingID(terrain, pack)
 
-	return &Lemming{
+	l := &Lemming{
 		identity: Identity{
 			ID:      id,
 			Terrain: terrain,
@@ -120,6 +147,9 @@ func NewLemming(
 		metrics: metrics,
 		rng:     rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
+	l.identity.UserAgent = l.randomUA()
+	l.identity.Language = "en-US,en;q=0.9"
+	return l
 }
 
 // Run is the lemming's entire life. It derives a deadline context from
@@ -135,44 +165,85 @@ func NewLemming(
 func (l *Lemming) Run(parent context.Context) LifeLog {
 	ctx, cancel := context.WithTimeout(parent, l.cfg.Until)
 	defer cancel()
-
-	bornAt := time.Now()
-	visits := make([]Visit, 0, 16) // pre-allocate reasonable capacity
-
-	// Navigation loop — runs until context deadline
-	for {
-		select {
-		case <-ctx.Done():
-			// Life is over — assemble and return the lifelog
-			diedAt := time.Now()
-			return LifeLog{
-				Identity: l.identity,
-				Terrain:  int(l.identity.Terrain),
-				Pack:     int(l.identity.Pack),
-				Visits:   visits,
-				BornAt:   bornAt,
-				DiedAt:   diedAt,
-				Duration: diedAt.Sub(bornAt),
+	ll := LifeLog{Identity: l.identity, Terrain: int(l.identity.Terrain), Pack: int(l.identity.Pack), BornAt: time.Now(), Streamed: l.recordVisit != nil, LiveRecorded: true, ExitReason: "lifespan"}
+	for ctx.Err() == nil {
+		if l.cfg.Experience.MaxPages > 0 && ll.TotalVisits >= int64(l.cfg.Experience.MaxPages) {
+			ll.ExitReason = "page-limit"
+			break
+		}
+		u := l.pickURL()
+		if scenario := l.cfg.Experience.Scenario; scenario != nil {
+			if l.step >= len(scenario.Steps) {
+				ll.ExitReason = "journey-complete"
+				break
 			}
-
-		default:
-			url := l.pickURL()
-			visit := l.hit(ctx, url)
-			visits = append(visits, visit)
-
-			l.bus.Emit(Event{
-				Kind:       EventVisitComplete,
-				LemmingID:  l.identity.ID,
-				Terrain:    int(l.identity.Terrain),
-				Pack:       int(l.identity.Pack),
-				URL:        url,
-				StatusCode: visit.StatusCode,
-				BytesIn:    visit.BytesIn,
-				Duration:   visit.Duration,
-			})
-
+			u = resolveURL(l.cfg.Hit, scenario.Steps[l.step].Path)
+		} else if l.cfg.Experience.Navigation == "links" {
+			if ll.TotalVisits == 0 {
+				u = l.cfg.Hit
+			} else if len(l.nextLinks) > 0 {
+				u = l.nextLinks[l.rng.Intn(len(l.nextLinks))]
+			}
+		}
+		v := l.hit(ctx, u)
+		v.Sequence = int(ll.TotalVisits) + 1
+		if sc := l.cfg.Experience.Scenario; sc != nil {
+			v.Step = sc.Steps[l.step].Name
+		}
+		l.step++
+		ll.TotalVisits++
+		if v.failed() {
+			ll.FailedVisits++
+		}
+		if v.Cancelled {
+			ll.CancelledVisits++
+		}
+		// Keep a bounded, chronological tail. Complete totals are aggregated
+		// independently; an optional JSONL trace records the full visit stream.
+		if len(ll.Visits) == 100 {
+			copy(ll.Visits, ll.Visits[1:])
+			ll.Visits = ll.Visits[:99]
+			ll.OmittedVisits++
+		}
+		ll.Visits = append(ll.Visits, v)
+		l.metrics.recordVisit(v)
+		if l.recordVisit != nil {
+			l.recordVisit(v)
+		}
+		kind := EventVisitComplete
+		if v.failed() || v.Cancelled {
+			kind = EventVisitError
+		}
+		l.bus.Emit(Event{Kind: kind, LemmingID: l.identity.ID, Terrain: int(l.identity.Terrain), Pack: int(l.identity.Pack), URL: safeURL(u), StatusCode: v.StatusCode, BytesIn: v.BytesIn, Duration: v.Duration, Err: v.Error, Failed: v.failed(), Cancelled: v.Cancelled})
+		if !v.Cancelled && v.FinalURL != "" {
+			l.previousURL = v.FinalURL
+		}
+		delay := l.cfg.Experience.ThinkMin
+		if extra := l.cfg.Experience.ThinkMax - delay; extra > 0 {
+			delay += time.Duration(l.rng.Int63n(int64(extra)))
+		}
+		// Back off a failing origin even when the explicit think time is zero.
+		if v.failed() && delay < 100*time.Millisecond {
+			delay = 100 * time.Millisecond
+		}
+		if (v.StatusCode == 429 || v.StatusCode == 503) && v.RetryAfter > delay {
+			delay = v.RetryAfter
+		}
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+			case <-timer.C:
+			}
 		}
 	}
+	if parent.Err() != nil {
+		ll.ExitReason = "cancelled"
+	}
+	ll.DiedAt = time.Now()
+	ll.Duration = ll.DiedAt.Sub(ll.BornAt)
+	return ll
 }
 
 // hit performs a single page visit, handling waiting room detection
@@ -194,6 +265,18 @@ func (l *Lemming) hit(ctx context.Context, url string) Visit {
 	visit.StatusCode = statusCode
 	visit.BytesIn = bytesIn
 	visit.Error = err
+	visit.RetryAfter = l.lastResponse.retryAfter
+	visit.FinalURL = l.lastResponse.finalURL
+	visit.Referrer = safeURL(l.previousURL)
+	visit.CookieNames = l.lastResponse.cookieNames
+	visit.Timing = l.lastResponse.timing
+	visit.Responses = l.lastResponse.hops
+	visit.ResponseCodes = map[int]int64{}
+	for _, h := range visit.Responses {
+		visit.ResponseCodes[h.Status]++
+	}
+	visit.ErrorKind = errorKind(err)
+	visit.Cancelled = err != nil && ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
 
 	if err != nil {
 		visit.Duration = time.Since(start)
@@ -214,7 +297,6 @@ func (l *Lemming) hit(ctx context.Context, url string) Visit {
 
 		// Poll until admitted or context expires
 		body, visit = l.waitInRoom(ctx, url, visit)
-		_ = body
 
 		// Emit waiting room event now that Duration is known
 		l.bus.Emit(Event{
@@ -228,12 +310,26 @@ func (l *Lemming) hit(ctx context.Context, url string) Visit {
 	}
 
 	visit.Duration = time.Since(start)
+	visit.FinalURL = l.lastResponse.finalURL
+	visit.Timing = l.lastResponse.timing
+	visit.CookieNames = l.lastResponse.cookieNames
+	visit.ErrorKind = errorKind(visit.Error)
+	visit.Cancelled = visit.Error != nil && ctx.Err() != nil
+	expected := Expectations{}
+	if sc := l.cfg.Experience.Scenario; sc != nil && l.step < len(sc.Steps) {
+		expected = sc.Steps[l.step].Expect
+	}
+	visit.Page = inspectPage(body, l.lastResponse.contentType, visit.StatusCode, expected)
+	if l.cfg.Experience.StrictChecksum {
+		visit.Page.Checks = append(visit.Page.Checks, CheckResult{"checksum", visit.Expected != "" && visit.Match, "strict comparison with index-time body"})
+	}
+	l.nextLinks = extractHTMLLinks(body, visit.FinalURL)
 	return visit
 }
 
 // waitInRoom blocks the lemming in the waiting room, re-requesting the URL
-// on the room's poll interval until the body checksum matches the indexed
-// value (admission) or the lemming's context expires (death in queue).
+// on the room's poll interval until the queue signature disappears (admission)
+// or the lemming's context expires. Dynamic checksums need not match.
 func (l *Lemming) waitInRoom(ctx context.Context, url string, visit Visit) ([]byte, Visit) {
 	ticker := time.NewTicker(waitingRoomPollInterval)
 	defer ticker.Stop()
@@ -246,18 +342,31 @@ func (l *Lemming) waitInRoom(ctx context.Context, url string, visit Visit) ([]by
 			visit.WaitingRoom.Duration = visit.WaitingRoom.ExitedAt.Sub(
 				visit.WaitingRoom.EnteredAt,
 			)
+			visit.Error = ctx.Err()
 			return nil, visit
 
 		case <-ticker.C:
 			body, statusCode, bytesIn, err := l.request(ctx, url)
 			visit.StatusCode = statusCode
 			visit.BytesIn += bytesIn // accumulate bytes across all polls
+			for _, h := range l.lastResponse.hops {
+				if visit.ResponseCodes == nil {
+					visit.ResponseCodes = map[int]int64{}
+				}
+				visit.ResponseCodes[h.Status]++
+				if len(visit.Responses) < 32 {
+					visit.Responses = append(visit.Responses, h)
+				} else {
+					visit.OmittedResponses++
+				}
+			}
 
 			if err != nil {
 				visit.Error = err
 				continue
 			}
 
+			visit.Error = nil // a successful poll clears earlier transient errors
 			checksum := sha512sum(body)
 			visit.Checksum = checksum
 
@@ -267,9 +376,9 @@ func (l *Lemming) waitInRoom(ctx context.Context, url string, visit Visit) ([]by
 				continue
 			}
 
-			// Checksum matches — lemming has been admitted
-			if checksum == visit.Expected {
-				visit.Match = true
+			// The queue signature has disappeared; dynamic pages need not match a checksum.
+			if inRoom, _ := detectWaitingRoom(body); !inRoom {
+				visit.Match = checksum == visit.Expected
 				visit.WaitingRoom.ExitedAt = time.Now()
 				visit.WaitingRoom.Duration = visit.WaitingRoom.ExitedAt.Sub(
 					visit.WaitingRoom.EnteredAt,
@@ -288,31 +397,11 @@ func (l *Lemming) waitInRoom(ctx context.Context, url string, visit Visit) ([]by
 	}
 }
 
-// request performs a single HTTP GET with a random UA string.
-// It returns the body bytes, status code, byte count, and any error.
+// request preserves the original helper API while capturing richer evidence.
 func (l *Lemming) request(ctx context.Context, url string) ([]byte, int, int64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("build request: %w", err)
-	}
-
-	req.Header.Set("User-Agent", l.randomUA())
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
-	req.Header.Set("Connection", "keep-alive")
-
-	resp, err := l.client.Do(req)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, 0, fmt.Errorf("read body: %w", err)
-	}
-
-	return body, resp.StatusCode, int64(len(body)), nil
+	l.lastResponse = l.requestDetailed(ctx, url)
+	r := l.lastResponse
+	return r.body, r.status, r.bytes, r.err
 }
 
 // pickURL selects a random URL from the shared pool.
