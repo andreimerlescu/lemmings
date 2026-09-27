@@ -97,22 +97,6 @@ func (t *Terrain) failUnborn(from int64, err error) {
 	}
 }
 
-// spawnLemming acquires the semaphore and then lives one lemming's life.
-// Launch schedules lemmings itself; spawnLemming exists for callers that
-// manage their own goroutines and must call t.wg.Add(1) first.
-//
-// Semaphore discipline: Release is only registered AFTER Acquire succeeds.
-// If Acquire fails, the slot was never held, so calling Release would
-// corrupt the semaphore count by freeing a slot another goroutine holds.
-func (t *Terrain) spawnLemming(ctx context.Context, packIndex int64) {
-	defer t.wg.Done()
-	if err := t.sem.AcquireWith(ctx); err != nil {
-		t.failUnborn(packIndex, err)
-		return
-	}
-	t.live(ctx, packIndex)
-}
-
 // live runs one lemming whose semaphore slot is already held, then
 // releases the slot. It owns the lemming lifecycle contract: exactly one
 // EventLemmingBorn and one EventLemmingDied (or one EventLemmingFailed)

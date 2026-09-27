@@ -480,9 +480,9 @@ func (s *Swarm) ingest(ll LifeLog) {
 	if !ll.Streamed {
 		s.metrics.LemmingsCompleted.Add(1)
 		s.metrics.LemmingsAlive.Add(-1)
+		// The reporter counts these visits itself in Ingest below.
 		for i := range ll.Visits {
 			s.metrics.recordVisit(&ll.Visits[i])
-			s.reporter.RecordVisit(&ll.Visits[i])
 		}
 		if ll.Error != nil {
 			s.metrics.LemmingsFailed.Add(1)

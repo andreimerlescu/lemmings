@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -21,9 +22,25 @@ type ui struct {
 // newUI decides how to render for this process.
 func newUI(cfg SwarmConfig) ui {
 	_, noColor := os.LookupEnv("NO_COLOR")
-	on := cfg.Color && cfg.TTY && !noColor && term.IsTerminal(int(os.Stdout.Fd()))
+	on := cfg.Color && cfg.TTY && !noColor && term.IsTerminal(int(os.Stdout.Fd())) && ansiCapable()
 	ct := os.Getenv("COLORTERM")
 	return ui{color: on, truecolor: on && (strings.Contains(ct, "truecolor") || strings.Contains(ct, "24bit"))}
+}
+
+// ansiCapable reports whether the terminal understands escape codes.
+// Legacy Windows consoles print them raw, so on Windows colour needs a
+// terminal known to support them: Windows Terminal, ConEmu/ANSICON, or
+// one that sets TERM (mintty, VS Code, SSH sessions).
+func ansiCapable() bool {
+	if runtime.GOOS != "windows" {
+		return true
+	}
+	for _, v := range []string{"WT_SESSION", "ANSICON", "ConEmuANSI", "TERM"} {
+		if os.Getenv(v) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // Synthwave '84 palette: RGB for truecolor terminals, a basic ANSI code
