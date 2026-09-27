@@ -86,7 +86,8 @@ that emitted. Subscribers must be O(1) and hand anything slow — disk, network
 - [x] TESTS.md covers report delivery, the fuzz targets and the lifecycle
   contract.
 - [x] `make run`, `make run-journey`, `make demo` and `make build-check`.
-- [x] CI pins Go 1.25.x on Linux, macOS and Windows.
+- [x] CI runs on demand (workflow_dispatch): lint, then race tests on Linux
+  or on Linux, macOS and Windows, with optional benchmarks and fuzzing.
 - [x] Release gates: build, vet, gofmt, race tests, a real run with reports,
   the dashboard during a run, the live ticker, dropped_logs 0, and report paths
   printed at the end.
