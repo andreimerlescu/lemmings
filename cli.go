@@ -126,7 +126,7 @@ func (u ui) printBootSummary(cfg SwarmConfig) {
 		fmt.Printf("%s%d per lemming\n", u.key("max pages:"), cfg.MaxPages)
 	}
 	fmt.Printf("%s%v (depth: %d)\n", u.key("crawl:"), cfg.Crawl, cfg.CrawlDepth)
-	fmt.Printf("%s\n", u.key("save-to:"))
+	fmt.Println(u.paint(toneMuted, "  save-to:"))
 	for _, dest := range cfg.SaveTo {
 		fmt.Printf("    → %s\n", dest)
 	}
@@ -272,7 +272,7 @@ func (s *Swarm) tickerLine(u ui, visits int64, rates []float64) string {
 		line += " | " + u.paint(toneRed, "failed: "+formatInt(failed))
 	}
 	if wr := m.TotalWaitingRoom.Load(); wr > 0 {
-		line += " | " + u.paint(toneOrange, "queued: "+formatInt(wr))
+		line += " | " + u.paint(toneOrange, "room held: "+formatInt(wr))
 	}
 	// Only show overflow/dropped if they're non-zero —
 	// no need to alarm engineers who sized their runs correctly

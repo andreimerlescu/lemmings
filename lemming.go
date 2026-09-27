@@ -54,8 +54,8 @@ const (
 
 	// lifeTailSize is how many of its most recent visits a lemming keeps
 	// in its LifeLog. Complete totals are streamed as visits happen, so the
-	// tail only bounds the detail kept for the report and dashboard.
-	lifeTailSize = 100
+	// tail is only the detail a report can show for a notable lemming.
+	lifeTailSize = reportTailSteps
 
 	// failureBackoff is the minimum pause after a failed visit, applied even
 	// when think time is zero so a dead origin is not spun against.
