@@ -564,7 +564,7 @@ Run with Prometheus metrics and delivery everywhere:
 The boot summary printed before any lemming moves tells you exactly what is
 about to happen:
 
-      ░▒▓ L E M M I N G S ▓▒░   v1.0.0
+      ░▒▓ L E M M I N G S ▓▒░   v0.1.0
       simulated visitors · real consequences
     ─────────────────────────────────────────
       target:         http://127.0.0.1:8080/
@@ -595,7 +595,7 @@ The final summary closes the run, followed by where the reports went and the
 verdict:
 
     ─────────────────────────────────────────
-      lemmings v1.0.0 — final summary
+      lemmings v0.1.0 — final summary
     ─────────────────────────────────────────
       target:         http://127.0.0.1:8080/
       total lemmings: 72
