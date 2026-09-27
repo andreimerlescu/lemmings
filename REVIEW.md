@@ -1,5 +1,3 @@
-> Historical document from the supplied pre-upgrade snapshot. For current behavior, flags, tests and measurement limits, read [README.md](README.md) and [UPGRADE.md](UPGRADE.md).
-
 # Lemmings Code Review Notes
 
 > Notes written the evening of initial development for use during tomorrow's
@@ -341,4 +339,3 @@ What was built in this session:
 - REVIEW.md — This file
 
 Total: 16 source files, 8 test files, 3 documentation files, 1 Makefile.
-

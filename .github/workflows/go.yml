@@ -7,8 +7,27 @@ on:
     branches:
       - main
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "needs gofmt:"; echo "$unformatted"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: Build lemmings and the demo target
+        run: go build ./...
+      - name: Dashboard JavaScript parses
+        run: node --check web/app.js && node --check web/theme.js
   test:
     runs-on: ${{ matrix.os }}
+    needs: lint
     strategy:
       matrix:
         os: [ ubuntu-latest, macos-latest, windows-latest ]
@@ -20,7 +39,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
-      - name: Unit tests with race detector
+      - name: Unit, integration and end-to-end tests with race detector
         run: go test -race -count=1 -v ./...
   bench:
     runs-on: ubuntu-latest
@@ -56,4 +75,5 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: Fuzz ${{ matrix.target }}
-        run: go test -fuzz=${{ matrix.target }} -fuzztime=30s -run='^$' ./...
+        # -fuzz accepts exactly one package; the demo target is a second one.
+        run: go test -run='^$' -fuzz='^${{ matrix.target }}$' -fuzztime=30s .

@@ -1,5 +1,3 @@
-> Historical document from the supplied pre-upgrade snapshot. For current behavior, flags, tests and measurement limits, read [README.md](README.md) and [UPGRADE.md](UPGRADE.md).
-
 # Examples
 
 Real-world code examples demonstrating the four principles. Each example shows what LLMs commonly do wrong and how to fix it.
@@ -699,5 +697,4 @@ The "simple" versions are:
 - Can be refactored later when complexity is actually needed
 
 **Good code is code that solves today's problem simply, not tomorrow's problem prematurely.**
-
 

@@ -1,5 +1,3 @@
-> Historical document from the supplied pre-upgrade snapshot. For current behavior, flags, tests and measurement limits, read [README.md](README.md) and [UPGRADE.md](UPGRADE.md).
-
 # Lemmings Test Suite
 
 > Proving that what lemmings measures is true, and that what it reports can be trusted.
@@ -20,15 +18,15 @@ This document explains what the lemmings test suite proves, what each category
 of test demonstrates, and why organizations can trust the reports lemmings
 generates when making launch decisions.
 
-As of the v0.0.1 release gate, the suite contains 432 tests across unit, fuzz,
-and benchmark categories, all passing under the race detector on Linux, macOS,
-and Windows.
+As of v1.0.0 the suite contains 438 tests: 397 unit, integration and
+end-to-end tests, 9 fuzz targets and 32 benchmarks, all passing under the race
+detector on Linux, macOS and Windows.
 
 ---
 
 ## Test Categories
 
-Lemmings uses three categories of tests, each chosen for a specific reason.
+Lemmings uses four categories of tests, each chosen for a specific reason.
 
 ### Unit Tests
 
@@ -78,7 +76,7 @@ The fuzz targets in lemmings and the invariants each one enforces:
 | sha512sum | Never panics. Always returns exactly 128 hex characters. |
 | extractSitemapLocs | Never panics. Never returns empty strings in the result slice. |
 | extractHTMLLinks | Never panics. All returned links have the origin as prefix. |
-| resolveURL | Never panics. Never returns URLs containing fragment identifiers. |
+| resolveURL | Never panics. Never returns URLs containing fragment identifiers. Every result stays on the base URL's origin. |
 | handleAuth | Never panics. Always returns a valid HTTP status code. |
 | dashboardHTML | Never panics. Always returns non-empty output. |
 | formatInt | Never panics. Always returns a non-empty string. |
@@ -88,6 +86,9 @@ Each fuzz target includes a seed corpus of known interesting inputs — empty
 bodies, malformed structures, boundary values, and real-world examples drawn
 from the room package's actual HTML. The seed corpus ensures that even without
 extended fuzzing runs, the most likely production edge cases are covered.
+Inputs that once failed are kept under `testdata/fuzz/` and replayed by every
+plain `go test` run: FuzzResolveURL found that a host containing an invalid
+byte re-escapes into a different origin, and that input now guards the fix.
 
 ### Benchmark Tests
 
@@ -96,14 +97,13 @@ within the bounds required for lemmings to scale. A load testing tool that
 itself becomes the bottleneck produces results that describe the tool, not the
 target. Benchmarks make that failure mode visible before it affects a real test.
 
-Benchmark tests in lemmings are tagged with //go:build bench when they are
-expensive to run. The default go test ./... invocation compiles them but does
-not execute them. They are run explicitly with:
+Benchmarks are compiled by every `go test` run but only executed when asked
+for with `-bench`:
 
-    go test -tags bench -bench=. -benchmem ./...
+    go test -run='^$' -bench=. -benchmem ./...
 
-This means CI pipelines run fast by default and engineers run benchmarks
-deliberately when they need to verify performance properties.
+This keeps the default test run fast while CI runs the benchmarks in their own
+job.
 
 The benchmarked functions and what a regression in each one means:
 
@@ -111,8 +111,8 @@ The benchmarked functions and what a regression in each one means:
 |---|---|
 | BenchmarkSha512sum_1KB / _1MB | SHA-512 is called on every page body by every lemming on every visit. A regression here degrades throughput across the entire swarm proportionally to visit count. |
 | BenchmarkDetectWaitingRoom_Normal | This executes on every HTTP response body. A regression here reduces the maximum sustainable visit rate. |
-| BenchmarkEventBus_Emit_Concurrent | The EventBus is the shared nervous system of the swarm. Lock contention here stalls lemming goroutines across all terrains simultaneously. |
-| BenchmarkClientRegistry_Broadcast | Broadcast runs once per second per connected dashboard client. A regression here delays metric visibility without affecting the swarm itself. |
+| BenchmarkEventBus_Emit_Concurrent | The EventBus is the shared nervous system of the swarm. Emit takes no lock and allocates nothing; a regression here stalls lemming goroutines across all terrains simultaneously. |
+| BenchmarkClientRegistry_Broadcast_OneClient / _HundredClients | Broadcast runs several times a second per connected dashboard client. A regression here delays what the dashboard shows without affecting the swarm itself. |
 | BenchmarkReporter_Ingest_Concurrent | Ingest runs once per lemming death. At scale, lock contention here creates a queue of goroutines waiting to record their results, artificially extending run time. |
 | BenchmarkSendLifeLog_Concurrent | The non-blocking send is the critical handoff between a dying lemming and the result collector. Any latency here holds a goroutine open past its intended deadline, corrupting timing metrics. |
 
@@ -154,13 +154,18 @@ invisible in small test runs and catastrophic in real ones: a report showing
 
 The test suite enforces a single-owner contract for lifecycle events:
 `EventLemmingBorn`, `EventLemmingDied`, and `EventLemmingFailed` are emitted
-exclusively by `Terrain.spawnLemming`. `Lemming.Run` emits only per-visit
-events — `EventVisitComplete` and `EventWaitingRoom` — that describe its
-in-flight work.
+exclusively by the `Terrain` (`Terrain.live`, and `Terrain.failUnborn` for
+lemmings that never got a slot). `Lemming.Run` emits only per-visit and
+waiting room events that describe its in-flight work.
 
-TestSpawnLemming_EmitsBornEvent verifies that Terrain emits Born exactly
-once per lemming. TestSpawnLemming_EmitsDiedEvent verifies the same for
-Died. TestRun_DoesNotEmitBornEvent verifies the negative contract — that
+Before 1.0 the swarm's collector emitted a second `EventLemmingDied` for every
+lemming, so the Prometheus `lemmings_alive` gauge went negative and
+`lemmings_completed_total` doubled. TestSwarm_StreamsVisitsAndOwnsLifecycleOnce
+runs a real swarm and counts exactly one birth and one death per lemming.
+
+TestSpawnLemming_EmitsDiedEvent verifies that the Terrain emits Died for its
+lemmings, and TestSpawnLemming_EmitsFailedOnSemaphoreTimeout that every
+lemming that never started is counted as failed. TestRun_DoesNotEmitBornEvent verifies the negative contract — that
 `Lemming.Run` does not emit Born, preventing any future contributor from
 accidentally reintroducing the double-emit bug.
 TestTerrain_Launch_SemaphoreRespected uses the event bus to count
@@ -174,7 +179,19 @@ twice that many and not half.
 ### Percentile Accuracy
 
 The test suite proves that timing percentiles are computed correctly using the
-nearest-rank method on a fully sorted duration slice.
+nearest-rank method on a fully sorted duration slice while every sample is
+kept, and within a proven 2% bound once a run has more samples than lemmings
+keeps (4,096 overall, 512 per path).
+
+Two pre-1.0 defects are pinned by tests. Per-path percentiles were read from
+an unsorted slice, so a path's p50 was simply whichever sample arrived in the
+middle; TestReporter_PercentilesStayExactThenBounded feeds unsorted samples
+and checks the exact answer. And a visit held in a waiting room counted its
+whole queue time as latency, so one queue could put p99 at nine seconds on a
+server answering in half a second; visits now carry a separate Latency, the
+server's time for the page it finally served, and the report shows queue
+time on its own. TestHistogram_QuantileErrorBound checks the histogram
+against exact answers across three orders of magnitude.
 
 TestPercentile_P50_KnownDataset and TestPercentile_P99_KnownDataset verify
 the percentile computation against datasets where the correct answer is known
@@ -184,29 +201,34 @@ why they are getting wrong results.
 
 An organization using p99 latency from a lemmings report to make infrastructure
 decisions can trust that the number is the 99th percentile of actual observed
-request durations, computed correctly.
+request durations, computed correctly, and the report states which method
+produced it.
 
 ### No Silent Data Loss
 
 The test suite proves that lemmings never silently loses result data, even under
 extreme load conditions.
 
+Since 1.0 every visit is counted the moment it completes, so visit totals do
+not depend on a lemming's life record reaching the collector at all.
+TestSwarm_StreamsVisitsAndOwnsLifecycleOnce checks the live counter is
+already non-zero while the first visit is being announced.
+
 TestSendLifeLog_IncrementsDroppedWhenBothFull verifies that when both the
 primary and overflow result channels are full — a condition that indicates the
-system is genuinely overwhelmed — lemmings increments the dropped_logs counter
-rather than blocking the lemming goroutine or discarding data silently. The
-counter appears in both the STDOUT ticker and the final report with an explicit
-recommendation to increase -limit for accurate results.
+collector is genuinely overwhelmed — lemmings increments the dropped_logs
+counter rather than blocking the lemming goroutine or discarding data
+silently. A dropped life record loses only that lemming's per-visit detail;
+the counter appears in the STDOUT ticker, the dashboard and the report.
 
 TestCollectResults_DrainsPrimaryAndOverflow verifies that after the primary
 channel closes, the collector drains the overflow channel completely before
 exiting. No LifeLog that reached either channel is discarded.
 
 An organization can inspect the dropped_logs value in a lemmings report and
-know definitively whether any result data was not collected. A report with
-dropped_logs: 0 contains every visit from every lemming. A report with
-non-zero dropped_logs quantifies exactly how much data was not collected and
-why.
+know definitively whether any session detail was not collected. Visit totals,
+status codes and percentiles are exact either way. The optional -trace-file
+reports how many lines it wrote and how many it could not.
 
 ### Waiting Room Accuracy
 
@@ -228,6 +250,11 @@ malformed numeric content — the detector never panics and never returns a
 negative position. This means a compromised or misbehaving upstream cannot
 crash the swarm through the waiting room detection path.
 
+TestWaitingRoom_AdmitsDynamicHTML verifies admission when the queue page
+disappears even though the admitted page carries a fresh nonce that no longer
+matches the index-time checksum, and that the queue position is announced as
+it changes so the dashboard can show it over each lemming's head.
+
 An organization that uses both room and lemmings together can determine from
 a lemmings report how many lemmings were placed in the waiting room, what their
 average and peak queue positions were, how long they waited before admission, and
@@ -239,10 +266,19 @@ precisely the data needed to tune waiting room capacity against expected traffic
 The test suite proves that each lemming behaves like a realistic browser session.
 
 TestRequest_SetsUserAgent verifies that every HTTP request carries a User-Agent
-string drawn from a pool of five realistic browser identities — Chrome on Windows,
-Safari on macOS, Firefox on Linux, Edge on Windows, and Chrome on macOS.
-TestRandomUA_NotAlwaysSame verifies that the selection is varied across
-requests rather than always returning the same entry.
+string drawn from a pool of realistic desktop and mobile browser identities.
+TestRandomUA_NotAlwaysSame verifies that lemmings are born with varied
+identities. TestLemming_SessionPersonaAndNavigation verifies that a lemming
+then keeps its user agent, language and cookies for its whole life, sends the
+page it came from as its Referer, and follows a link from the page it just
+read — as a person does.
+
+TestInspectPage_NavigableLinks verifies that lemmings never follow download
+links, log-out or delete links, or links that leave the origin, so a load
+test cannot sign its own sessions out or mutate data by wandering.
+TestThink_HonoursRetryAfter and TestThink_BacksOffFailuresWithZeroThinkTime
+verify that lemmings pause between pages, respect Retry-After on 429 and
+503, and back off a failing origin instead of spinning against it.
 
 TestSpawnLemming_CookieJarIsolation verifies that each lemming receives its own
 isolated cookie jar via cookiejar.New(), meaning that session cookies set by
@@ -319,7 +355,15 @@ TestReporter_Write_ContextCancellation verifies that cancelling the swarm
 context aborts in-progress deliveries cleanly without hanging.
 
 TestLocalTarget_Deliver_CreatesFiles verifies that local delivery creates
-both the markdown and HTML files in the expected directory tree.
+both the markdown and HTML files in the expected directory tree, and
+TestLocalTarget_WritesJSON the machine-readable JSON beside them.
+TestReportJSON_NeverContainsDeliverySecrets verifies that SMTP credentials,
+email addresses, bucket names, URL userinfo and query strings never appear
+in any report format — before 1.0 the JSON report included the SMTP password.
+TestMailTarget_FailedSTARTTLSIsNeverDowngraded verifies that a server
+offering STARTTLS but failing the handshake gets an error, not the report in
+plaintext, and TestMailTarget_DeliverHonoursContext that a stalled mail
+server cannot hang the end of a run.
 TestLocalTarget_Deliver_CreatesDirectoryTree verifies that the destination
 directory is created if it does not exist.
 TestMailTarget_BuildMessage_IsValidMIME verifies that email delivery
@@ -352,11 +396,56 @@ prefix by measuring response time differences. This is tested structurally by
 verifying that crypto/subtle.ConstantTimeCompare is used rather than a direct
 equality check.
 
+TestDashboard_CSPAllowsExactlyTheInlineAssets hashes the script and style
+actually served and checks the Content-Security-Policy allows exactly those,
+with `default-src 'none'`, no `unsafe-inline`, no inline styles and no
+innerHTML anywhere in the page. TestDashboard_ConfigCannotBreakOutOfItsScriptTag
+checks that a hostile -hit value stays escaped, and
+TestDashboard_LocalOnlyRejectsForeignHosts that a DNS-rebinding page cannot
+reach the dashboard through a public hostname pointed at 127.0.0.1.
+
 FuzzHandleAuth extends this guarantee to adversarial token values: the
 authentication handler never panics regardless of what bytes arrive in the
 POST body, and always returns one of a small set of valid HTTP status codes
 (200, 303, 400, 401, 405). An attacker cannot crash the dashboard through
 the auth endpoint.
+
+### Journeys and Page Checks
+
+The test suite proves that a page which answers 200 but shows an error, or
+nothing at all, is caught.
+
+TestInspectPage_DetectsSoftError feeds an error page served with 200 and
+checks that the journey's contains, not-contains, title and selector checks
+fail. TestInspectPage_NotBlank checks the blank-page rule: text, images or
+scripts count as content, so client-rendered apps are not flagged, while a
+page with nothing a person could see is. TestJourney_WalksStepsInOrderAndStops
+checks that every lemming walks the steps once, in order, with each step's
+checks applied, and TestParseJourney_Validation that journeys leaving the
+origin, using unsupported selectors or containing typos are rejected before
+the first lemming moves.
+
+### The Dashboard's Live Picture
+
+The observatory behind the dashboard sees every event, so its contracts are
+tested directly. TestObservatory_StageSlotsAreBoundedAndReused checks that
+no more than 160 lemmings are animated whatever the swarm size, and that
+slots are reused. TestObservatory_CollapsesVisitsPerFrame checks that many
+visits in one frame become one event that keeps the worst outcome, attributed
+to the right lemming when a slot changes hands. TestObservatory_FeedIsRateLimited
+and TestObservatory_TerrainTilesGroupLargeSwarms bound the feed and the
+terrain map, so the browser's work stays constant at any scale.
+
+### The Binary, End to End
+
+The end-to-end tests build the real binary and drive it as an engineer or CI
+pipeline would. TestE2E_StartsAndReportsVersion guards against the v0.0.2
+defect where two flags shared an alias and the binary could not start at all.
+TestE2E_PassingRunWritesEveryFormat and TestE2E_FailingGateExitsTwo check
+exit codes 0 and 2 and all three report formats. TestE2E_DashboardAndInterrupt
+signs in with the one-click link, reads the live state, the inspector and a
+stage frame from a running swarm, then sends Ctrl-C and checks for exit code
+130 with the report still delivered. They are skipped with `-short`.
 
 ---
 
@@ -364,35 +453,36 @@ the auth endpoint.
 
 ### Standard test run
 
-Runs all unit tests with race detection enabled. This is the command that should
-run in every CI pipeline on every commit.
+Runs every test with race detection enabled, including the end-to-end tests
+that build the binary. This is the command that should run in every CI
+pipeline on every commit. `-count=1` disables result caching.
 
-    go test -race ./...
+    go test -race -count=1 ./...
 
-### With fuzz seed corpus
+Add `-short` to skip the end-to-end tests.
 
-Runs unit tests plus one fuzz iteration per fuzz function using the seed corpus.
-The seed corpus covers all known interesting inputs without requiring extended
-fuzzing time.
+### Every fuzz target
 
-    go test -race -fuzz=. -fuzztime=10s ./...
+Go fuzzes one target at a time. The Makefile runs each in turn:
+
+    make test-fuzz            # 10s each
+    FUZZTIME=60s make test-fuzz
 
 ### Extended fuzzing — specific function
 
 Runs extended fuzzing against a single function. Use this when investigating a
 specific parsing function before a major release.
 
-    go test -fuzz=FuzzDetectWaitingRoom -fuzztime=60s ./...
-    go test -fuzz=FuzzExtractSitemapLocs -fuzztime=60s ./...
-    go test -fuzz=FuzzExtractHTMLLinks   -fuzztime=60s ./...
+    go test -run='^$' -fuzz='^FuzzDetectWaitingRoom$' -fuzztime=60s .
+    go test -run='^$' -fuzz='^FuzzExtractSitemapLocs$' -fuzztime=60s .
+    go test -run='^$' -fuzz='^FuzzResolveURL$'         -fuzztime=60s .
 
 ### Benchmark run
 
-Runs all benchmarks including those tagged with //go:build bench. Use this
-before and after changes to hot path functions to verify no performance
-regression was introduced.
+Runs every benchmark. Use this before and after changes to hot path functions
+to verify no performance regression was introduced.
 
-    go test -tags bench -bench=. -benchmem -benchtime=5s ./...
+    go test -run='^$' -bench=. -benchmem -benchtime=5s ./...
 
 ### Coverage report
 
@@ -409,10 +499,9 @@ that new code added to any source file has corresponding test coverage.
 A lemmings report is appropriate for use in the following production decisions:
 
 **Go/no-go for a traffic event.** If a lemmings run with parameters matching
-the expected traffic shape completes with dropped_logs: 0, all 2xx rates above
-your threshold, p99 latency below your SLA, and no 5xx responses, the
-application has demonstrated it can handle that traffic. The test suite proves
-the measurement is accurate.
+the expected traffic shape passes its `-max-failure-rate` and `-p95-budget`
+gates, the application has demonstrated it can handle that traffic. The test
+suite proves the measurement is accurate and that the exit code reflects it.
 
 **Waiting room capacity planning.** If a lemmings run produces non-zero
 waiting_room counts, the report contains queue position distributions and wait
@@ -448,6 +537,11 @@ against. It does not prove:
   load with real network latency — lemmings runs from a single origin.
 - That your application's behaviour under load matches its behaviour at rest
   in all respects — only in the respects that lemmings measures.
+- That pages render correctly in a browser. Lemmings reads what the server
+  sends; it does not run JavaScript or load images, stylesheets or scripts.
+- That the arrival rate was constant. Each lemming waits for a page before
+  choosing the next, so a slow server receives fewer requests — as it would
+  from real people. The report shows the rate actually achieved.
 
 Lemmings is one instrument in a larger observability strategy. It produces
 trustworthy results within its defined scope. Understanding that scope is part
