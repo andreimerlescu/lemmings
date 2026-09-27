@@ -6,6 +6,8 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/andreimerlescu/lemmings)](https://goreportcard.com/report/github.com/andreimerlescu/lemmings)
 [![Apache 2.0 License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
+![The lemmings dashboard: lemmings walk a synthwave terrain while charts, a waiting room queue and a followed lemming's life update live](docs/images/dashboard-dark.jpg)
+
 ---
 
 Your company is about to spend $50,000 on a TV commercial. Traffic is going to
@@ -14,24 +16,44 @@ spike the moment it airs. Does your application actually survive that?
 Most teams find out the answer at 8PM on a Tuesday in front of their entire
 customer base.
 
-Lemmings lets you find out before that moment, for free, from your own machine.
+Lemmings lets you find out before that moment, for free, from your own machine —
+and lets you watch it happen.
+
+---
+
+## Try It in a Minute
+
+Lemmings ships with **Neon Arcade**, a small local site with healthy pages, a
+slow leaderboard, a flaky page, a page that shows an error with a 200, a blank
+page, a broken link and a waiting room at checkout.
+
+    git clone https://github.com/andreimerlescu/lemmings && cd lemmings
+    make demo          # terminal 1: Neon Arcade on 127.0.0.1:8080
+    make run           # terminal 2: 72 lemmings for 45 seconds
+
+`make run` prints a `dashboard:` link. Click it — the token rides in the link,
+so there is nothing to paste — and watch the lemmings drop from the entrance,
+wander the arcade, pile up at the waiting room and head for the exit. Click
+any lemming to follow its life.
 
 ---
 
 ## What Lemmings Is
 
-Lemmings is a **stateful, session-aware, navigating load simulator** written in Go.
+Lemmings is a **stateful, session-aware, navigating load simulator** written in
+Go, shipped as a single self-contained binary.
 
-It is not a request blaster. Tools like wrk, vegeta, and k6 fire dumb HTTP
-requests at a fixed rate. Lemmings does something different: it simulates real
-users. Each lemming is a virtual browser session with its own cookie jar, its
-own identity, its own lifespan, and its own navigation behaviour. It lands on
-your site, picks a link, follows it, dwells on the page, picks another link,
-and keeps going until its time runs out.
+It is not a request blaster. Tools like wrk, vegeta, and k6 fire requests at a
+rate. Lemmings simulates people. Each lemming is a virtual browser session with
+its own cookie jar, its own connection pool, its own browser and language, and
+its own lifespan. It lands on your site, reads the page, follows a link it
+found there, pauses like a person reading, and keeps going until its time runs
+out — checking every page it reads for the failures a person would notice.
 
-The result is a load test that reveals what actually happens to your application
-when real people use it — not what happens when a script hammers one endpoint
-in a tight loop.
+The result is a load test that reveals what actually happens to your
+application when real people use it: not only how fast it answers, but how
+many of your visitors got through their whole visit without anything going
+wrong.
 
 ---
 
@@ -40,45 +62,134 @@ in a tight loop.
 Lemmings organises concurrency using a three-tier geographic model that maps
 directly to how engineers think about real-world traffic events.
 
-**Terrain** is the top-level goroutine group. Think of it as a region or state.
-You control how many terrains are active with -terrain.
+**Terrain** is the top-level group. Think of it as a region or state. You
+control how many terrains are active with -terrain.
 
 **Pack** is the number of lemmings per terrain. Think of it as the population
 density of each region. You control pack size with -pack.
 
-**Limit** is the semaphore ceiling — the system protection valve that prevents
-terrain * pack goroutines from all spawning simultaneously on a machine that
-cannot support them. You control it with -limit.
+**Limit** is the ceiling on lemmings alive at once — the system protection
+valve that prevents terrain × pack sessions from all starting simultaneously
+on a machine that cannot support them. Lemmings waiting for a slot cost
+nothing. You control it with -limit.
 
 A systems engineer planning for a product launch can say: "I expect traffic
-from 50 regions, with 100 concurrent users per region, sustained for 30 seconds
-per session." That translates directly to:
+from 50 regions, with 100 concurrent users per region, each staying for 30
+seconds." That translates directly to:
 
     lemmings -hit https://myapp.com -terrain 50 -pack 100 -until 30s -ramp 5m
 
-The total load — 5,000 lemmings, each making multiple page visits during their
-30-second lifespan — is predictable, auditable, and reproducible.
+The total load — 5,000 lemmings, each reading pages for 30 seconds — is
+predictable, auditable, and reproducible.
 
 ---
 
 ## What a Lemming Does
 
-Each lemming lives for exactly the duration you specify with -until. During that
-time it:
+Each lemming is born with a name (Neon Rider, Chrome Moth, Velvet Glider…), a
+browser identity — desktop or mobile — and a language, and keeps them for its
+whole life. During its life it:
 
-1. Picks a random URL from the indexed pool of your application's pages
-2. Makes an HTTP GET request with a randomised but realistic browser User-Agent
-3. Reads the response body and computes its SHA-512 checksum
-4. Compares the checksum against what was indexed at boot time
-5. Records the status code, bytes transferred, duration, and checksum match
-6. If it encounters a waiting room, it waits patiently — recording its queue
-   position and the duration it was held — until it is admitted or its time runs out
-7. Picks the next URL and repeats until its context deadline expires
-8. Dies, sending its complete LifeLog to the results collector
+1. Lands on `-hit` and reads the page
+2. Picks one of the links on that page and follows it, sending the page it came
+   from as the Referer — or, with `-navigation random`, picks any indexed page
+3. Records the status, every redirect, time to first byte, connection setup,
+   total latency and bytes
+4. Checks the page: the status must be 2xx, an HTML page must not be blank, and
+   any `-journey` checks for that step must pass
+5. Compares the body's SHA-512 with the one indexed at boot
+6. If it encounters a waiting room, waits in line — reporting its position as
+   it changes — until it is admitted or its time runs out
+7. Pauses for a random think time between `-think-min` and `-think-max`,
+   longer if the server asked for it with `Retry-After`
+8. Repeats until `-until` expires, it has read `-max-pages`, or its journey is
+   done
+9. Walks home, and reports its whole life to the swarm
 
-Every lemming has its own isolated cookie jar. Session cookies set for one
-lemming never leak into another. This is the behaviour of real users, not
-the behaviour of a shared HTTP client.
+Every lemming has its own cookie jar and its own keep-alive connections.
+Session cookies never leak between lemmings, and each pays for its own TLS
+handshake, exactly as separate visitors do.
+
+Lemmings never follow log-out, delete or download links, or links that leave
+your origin, so a load test cannot sign its own sessions out or mutate data by
+wandering.
+
+---
+
+## The Dashboard
+
+While lemmings runs, a live dashboard is available at http://localhost:4000.
+The terminal prints a link with a one-time token in its fragment; opening it
+signs you in and removes the token from the address bar. The token is a
+random 256-bit value and only its SHA-512 hash is kept in memory.
+
+**The terrain** is the heart of it. Lemmings drop from the entrance hatch onto
+a synthwave grid and walk it. Every page they read shows on them:
+
+| What you see | What happened |
+|---|---|
+| a hop and a green sparkle | a 2xx page that passed every check |
+| a cyan bounce | a redirect |
+| a yellow `?` and a stumble | a 4xx, or a page that failed a check |
+| a red burst and a dazed lemming | a 5xx |
+| a glitch | no response at all |
+| a line forming at the waiting room, positions overhead | your waiting room is holding people |
+| a lemming walking into the exit | its life is over — green sparkles if it never saw a failure |
+
+Up to 160 lemmings are on the terrain at once, however large the swarm; the
+rest are in the numbers around it.
+
+**Follow a lemming.** Click one (or press `f`) and the inspector follows its
+life: name, browser, language, terrain and pack, and every page it read with
+status, latency and time to first byte, queue time, redirects and why a page
+failed. When it dies you get its epitaph.
+
+Around the terrain: live totals, traffic and latency charts with hover
+read-outs, response codes and what went wrong, a terrain map that lights up as
+the ramp brings terrains online, the busiest paths, and a feed of happenings.
+When the run ends, a "level complete" card shows how many lemmings you
+rescued.
+
+![The dashboard in the light theme](docs/images/dashboard-light.jpg)
+
+The dashboard follows your system's light or dark preference in the
+Synthwave '84 palette; `t` switches theme, `x` turns motion effects off (they
+are off by default when your system asks for reduced motion), `esc` stops
+following. It works offline, loads nothing from the internet, and is served
+with a strict Content-Security-Policy to localhost only.
+
+---
+
+## Journeys
+
+A journey is a finite, ordered list of pages with checks, for the paths that
+matter most. Every lemming walks it once:
+
+```json
+{
+  "name": "buy-tokens",
+  "steps": [
+    { "name": "arrive", "path": "/", "expect": { "status": [200], "title_contains": "Neon Arcade", "selectors": ["nav", ".grid"] } },
+    { "name": "pick a game", "path": "/games/outrun", "expect": { "contains": ["High score"] } },
+    { "name": "checkout", "path": "/checkout", "expect": { "contains": ["Tokens are on the way"] } },
+    { "name": "tokens", "path": "/tokens", "expect": { "not_contains": ["Something went wrong"] } }
+  ]
+}
+```
+
+    lemmings -hit http://127.0.0.1:8080/ -journey examples/journeys/buy-tokens.json
+
+| Check | Passes when |
+|---|---|
+| `status` | the final status is one of these (default: any 2xx) |
+| `content_type` | the media type matches, e.g. `text/html` |
+| `contains` / `not_contains` | the body does / does not contain each string |
+| `title_contains` | the page `<title>` contains the string |
+| `selectors` | an element matching each `tag`, `#id` or `.class` exists |
+
+Journeys are GET-only — lemmings never submit forms — and every path must stay
+on the `-hit` origin. Unknown fields are rejected, so a typo cannot silently
+disable a check. Cookies set along the way persist for the lemming's life.
 
 ---
 
@@ -89,11 +200,13 @@ using a three-strategy waterfall:
 
 **Strategy 1 — sitemap.xml.** If your application serves a sitemap at the
 standard path, lemmings fetches it, parses all loc entries (including nested
-sitemap index files), fetches each URL to compute its baseline checksum, and
-builds the shared URLPool. This is the preferred strategy.
+sitemap index files, safely bounded against cycles), fetches each URL to
+compute its baseline checksum, and builds the shared URL pool. This is the
+preferred strategy.
 
 **Strategy 2 — robots.txt.** If no sitemap is found at the standard path,
-lemmings checks robots.txt for a Sitemap: directive and follows it.
+lemmings checks robots.txt for a Sitemap: directive and follows it, as long as
+it is on the same origin.
 
 **Strategy 3 — crawl.** If neither sitemap strategy yields results and
 -crawl is enabled, lemmings performs a depth-bounded crawl from the origin,
@@ -101,12 +214,16 @@ following anchor links and building the URL pool from what it discovers.
 The crawl runs for a maximum of 5 minutes.
 
 **Fallback.** If no strategy produces results, lemmings uses the origin URL
-alone. The test still runs — it is just limited to one endpoint.
+alone. The test still runs — and with link navigation, lemmings still find
+their way around from there.
 
-Every URL in the pool has a SHA-512 checksum computed at index time. A lemming
-that receives a different body than expected records Match: false. A sustained
-increase in mismatch rate during a load test is a signal that your application
-is serving error pages or degraded content under pressure.
+Origins are compared by scheme, host and port — `example.com.evil.test` is not
+`example.com` — and nothing off your origin is ever requested.
+
+Every URL in the pool has a SHA-512 checksum computed at index time. A visit
+whose body differs records `Match: false`. Dynamic pages change on every
+request, so checksum changes are reported as information; pass
+`-strict-checksum` to fail visits on them.
 
 ---
 
@@ -116,21 +233,21 @@ Lemmings is built with first-class support for the
 [room](https://github.com/andreimerlescu/room) package.
 
 When a lemming receives a response containing the room package's waiting room
-HTML, it detects this automatically — no configuration required. It extracts
-the queue position from the page, records when it entered the queue, and polls
-the same URL on the room package's 3-second interval until it is admitted or
-its -until deadline expires.
+page, it detects this automatically — no configuration required. It reads its
+queue position, polls the same URL on the room package's 3-second interval,
+and reports every change of position (you will see the number over its head on
+the dashboard) until it is admitted or its `-until` deadline expires.
 
-The final report tells you:
+The report tells you:
 
-- How many lemmings were placed in the waiting room
-- What their queue positions were
-- How long they waited before admission
-- How many died in the queue without ever reaching your application
+- How many visits were held in the waiting room, and the deepest position
+- How long they waited: mean, p95 and longest
+- How many lemmings died in the line without ever reaching your application
 
-This is the data you need to tune room capacity for a real traffic event. Run
-lemmings, read the report, adjust room parameters, run lemmings again. Repeat
-until the wait duration is acceptable.
+Queue time is reported on its own and kept out of latency percentiles, which
+measure how long your server took to serve the page a lemming finally got.
+Tune room capacity, run lemmings again, and repeat until the wait is
+acceptable.
 
 ---
 
@@ -143,34 +260,63 @@ with -ramp.
 When -ramp is set, lemmings brings terrain groups online linearly over the ramp
 duration rather than spawning everything simultaneously. A 5-minute ramp with
 50 terrain groups means one new terrain group comes online every 6 seconds,
-each bringing its full pack of lemmings with it.
+each bringing its full pack of lemmings with it. The terrain map on the
+dashboard lights up as they arrive.
 
 This lets you observe how your application behaves during the climb to peak load
 — which is often where failures first appear — not just at the peak itself.
 
 ---
 
-## The Live Dashboard
+## Reports
 
-While lemmings runs, a live dashboard is available at http://localhost:4000.
+When the swarm completes — or when you press Ctrl-C — lemmings writes three
+reports and delivers them to every destination in `-save-to`:
 
-When the swarm boots, a one-time authentication token is printed to the terminal.
-Enter that token in the browser to unlock the dashboard. The token is a
-cryptographically random 256-bit value. Its SHA-512 hash is stored in memory —
-the raw token is never retained after printing.
+- **HTML** — a self-contained Synthwave '84 report, light and dark, with no
+  scripts and nothing loaded from the internet
+- **Markdown** — the same findings as text, for pull requests and email
+- **JSON** — everything, for dashboards, diffs and your own tooling
 
-The dashboard shows in real time:
+![The HTML report](docs/images/report.jpg)
 
-- Lemmings alive and completed
-- Terrains online
-- Total visits and bytes transferred
-- 2xx, 3xx, 4xx, and 5xx response counts
-- Waiting room hits
-- Overflow and dropped log counts with warnings when present
-- A live event stream showing lemming births, deaths, and waiting room events
+It leads with the number that matters to a person: **how many lemmings you
+rescued** — the share whose whole life had no failed page. Then the traffic
+and latency over time, response codes, what went wrong and how often, the
+waiting room, per-path p50/p95/p99, and a few lemmings worth meeting:
 
-Engineers who open the dashboard mid-run see recent event history replayed
-from the last 1,000 events — the view is never empty on a cold join.
+| | |
+|---|---|
+| **The Explorer** | visited the most pages |
+| **Patient Zero** | hit the first failure of the run |
+| **The Unlucky One** | got the slowest page of the run |
+| **The Patient One** | spent longest in the waiting room |
+
+Each is shown page by page, so you can read exactly what one visitor went
+through.
+
+Reports never contain credentials, email addresses, bucket names, URL
+userinfo or query strings.
+
+### CI Gates and Exit Codes
+
+    lemmings -hit https://staging.myapp.com -terrain 5 -pack 10 -until 60s -ramp 10s \
+        -tty=false -max-failure-rate 0.01 -p95-budget 800ms
+
+| Exit | Meaning |
+|---|---|
+| `0` | the run finished and every gate passed |
+| `1` | configuration, indexing or report delivery failed |
+| `2` | the run finished but `-max-failure-rate` or `-p95-budget` was exceeded |
+| `130` | interrupted with Ctrl-C or SIGTERM — the partial report was still delivered |
+
+The failure rate counts visits that failed transport, status or a check.
+Visits cut short because a lemming's life ended are "cancelled" and excluded,
+as they say nothing about your server.
+
+`-trace-file visits.jsonl` additionally streams every visit as a JSON line. It
+never overwrites an existing file, and the report states how many lines were
+written.
 
 ---
 
@@ -181,21 +327,23 @@ http://localhost:9090/metrics (configurable via -metrics-port). The endpoint
 is scraped by any standard Prometheus installation with no additional
 configuration.
 
-Eleven metrics are exposed under the lemmings_ namespace:
+Thirteen metrics are exposed under the lemmings_ namespace:
 
 | Metric | Type | Description |
 |---|---|---|
 | lemmings_alive | Gauge | Lemmings currently running |
-| lemmings_completed_total | Counter | Lemmings that completed normally |
+| lemmings_completed_total | Counter | Lemmings that completed their life |
 | lemmings_failed_total | Counter | Lemmings that failed to start |
 | lemmings_visits_total | Counter | Page visits by status class (2xx/3xx/4xx/5xx) |
+| lemmings_failed_visits_total | Counter | Visits that failed transport, status or a check |
+| lemmings_cancelled_visits_total | Counter | Visits cut short when a lemming's life ended |
 | lemmings_visit_duration_seconds | Histogram | Visit latency distribution |
-| lemmings_bytes_total | Counter | Total bytes transferred |
-| lemmings_waiting_room_total | Counter | Lemmings that hit a waiting room |
+| lemmings_bytes_total | Counter | Total decoded bytes transferred |
+| lemmings_waiting_room_total | Counter | Waiting room stays |
 | lemmings_waiting_room_duration_seconds | Histogram | Time spent in waiting rooms |
 | lemmings_terrains_online | Gauge | Terrain groups currently active |
-| lemmings_dropped_logs_total | Counter | LifeLogs dropped due to channel pressure |
-| lemmings_overflow_logs_total | Counter | LifeLogs routed to overflow channel |
+| lemmings_dropped_logs_total | Counter | Life records dropped due to collector pressure |
+| lemmings_overflow_logs_total | Counter | Life records routed to the overflow channel |
 
 The visit duration histogram's URL label granularity is controlled by
 -metrics-url-label with three values:
@@ -216,14 +364,10 @@ beyond the cap are recorded under the synthetic label value "other".
 
 ## Report Delivery
 
-When the swarm completes, lemmings renders two report formats — markdown and
-self-contained HTML — and delivers them to every configured destination
-simultaneously.
-
 The -save-to flag accepts a comma-separated list of destinations. Each
 destination is parsed by its URI prefix and routed to the appropriate delivery
 target. Multiple targets run concurrently — a failure in one does not prevent
-others from receiving the report.
+others from receiving the report. Delivery runs even after Ctrl-C.
 
     lemmings -hit https://myapp.com \
         -save-to ".,s3://my-bucket/lemmings,mailto:ops@mycompany.com?subject=Lemmings%20Results"
@@ -243,14 +387,16 @@ The run above delivers the report to both `.` (from the flag) and
 
 ### Local Delivery
 
-The default target. Writes both files to:
+The default target. Writes all three files to:
 
     <save-to>/lemmings/<domain>/lemmings.YYYY.MM.DD.<domain>.md
     <save-to>/lemmings/<domain>/lemmings.YYYY.MM.DD.<domain>.html
+    <save-to>/lemmings/<domain>/lemmings.YYYY.MM.DD.<domain>.json
 
 The directory tree is created automatically. Existing files with the same name
 are overwritten — filenames include the date so this only occurs if lemmings
-runs more than once on the same day against the same target.
+runs more than once on the same day against the same target. Use a separate
+-save-to directory per run to keep every report.
 
     -save-to .
     -save-to /var/reports
@@ -258,8 +404,8 @@ runs more than once on the same day against the same target.
 
 ### S3 Delivery
 
-Uploads both files to an S3 bucket with correct Content-Type headers so they
-render correctly when accessed via S3 URLs or CloudFront.
+Uploads all three files to an S3 bucket with correct Content-Type headers so
+they render correctly when accessed via S3 URLs or CloudFront.
 
     -save-to s3://my-bucket/lemmings/reports
 
@@ -269,9 +415,10 @@ Credentials are read from the standard AWS credential chain in order:
 2. Shared credentials file: ~/.aws/credentials
 3. IAM instance role — works automatically on EC2, ECS, and Lambda
 
-The bucket region is read from AWS_DEFAULT_REGION or AWS_REGION. The bucket
-must already exist and the credentials must have s3:PutObject permission.
-Lemmings does not create the bucket.
+The bucket region is read from AWS_REGION, AWS_DEFAULT_REGION or your AWS
+config file; lemmings says so plainly if none is set. The bucket must already
+exist and the credentials must have s3:PutObject permission. Lemmings does not
+create the bucket.
 
 ### Email Delivery
 
@@ -299,9 +446,10 @@ SMTP flags override environment variables when both are present:
         -smtp-user sender@mycompany.com \
         -smtp-from noreply@mycompany.com
 
-TLS mode is auto-detected from the port: 465 uses implicit TLS, 587 uses
-STARTTLS (default), 25 uses plain SMTP. STARTTLS falls back to plain if the
-server does not support it.
+Port 465 uses implicit TLS. Every other port upgrades with STARTTLS whenever
+the server offers it; if the server offers STARTTLS and the handshake fails,
+delivery fails — the report is never resent in plaintext. Credentials are only
+ever sent over TLS or to localhost.
 
 ---
 
@@ -317,18 +465,21 @@ Run with a ramp-up period:
 
     lemmings -hit https://myapp.com -terrain 50 -pack 50 -until 30s -ramp 5m
 
+Walk a journey and fail CI when too many visits fail:
+
+    lemmings -hit https://staging.myapp.com -terrain 5 -pack 10 -until 60s \
+        -journey checkout.json -max-failure-rate 0.01 -tty=false
+
+Saturate the target with no pauses, the pre-1.0 behaviour:
+
+    lemmings -hit https://myapp.com -terrain 10 -pack 50 -until 30s \
+        -think-min 0 -think-max 0 -navigation random
+
 Run with crawl enabled for sites without a sitemap:
 
     lemmings -hit https://myapp.com -terrain 10 -pack 10 -until 30s -crawl
 
-Run in CI with TTY disabled and report saved to S3:
-
-    lemmings -hit https://staging.myapp.com \
-        -terrain 5 -pack 5 -until 10s \
-        -tty=false \
-        -save-to "s3://ci-reports/lemmings"
-
-Run with Prometheus metrics and email delivery:
+Run with Prometheus metrics and delivery everywhere:
 
     lemmings -hit https://myapp.com \
         -terrain 50 -pack 50 -until 30s \
@@ -344,14 +495,37 @@ Run with Prometheus metrics and email delivery:
 | Flag | Alias | Default | Description |
 |---|---|---|---|
 | -hit | -h | http://localhost:8080/ | Origin URL to load test |
-| -terrain | -t | 50 | Number of terrain goroutine groups |
+| -terrain | -t | 50 | Number of terrain groups |
 | -pack | -p | 50 | Number of lemmings per terrain |
-| -limit | -l | 100 | Semaphore ceiling. -1 disables it entirely (dangerous) |
+| -limit | -l | 100 | Lemmings alive at once. -1 disables the ceiling (dangerous) |
 | -until | -u | 30s | How long each lemming lives |
 | -ramp | -r | 5m | Duration to bring all terrains online |
 | -crawl | -c | false | Crawl origin for links when no sitemap is found |
 | -crawl-depth | -cd | 3 | How many links deep to crawl |
 | -tty | | true | Use carriage return for live output. Set false for CI |
+| -color | | true | Colour terminal output. Also off with NO_COLOR or -tty=false |
+| -version | -v | | Print the version |
+
+### Behaviour
+
+| Flag | Alias | Default | Description |
+|---|---|---|---|
+| -navigation | -nav | links | `links`: follow links on the page just read. `random`: pick from the pool |
+| -think-min | -tmin | 300ms | Minimum pause between pages |
+| -think-max | -tmax | 1.2s | Maximum pause between pages |
+| -journey | -j | | JSON file with an ordered journey and checks |
+| -max-pages | -mpg | 0 | Pages per lemming before it leaves. 0 browses until -until |
+| -request-timeout | -rt | 10s | Timeout for one request, including redirects and body |
+| -max-body-bytes | -mbb | 2097152 | Largest decoded body read per page; larger fails the visit |
+| -strict-checksum | -sc | false | Fail visits whose body changed since indexing |
+
+### Gates and Evidence
+
+| Flag | Alias | Default | Description |
+|---|---|---|---|
+| -max-failure-rate | -mfr | -1 | Exit 2 when more than this share (0..1) of visits fail. Negative disables |
+| -p95-budget | -p95 | 0 | Exit 2 when p95 latency exceeds this. 0 disables |
+| -trace-file | -tf | | Write every visit to this new JSONL file |
 
 ### Report Delivery
 
@@ -390,57 +564,71 @@ Run with Prometheus metrics and email delivery:
 The boot summary printed before any lemming moves tells you exactly what is
 about to happen:
 
-    lemmings v0.0.1
+      ░▒▓ L E M M I N G S ▓▒░   v1.0.0
+      simulated visitors · real consequences
     ─────────────────────────────────────────
-      target:        https://myapp.com/
+      target:         http://127.0.0.1:8080/
 
-      terrain:       50 groups
-      pack:          50 lemmings per terrain
-      total:         2,500 lemmings
+      terrain:        6 groups
+      pack:           12 lemmings per terrain
+      total:          72 lemmings
 
-      until:         30s per lemming
-      ramp:          5m0s to full concurrency
-      est. duration: ~5m30s wall clock
+      until:          20s per lemming
+      ramp:           5s to full concurrency
+      est. duration:  ~25s wall clock
 
-      limit:         100 goroutines
+      limit:          72 lemmings at once
+      navigation:     links
+      think:          300ms – 1.2s between pages
       save-to:
-        → .
-        → s3://my-bucket/lemmings
-        → mailto:ops@mycompany.com
-      dashboard:     http://localhost:4000
-      metrics:       http://localhost:9090/metrics
+        → ./reports
+      gates:          failure rate ≤ 10.00%, p95 ≤ 750ms
+
+      dashboard:      http://localhost:4000/#token=a3ac3f0d…
+      token:          a3ac3f0d…
+
+The live ticker updates every second, with a sparkline of visits per second:
+
+    [12s] ▄▅▆▆█▇▇▆▅▅▆▆ 52/s | terrains: 6 | alive: 72 | done: 0 | visits: 628 | 2xx: 621 4xx: 5 5xx: 2 | p95: 407 ms | failed: 18 | room held: 12
+
+The final summary closes the run, followed by where the reports went and the
+verdict:
 
     ─────────────────────────────────────────
-      lemmings are gathering...
-
-The live ticker updates every second:
-
-    [1m23s] terrains: 14 | alive: 700 | done: 12 | visits: 4,821 | 2xx: 4,788 4xx: 22 5xx: 11
-
-The final summary closes the run:
-
+      lemmings v1.0.0 — final summary
     ─────────────────────────────────────────
-      lemmings v0.0.1 — final summary
-    ─────────────────────────────────────────
-      target:         https://myapp.com/
-      total lemmings: 2,500
-      completed:      2,500
+      target:         http://127.0.0.1:8080/
+      total lemmings: 72
+      completed:      72
       failed:         0
 
-      total visits:   41,337
-      total bytes:    1.24 GB
+      total visits:   1,220  ▅▅▇▇█▇█▆▆▆▆▆▆▅▆▇▇▇▇▇▇▆▅▂▂
+      total bytes:    1.65 MB
+      failed visits:  42 (3.50%)
+      cancelled:      21 (life ended mid-visit)
 
-      2xx:            40,892
-      3xx:            211
-      4xx:            187
-      5xx:            47
+      2xx:            1,192
+      3xx:            0
+      4xx:            12
+      5xx:            12
 
-      waiting room:   312 lemmings held
+      latency:        p50 0.54 ms · p95 397 ms · p99 520 ms
+      waiting room:   63 lemmings held
     ─────────────────────────────────────────
-      report (md):   ./lemmings/myapp.com/lemmings.2026.04.16.myapp.com.md
-      report (html): ./lemmings/myapp.com/lemmings.2026.04.16.myapp.com.html
-      report (md):   s3://my-bucket/lemmings/lemmings.2026.04.16.myapp.com.md
-      report (html): s3://my-bucket/lemmings/lemmings.2026.04.16.myapp.com.html
+      report (md):    reports/lemmings/127.0.0.1-8080/lemmings.2026.09.27.127.0.0.1-8080.md
+      report (html):  reports/lemmings/127.0.0.1-8080/lemmings.2026.09.27.127.0.0.1-8080.html
+      report (json):  reports/lemmings/127.0.0.1-8080/lemmings.2026.09.27.127.0.0.1-8080.json
+
+      Oh no! Many lemmings hit trouble.
+      you rescued 55.6% — 40 of 72 lemmings lived without a failed page.
+      ✓ failure rate 3.50% (limit ≤ 10.00%)
+      ✓ p95 latency 397 ms (limit ≤ 750ms)
+      ✓ PASSED
+
+That run is worth reading closely. The failure rate is a healthy 3.5% and
+both gates pass — yet almost half the lemmings met at least one failure
+during a 20-second visit. Per-request numbers look fine while the visit
+doesn't: that is the gap lemmings is built to show you.
 
 ---
 
@@ -448,8 +636,8 @@ The final summary closes the run:
 
 **Before a major traffic event.** A product launch, a sale, a TV spot, a viral
 social post. Run lemmings with parameters that match your expected traffic shape.
-If it completes with dropped_logs: 0, 2xx rates above your threshold, and p99
-latency below your SLA, you are ready. If it does not, you have time to fix it.
+If it passes your gates and rescues the lemmings you need it to, you are ready.
+If it does not, you have time to fix it.
 
 **For waiting room capacity planning.** If you use the room package, lemmings
 tells you exactly how many users will see the waiting room at a given traffic
@@ -461,49 +649,60 @@ responses appear. That is your capacity ceiling. Add infrastructure and re-run
 to verify the ceiling moved.
 
 **As a daily CI health check.** Run lemmings with a small -terrain and -pack
-against staging on every deploy. A change in 2xx rate, checksum match rate, or
-p99 latency is an early signal of regression before customers see it.
+and a -journey against staging on every deploy, with -max-failure-rate and
+-p95-budget as gates. A change in failure rate, rescued share or p95 is an
+early signal of regression before customers see it.
 
 **For post-incident analysis.** Reconstruct the traffic parameters from your
-incident logs and re-run. The per-path breakdown shows which routes degraded
-first and under what conditions.
+incident logs and re-run. The per-path breakdown and the notable lemmings show
+which routes degraded first and what one visitor went through.
+
+---
+
+## What Lemmings Does Not Measure
+
+Lemmings reads what your server sends. It does not run JavaScript, load images,
+stylesheets or scripts, or judge how a page looks — assert on the text and
+elements your server sends. It reports the latency it observed: each lemming
+waits for a page before choosing the next, so a slow server receives fewer
+requests, as it would from real people. And it runs from one machine, so it
+does not model network distance. Within that scope, every number is exact or
+states its method.
 
 ---
 
 ## How Results Can Be Trusted
 
-Lemmings ships with a comprehensive test suite of 432 tests — unit, fuzz, and
-benchmark — that pass under the race detector on Linux, macOS, and Windows.
-The suite proves the accuracy of every number in every report. See
-[TESTS.md](TESTS.md) for the full breakdown.
+Lemmings ships with a test suite of 438 tests — unit, integration,
+end-to-end, fuzz and benchmark — that pass under the race detector on Linux,
+macOS, and Windows. See [TESTS.md](TESTS.md) for the full breakdown.
 
 The short version:
 
-- Metric counters are protected by atomic operations verified under the race
-  detector. The 2xx count in your report is exact, not approximate.
+- Every visit is counted the moment it completes, with atomic counters verified
+  under the race detector. The 2xx count in your report is exact.
 
 - Lifecycle events (lemming born, died, failed) are emitted by exactly one
-  component — the Terrain — with a test that actively verifies no other
-  component reintroduces duplicate emission. This means the `alive` counter
-  in the dashboard, the Prometheus `lemmings_alive` gauge, and the final
-  report's completed count are exact, not off by a factor.
+  component — the Terrain — and a test runs a real swarm and counts exactly
+  one birth and one death per lemming, so `alive` and `completed` are exact
+  everywhere they appear.
 
-- Percentiles are computed using the nearest-rank method on a fully sorted
-  slice, verified against analytically known datasets.
+- Percentiles are exact nearest-rank values while every sample is kept, and
+  within a tested 2% bound beyond that; the report says which. Waiting-room
+  time is never counted as latency.
 
-- The dual-channel result collection system (primary + overflow) ensures that
-  no LifeLog is silently discarded. If any data was not collected, dropped_logs
-  in the report will be non-zero with an explicit remediation message.
+- Nothing is lost silently. If the collector falls behind, the dropped count
+  appears in the ticker, the dashboard and the report — and visit totals stay
+  exact regardless.
 
-- Waiting room detection, position extraction, and duration timing are all
-  verified against real room package HTML, not against a mock.
+- Waiting room detection, position tracking and admission are verified against
+  real room package HTML, including admission to a page that changed.
 
-- Each lemming's cookie jar isolation is structurally verified — session state
-  never crosses between virtual users.
+- End-to-end tests build the real binary and check exit codes, all three
+  report formats, the dashboard's sign-in and live data, and Ctrl-C.
 
-- Report delivery targets are tested independently. A failure in one target
-  (such as an unreachable S3 bucket or SMTP server) does not prevent other
-  targets from receiving the report.
+- Report delivery targets are tested independently, and a test proves no
+  credential, address or query string reaches any report.
 
 - Parsing functions that consume externally-sourced bytes — sitemap XML, HTML
   anchor tags, URL resolution, waiting room detection, SHA-512 hashing,
@@ -518,13 +717,17 @@ The short version:
 | Package | Purpose |
 |---|---|
 | [figtree](https://github.com/andreimerlescu/figtree) | CLI configuration management with validators and aliases |
-| [sema](https://github.com/andreimerlescu/sema) | Semaphore primitive for goroutine ceiling enforcement |
+| [sema](https://github.com/andreimerlescu/sema) | Semaphore primitive for the concurrency ceiling |
 | [room](https://github.com/andreimerlescu/room) | Waiting room integration (optional — detected automatically) |
-| golang.org/x/net/html | HTML link extraction during crawl |
+| golang.org/x/net/html | HTML parsing for links, titles and checks |
 | golang.org/x/net/publicsuffix | Cookie jar domain scoping |
+| golang.org/x/term | Terminal width and colour detection |
 | github.com/aws/aws-sdk-go-v2 | S3 report upload |
 | github.com/prometheus/client_golang | Prometheus metrics exporter |
 | github.com/prometheus/client_model | Prometheus DTO types used by observer_test.go for metric assertions |
+
+The dashboard and reports are embedded in the binary. There are no runtime
+dependencies to install.
 
 ---
 
@@ -534,18 +737,25 @@ Lemmings is open source under the Apache 2.0 license. Contributions are welcome.
 
 Before opening a pull request:
 
-- Run `go test -race -count=1 ./...` and confirm all 432 tests pass. The
-  `-count=1` flag disables test result caching; without it your IDE or local
-  Go toolchain may run a stale compiled test binary and mask real failures.
+- Run `make build-check` and `go test -race -count=1 ./...` and confirm every
+  test passes. The `-count=1` flag disables test result caching; without it
+  your IDE or local Go toolchain may run a stale compiled test binary and mask
+  real failures. `make test-short` skips the end-to-end tests while iterating.
 - Add tests for any new functions following the patterns in the existing test files
 - Read TESTS.md to understand what the test suite is trying to prove and why
 - Preserve the lifecycle event ownership contract: `EventLemmingBorn`,
-  `EventLemmingDied`, and `EventLemmingFailed` are emitted exclusively by
-  `Terrain.spawnLemming`. `Lemming.Run` emits only per-visit events. Breaking
-  this contract corrupts every counter-based subscriber in the package.
+  `EventLemmingDied`, and `EventLemmingFailed` are emitted exclusively by the
+  `Terrain`. `Lemming.Run` emits only per-visit and waiting room events.
+  Breaking this contract corrupts every counter-based subscriber in the package.
+- The dashboard lives in `web/` and the report templates in `templates/`.
+  Both are embedded. Keep them free of inline styles, `innerHTML` and anything
+  loaded from the internet; `TestDashboard_CSPAllowsExactlyTheInlineAssets`
+  will tell you if you slip.
 
 The test suite is not optional. Every function in the package has a corresponding
 test that verifies its contract. New functions without tests will not be merged.
+
+See [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
 ---
 

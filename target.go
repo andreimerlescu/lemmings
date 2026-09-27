@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"mime"
 	"mime/multipart"
 	"mime/quotedprintable"
 	"net"
@@ -33,7 +35,7 @@ import (
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-//	if err := target.Deliver(ctx, "lemmings.2026.04.14.example.com", md, html); err != nil {
+//	if err := target.Deliver(ctx, rendered); err != nil {
 //	    log.Printf("delivery failed: %v", err)
 //	}
 //
@@ -41,11 +43,11 @@ import (
 // MailTarget — are constructed via ParseTarget from a URI string.
 type ReportTarget interface {
 	// Deliver sends the rendered report to the target destination.
-	// filename is the base name without extension — implementations
-	// append .md and .html as appropriate.
+	// report.Filename is the base name without extension — implementations
+	// append .md, .html and .json as appropriate.
 	// Returns an error if delivery fails — partial delivery is not
 	// considered success.
-	Deliver(ctx context.Context, filename, md, html string) error
+	Deliver(ctx context.Context, report RenderedReport) error
 
 	// Name returns a human-readable description of this target for
 	// use in log output and boot summary display.
@@ -94,6 +96,7 @@ func ParseTarget(uri string) (ReportTarget, error) {
 //
 //	<basePath>/lemmings/<domain>/<filename>.md
 //	<basePath>/lemmings/<domain>/<filename>.html
+//	<basePath>/lemmings/<domain>/<filename>.json
 //
 // The directory tree is created if it does not already exist.
 //
@@ -109,9 +112,10 @@ func (t *LocalTarget) Name() string {
 	return fmt.Sprintf("local(%s)", t.basePath)
 }
 
-// Deliver writes the markdown and HTML report files to the local filesystem.
-func (t *LocalTarget) Deliver(_ context.Context, filename, md, html string) error {
-	dir, err := t.resolveDir(filename)
+// Deliver writes the markdown, HTML and JSON report files to the local
+// filesystem, creating the directory tree if needed.
+func (t *LocalTarget) Deliver(_ context.Context, report RenderedReport) error {
+	dir, err := t.resolveDir(report.Filename)
 	if err != nil {
 		return fmt.Errorf("local target resolve dir: %w", err)
 	}
@@ -120,18 +124,23 @@ func (t *LocalTarget) Deliver(_ context.Context, filename, md, html string) erro
 		return fmt.Errorf("local target mkdir %s: %w", dir, err)
 	}
 
-	mdPath := filepath.Join(dir, filename+".md")
-	if err := os.WriteFile(mdPath, []byte(md), 0644); err != nil {
-		return fmt.Errorf("local target write md: %w", err)
+	for _, f := range []struct {
+		ext, label string
+		body       []byte
+	}{
+		{".md", "md", []byte(report.Markdown)},
+		{".html", "html", []byte(report.HTML)},
+		{".json", "json", report.JSON},
+	} {
+		if f.body == nil {
+			continue
+		}
+		path := filepath.Join(dir, report.Filename+f.ext)
+		if err := os.WriteFile(path, f.body, 0644); err != nil {
+			return fmt.Errorf("local target write %s: %w", f.label, err)
+		}
+		fmt.Printf("  report (%s):%s%s\n", f.label, strings.Repeat(" ", 6-len(f.label)), path)
 	}
-	fmt.Printf("  report (md):   %s\n", mdPath)
-
-	htmlPath := filepath.Join(dir, filename+".html")
-	if err := os.WriteFile(htmlPath, []byte(html), 0644); err != nil {
-		return fmt.Errorf("local target write html: %w", err)
-	}
-	fmt.Printf("  report (html): %s\n", htmlPath)
-
 	return nil
 }
 
@@ -218,34 +227,38 @@ func (t *S3Target) Name() string {
 	return fmt.Sprintf("s3://%s", t.bucket)
 }
 
-// Deliver uploads the markdown and HTML report files to S3.
+// Deliver uploads the markdown, HTML and JSON report files to S3.
 //
-// Both files are uploaded with the correct Content-Type headers so they
-// render correctly when accessed directly via S3 URLs or CloudFront.
-// Uploads run sequentially — if the markdown upload fails the HTML
-// upload is not attempted.
-func (t *S3Target) Deliver(ctx context.Context, filename, md, html string) error {
+// Every file is uploaded with the correct Content-Type header so it
+// renders correctly when accessed directly via S3 URLs or CloudFront.
+// Uploads run sequentially and stop at the first failure.
+func (t *S3Target) Deliver(ctx context.Context, report RenderedReport) error {
 	cfg, err := t.loadAWSConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("s3 target: load aws config: %w", err)
 	}
+	if cfg.Region == "" {
+		return errors.New("s3 target: no AWS region configured; set AWS_REGION or AWS_DEFAULT_REGION, or configure a default region in ~/.aws/config")
+	}
 
 	client := s3.NewFromConfig(cfg)
-
-	// Upload markdown
-	mdKey := t.objectKey(filename + ".md")
-	if err := t.upload(ctx, client, mdKey, "text/markdown; charset=utf-8", []byte(md)); err != nil {
-		return fmt.Errorf("s3 target: upload md: %w", err)
+	for _, f := range []struct {
+		ext, label, contentType string
+		body                    []byte
+	}{
+		{".md", "md", "text/markdown; charset=utf-8", []byte(report.Markdown)},
+		{".html", "html", "text/html; charset=utf-8", []byte(report.HTML)},
+		{".json", "json", "application/json", report.JSON},
+	} {
+		if f.body == nil {
+			continue
+		}
+		key := t.objectKey(report.Filename + f.ext)
+		if err := t.upload(ctx, client, key, f.contentType, f.body); err != nil {
+			return fmt.Errorf("s3 target: upload %s: %w", f.label, err)
+		}
+		fmt.Printf("  report (%s):%ss3://%s/%s\n", f.label, strings.Repeat(" ", 6-len(f.label)), t.bucket, key)
 	}
-	fmt.Printf("  report (md):   s3://%s/%s\n", t.bucket, mdKey)
-
-	// Upload HTML
-	htmlKey := t.objectKey(filename + ".html")
-	if err := t.upload(ctx, client, htmlKey, "text/html; charset=utf-8", []byte(html)); err != nil {
-		return fmt.Errorf("s3 target: upload html: %w", err)
-	}
-	fmt.Printf("  report (html): s3://%s/%s\n", t.bucket, htmlKey)
-
 	return nil
 }
 
@@ -301,9 +314,9 @@ func (t *S3Target) loadAWSConfig(ctx context.Context) (aws.Config, error) {
 //
 // TLS behaviour is auto-detected from the port:
 //   - Port 465: implicit TLS (SMTPS)
-//   - Port 587: STARTTLS (default)
-//   - Port 25:  plain SMTP (no TLS)
-//   - Any other port: STARTTLS attempted, falls back to plain
+//   - Any other port (587 by default, 25, ...): STARTTLS whenever the
+//     server advertises it. A failed STARTTLS handshake is an error; the
+//     message is never resent in plaintext as a fallback.
 //
 // Warning: MailTarget does not queue or retry. If the SMTP server is
 // unavailable at report delivery time, the error is returned and logged
@@ -438,31 +451,26 @@ func (t *MailTarget) Name() string {
 // Deliver sends the report as a multipart MIME email.
 //
 // The HTML body is sent inline so it renders in the email client.
-// The markdown is attached as lemmings-report.md for archival.
+// The markdown is attached as <filename>.md for archival.
 //
-// TLS mode is selected automatically from the configured port.
-func (t *MailTarget) Deliver(_ context.Context, filename, md, html string) error {
-	_, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	msg, err := t.buildMessage(filename, md, html)
+// TLS mode is selected automatically from the configured port. The
+// context bounds the connection; net/smtp has no per-command context,
+// so the context's deadline (or smtpTimeout) is applied to the socket.
+func (t *MailTarget) Deliver(ctx context.Context, report RenderedReport) error {
+	msg, err := t.buildMessage(report.Filename, report.Markdown, report.HTML)
 	if err != nil {
 		return fmt.Errorf("mail target: build message: %w", err)
 	}
 
-	addr := fmt.Sprintf("%s:%d", t.smtpCfg.Host, t.smtpCfg.Port)
-
+	addr := net.JoinHostPort(t.smtpCfg.Host, strconv.Itoa(t.smtpCfg.Port))
 	switch t.smtpCfg.Port {
 	case 465:
-		return t.sendTLS(addr, msg)
-	case 25:
-		return t.sendPlain(addr, msg)
+		return t.sendTLS(ctx, addr, msg)
 	default:
-		// 587 and all others: attempt STARTTLS, fall back to plain
-		if err := t.sendSTARTTLS(addr, msg); err != nil {
-			return t.sendPlain(addr, msg)
-		}
-		return nil
+		// 587, 25 and everything else: upgrade with STARTTLS whenever the
+		// server offers it. A server that offers STARTTLS but fails the
+		// handshake is an error — never silently downgraded to plaintext.
+		return t.sendSTARTTLS(ctx, addr, msg)
 	}
 }
 
@@ -473,7 +481,6 @@ func (t *MailTarget) Deliver(_ context.Context, filename, md, html string) error
 //   - text/plain attachment: the markdown report
 func (t *MailTarget) buildMessage(filename, md, html string) ([]byte, error) {
 	var buf bytes.Buffer
-	allRecipients := append(t.to, t.cc...)
 
 	// Headers
 	fmt.Fprintf(&buf, "From: %s\r\n", t.smtpCfg.From)
@@ -481,10 +488,9 @@ func (t *MailTarget) buildMessage(filename, md, html string) ([]byte, error) {
 	if len(t.cc) > 0 {
 		fmt.Fprintf(&buf, "Cc: %s\r\n", strings.Join(t.cc, ", "))
 	}
-	fmt.Fprintf(&buf, "Subject: %s\r\n", t.subject)
+	fmt.Fprintf(&buf, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", stripCRLF(t.subject)))
 	fmt.Fprintf(&buf, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
 	fmt.Fprintf(&buf, "MIME-Version: 1.0\r\n")
-	_ = allRecipients
 
 	// Multipart writer
 	mw := multipart.NewWriter(&buf)
@@ -534,62 +540,76 @@ func (t *MailTarget) buildMessage(filename, md, html string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// smtpTimeout bounds an SMTP delivery when the context has no deadline.
+const smtpTimeout = 30 * time.Second
+
+// dialSMTP opens a TCP connection honouring ctx and sets a socket deadline
+// so a stalled server cannot hang delivery forever.
+func dialSMTP(ctx context.Context, addr string) (net.Conn, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(smtpTimeout)
+	}
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("smtp dial %s: %w", addr, err)
+	}
+	_ = conn.SetDeadline(deadline)
+	return conn, nil
+}
+
 // sendTLS sends the email using implicit TLS (port 465 / SMTPS).
-func (t *MailTarget) sendTLS(addr string, msg []byte) error {
+func (t *MailTarget) sendTLS(ctx context.Context, addr string, msg []byte) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fmt.Errorf("split host/port: %w", err)
 	}
-
-	conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: host})
+	raw, err := dialSMTP(ctx, addr)
 	if err != nil {
-		return fmt.Errorf("tls dial %s: %w", addr, err)
+		return err
 	}
-	defer conn.Close()
-
+	conn := tls.Client(raw, &tls.Config{ServerName: host})
+	if err := conn.HandshakeContext(ctx); err != nil {
+		raw.Close()
+		return fmt.Errorf("tls handshake %s: %w", addr, err)
+	}
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
+		conn.Close()
 		return fmt.Errorf("smtp new client: %w", err)
 	}
+	defer client.Close()
 	return t.sendViaSMTPConn(client, msg)
 }
 
-// sendSTARTTLS sends the email using STARTTLS negotiation (port 587).
-func (t *MailTarget) sendSTARTTLS(addr string, msg []byte) error {
+// sendSTARTTLS sends the email over SMTP, upgrading to TLS with STARTTLS
+// when the server advertises it (ports 587, 25 and any other port).
+//
+// Warning: a server that does not advertise STARTTLS receives the message
+// in plaintext. net/smtp's PlainAuth refuses to send credentials over an
+// unencrypted connection unless the server is localhost.
+func (t *MailTarget) sendSTARTTLS(ctx context.Context, addr string, msg []byte) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fmt.Errorf("split host/port: %w", err)
 	}
-
-	client, err := smtp.Dial(addr)
+	conn, err := dialSMTP(ctx, addr)
 	if err != nil {
-		return fmt.Errorf("smtp dial %s: %w", addr, err)
+		return err
+	}
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("smtp new client: %w", err)
 	}
 	defer client.Close()
 
-	if err := client.StartTLS(&tls.Config{ServerName: host}); err != nil {
-		return fmt.Errorf("starttls: %w", err)
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		if err := client.StartTLS(&tls.Config{ServerName: host}); err != nil {
+			return fmt.Errorf("starttls: %w", err)
+		}
 	}
-
-	return t.sendViaSMTPConn(client, msg)
-}
-
-// sendPlain sends the email over an unencrypted SMTP connection (port 25).
-//
-// Warning: sendPlain transmits credentials in plaintext if SMTP auth is
-// configured. Use only in trusted network environments.
-func (t *MailTarget) sendPlain(addr string, msg []byte) error {
-	_, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return fmt.Errorf("split host/port: %w", err)
-	}
-
-	client, err := smtp.Dial(addr)
-	if err != nil {
-		return fmt.Errorf("smtp dial %s: %w", addr, err)
-	}
-	defer client.Close()
-
 	return t.sendViaSMTPConn(client, msg)
 }
 
@@ -631,6 +651,11 @@ func (t *MailTarget) sendViaSMTPConn(client *smtp.Client, msg []byte) error {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// stripCRLF removes line breaks so a value cannot inject extra headers.
+func stripCRLF(s string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
+}
 
 // parseInt parses a string to int, returning 0 on failure.
 // Used for permissive port number parsing from environment variables.

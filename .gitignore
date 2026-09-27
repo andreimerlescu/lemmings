@@ -36,3 +36,8 @@ bin/
 !bin/.keep
 .DS_Store
 
+# `go build` output and reports written by `lemmings -save-to .`
+/lemmings
+
+# -trace-file output
+*.jsonl

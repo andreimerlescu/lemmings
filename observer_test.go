@@ -324,18 +324,22 @@ func TestObserver_LemmingFailed_IncrementsCounter(t *testing.T) {
 	}
 }
 
-// TestObserver_LemmingDied_AccumulatesBytes verifies that EventLemmingDied
-// with a non-zero BytesIn increments lemmings_bytes_total.
-func TestObserver_LemmingDied_AccumulatesBytes(t *testing.T) {
+// TestObserver_VisitEvents_AccumulateBytes verifies that bytesTotal sums
+// BytesIn from visit events and that a lemming's death does not count its
+// bytes a second time. (Before 1.0 bytes were only read from death events,
+// which never carried any, so the metric was always zero.)
+func TestObserver_VisitEvents_AccumulateBytes(t *testing.T) {
 	o, bus, cleanup := attachedObserver(t)
 	defer cleanup()
 
 	bus.Emit(Event{Kind: EventLemmingBorn})
-	bus.Emit(Event{Kind: EventLemmingDied, BytesIn: 1024})
+	bus.Emit(Event{Kind: EventVisitComplete, StatusCode: 200, BytesIn: 1024, Duration: time.Millisecond})
+	bus.Emit(Event{Kind: EventVisitError, StatusCode: 500, BytesIn: 512, Duration: time.Millisecond})
+	bus.Emit(Event{Kind: EventLemmingDied, BytesIn: 1536})
 	time.Sleep(10 * time.Millisecond)
 
-	if val := counterValue(t, o.bytesTotal); val != 1024 {
-		t.Errorf("expected bytesTotal=1024, got %v", val)
+	if val := counterValue(t, o.bytesTotal); val != 1536 {
+		t.Errorf("expected bytesTotal=1536, got %v", val)
 	}
 }
 
@@ -664,8 +668,8 @@ func TestURLLabel_NoneMode(t *testing.T) {
 
 	// Verify sample count via no-label histogram
 	count := histogramSampleCount(t, o.visitDuration, prometheus.Labels{})
-	if count != 2 {
-		t.Errorf("expected 2 observation in none-mode histogram, got %d", count)
+	if count != 1 {
+		t.Errorf("expected 1 observation in none-mode histogram, got %d", count)
 	}
 }
 

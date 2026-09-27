@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -957,12 +958,12 @@ func FuzzResolveURL(f *testing.F) {
 	f.Fuzz(func(t *testing.T, origin, href string) {
 		got := resolveURL(origin, href)
 		// Invariant 1: must not panic
-		// Invariant 2: non-empty result must have origin as prefix
-		if got != "" && !strings.HasPrefix(got, origin) {
-			// Only enforce when origin is a valid URL prefix
-			// (fuzz may supply invalid origins)
-			if strings.HasPrefix(origin, "http") {
-				t.Errorf("resolveURL(%q, %q) = %q — result does not have origin prefix",
+		// Invariant 2: a non-empty result stays on the base's origin. The
+		// base may be a page URL, so compare scheme://host, not the path.
+		if got != "" {
+			base, err := url.Parse(origin)
+			if err != nil || !strings.HasPrefix(got, base.Scheme+"://"+base.Host) {
+				t.Errorf("resolveURL(%q, %q) = %q — result leaves the base origin",
 					origin, href, got)
 			}
 		}

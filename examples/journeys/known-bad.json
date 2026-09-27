@@ -1,0 +1,9 @@
+{
+  "name": "known-bad",
+  "steps": [
+    { "name": "home", "path": "/", "expect": { "status": [200], "contains": ["Insert coin"] } },
+    { "name": "coming soon", "path": "/games/lost-highway", "expect": { "status": [200] } },
+    { "name": "back room", "path": "/blank", "expect": { "selectors": ["main"] } },
+    { "name": "old link", "path": "/old-arcade", "expect": { "status": [200], "title_contains": "Games" } }
+  ]
+}

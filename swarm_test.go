@@ -724,6 +724,21 @@ func TestIngest_EmitsLemmingDiedEvent(t *testing.T) {
 	requireEventEmitted(t, log, EventLemmingDied, 100*time.Millisecond)
 }
 
+// TestIngest_ReportCountsLegacyVisitsOnce verifies that a LifeLog built
+// outside a running lemming is counted exactly once by both the swarm's
+// metrics and the report.
+func TestIngest_ReportCountsLegacyVisitsOnce(t *testing.T) {
+	s := makeMinimalSwarm(t, 10, 10)
+	s.ingest(makeLifeLog("http://example.com/", 3, http.StatusOK, false, nil))
+
+	if got := s.metrics.TotalVisits.Load(); got != 3 {
+		t.Errorf("metrics counted %d visits, want 3", got)
+	}
+	if got := s.reporter.Result().TotalVisits; got != 3 {
+		t.Errorf("report counted %d visits, want 3", got)
+	}
+}
+
 // TestIngest_TotalVisitsAccumulated verifies that TotalVisits increments
 // by the number of Visit entries in each ingested LifeLog.
 func TestIngest_TotalVisitsAccumulated(t *testing.T) {
@@ -1128,7 +1143,6 @@ func FuzzFormatBytes(f *testing.F) {
 func makeMinimalSwarm(tb testing.TB, primaryCap, overflowCap int) *Swarm {
 	tb.Helper()
 	bus := NewEventBus()
-	metrics := &SwarmMetrics{}
 	cfg := testConfig()
 
 	s := &Swarm{
@@ -1137,7 +1151,6 @@ func makeMinimalSwarm(tb testing.TB, primaryCap, overflowCap int) *Swarm {
 		primary:  make(chan LifeLog, primaryCap),
 		overflow: make(chan LifeLog, overflowCap),
 		events:   bus,
-		metrics:  *metrics,
 		reporter: NewReporter(cfg),
 	}
 	return s
