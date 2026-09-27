@@ -25,8 +25,8 @@ func TestNewReporter_InitialState(t *testing.T) {
 	if len(r.byPath) != 0 {
 		t.Errorf("expected empty byPath map, got %d entries", len(r.byPath))
 	}
-	if len(r.all) != 0 {
-		t.Errorf("expected empty all slice, got %d entries", len(r.all))
+	if r.sessions != 0 {
+		t.Errorf("expected no sessions, got %d", r.sessions)
 	}
 	if r.startedAt.IsZero() {
 		t.Error("startedAt should be set at construction")
