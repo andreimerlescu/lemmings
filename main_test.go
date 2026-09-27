@@ -385,7 +385,8 @@ func (ts *testServer) withHandler(path string, fn http.HandlerFunc) *testServer 
 // Warning: routes cannot be added after Build is called. The underlying
 // mux is frozen at build time.
 func (ts *testServer) build() *httptest.Server {
-	ts.t.Helper()
+	tb := ts.testingTB()
+	tb.Helper()
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
@@ -407,8 +408,24 @@ func (ts *testServer) build() *httptest.Server {
 	}
 
 	srv := httptest.NewServer(mux)
-	ts.t.Cleanup(srv.Close)
+	tb.Cleanup(srv.Close)
 	return srv
+}
+
+// testingTB returns whichever testing handle constructed this server, so
+// build works for tests, benchmarks and fuzz targets alike.
+func (ts *testServer) testingTB() testing.TB {
+	switch {
+	case ts.t != nil:
+		return ts.t
+	case ts.b != nil:
+		return ts.b
+	case ts.f != nil:
+		return ts.f
+	case ts.tb != nil:
+		return *ts.tb
+	}
+	panic("testServer: constructed without a testing handle")
 }
 
 // ── HTML generators ───────────────────────────────────────────────────────────
