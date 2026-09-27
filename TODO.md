@@ -1,213 +1,44 @@
 # Lemmings TODO
 
-> Outstanding items as of the review session that brought all 432 tests
-> to passing. The pre-review "will not compile" and "will panic" sections
-> have all been resolved — see the Resolved log at the bottom for history.
-> Remaining items are grouped by priority.
+> Open work after 1.0.0. What 1.0 resolved is at the bottom; the full list of
+> changes is in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Priority 1 — Behavioural Verification for First Real-World Run
+## Next — 1.1
 
-The test suite proves internal correctness. These items verify behaviour
-that only surfaces against a real HTTP target. Address them during the
-first localhost run before tagging v0.0.1.
+- [ ] **Report comparison.** `lemmings compare old.json new.json` renders the
+  difference between two JSON reports — rescued share, failure rate, p95 per
+  path — and exits 2 on a regression beyond a threshold. The JSON report exists
+  now; this makes it a regression gate across deploys.
+- [ ] **`-dry-run`.** Index the target, print the plan and the URL pool, and
+  exit without sending a lemming.
+- [ ] **Unique report names.** An opt-in `-report-name` (or time in the
+  filename) so two runs on the same day do not overwrite each other.
+- [ ] **CI recipes.** GitHub Actions, GitLab CI and CircleCI examples that run
+  a journey with gates and upload the HTML report as an artifact.
+- [ ] **Monitor FuzzHandleAuth and FuzzDashboardHTML in CI.** Both start HTTP
+  handlers; if either shows port contention or timeouts, give them a job of
+  their own.
 
-### pool.go / lemming.go — Accept-Encoding consistency
+## Later
 
-- [ ] Verify the indexing HTTP client (pool.go fetchURL) and the lemming
-  HTTP client (lemming.go request) send the same Accept-Encoding
-  header. Go's http.Client auto-decompresses gzip only when it sent
-  Accept-Encoding: gzip in the request. If the two clients disagree,
-  every checksum will mismatch and every visit records Match: false.
-  Confirm by running against a gzip-enabled target and checking the
-  report's match rate.
-
-### pool.go — UA-based content variation
-
-- [ ] The indexing client uses userAgents[0] as a fixed UA. The lemming
-  client uses randomUA(). If the target server returns different
-  content per UA (A/B testing, bot detection), every lemming will
-  see a mismatch. This is intentional — it surfaces real behaviour —
-  but document it in the first-run notes so it is not confused
-  with a bug.
-
-### lemming.go — Waiting room poll interval
-
-- [ ] waitingRoomPollInterval is hardcoded to 3 seconds to match the
-  room package's client-side poll interval. If the target does not
-  use room, this constant is irrelevant. If it does, verify the
-  lemming and the room JS client poll at the same rate — a mismatch
-  causes either over-polling (wasted connections) or under-polling
-  (missed admission signals).
-
----
-
-## Priority 2 — Correctness and Behaviour Gaps
-
-These do not cause crashes or test failures but will produce misleading
-results or poor user experience.
-
-### main.go
-
-- [ ] Verify the LEMMINGS_SAVE_TO environment variable appends to the
-  list from -save-to rather than replacing it. The intended behaviour
-  is additive — both flag and env var contribute destinations.
-
-- [ ] Verify deduplication logic for saveTo correctly handles the case
-  where the same destination appears in both the flag and the env var.
-
-- [ ] Verify the boot summary correctly handles the case where SaveTo
-  has only one entry — output should still use the arrow format:
-
-          save-to:
-            → .
-
-      and not revert to a single-line format.
-
-### swarm.go
-
-- [ ] Verify applyFlagSMTPOverrides is called for every MailTarget in
-  the targets list, not just the first one. If the user specifies
-  two mailto: destinations, both need the SMTP overrides applied.
-
-- [ ] Review Report(ctx) cancellation semantics. If the swarm context
-  is already cancelled by the time Report is called (e.g. due to
-  SIGINT), S3 uploads and SMTP sends should still complete. Consider
-  wrapping the report delivery with a fresh 30-second timeout
-  context rather than reusing the swarm's potentially-cancelled
-  context.
-
-### target.go
-
-- [ ] Add a TODO comment to MailTarget.Deliver, sendTLS, sendSTARTTLS,
-  and sendPlain noting that net/smtp does not natively support
-  context cancellation. For v0.0.1 this is acceptable; v0.0.2 may
-  replace net/smtp with a context-aware library.
-
-- [ ] Verify S3Target.Deliver handles the case where both
-  AWS_DEFAULT_REGION and AWS_REGION are unset and the SDK cannot
-  detect the region automatically. The raw SDK error is not
-  user-friendly — wrap it with a diagnostic hint pointing at
-  the environment variables.
-
----
-
-## Priority 3 — Documentation and Polish
-
-### All source files
-
-- [ ] Verify every exported type, function, and method has a godoc
-  comment following the structure agreed during development:
-  what it is, how to use it, gotchas and warnings.
-
-- [ ] Verify every unexported function has at minimum a single-line
-  comment describing what it does and any gotchas worth calling out.
-
-### README.md
-
-- [ ] The All Flags table has -save-to listed with the old single-string
-  description. Update to reflect the comma-separated list format
-  and give an example that shows all three target types.
-
-- [ ] Add a section on the LEMMINGS_SAVE_TO environment variable and
-  how it interacts with -save-to additively.
-
-- [ ] The Dependencies table is missing github.com/prometheus/client_model
-  which is used in observer_test.go for the DTO metric reading helpers.
-
-### TESTS.md
-
-- [ ] Add a section covering target_test.go and what it proves about
-  report delivery reliability — specifically the partial failure
-  guarantee that a failing S3 upload does not prevent local delivery.
-
-- [ ] Add target.go to the fuzz targets table. The mailto: and s3://
-  URI parsers are parsing externally-provided strings and should
-  have fuzz coverage in v0.0.2.
-
-- [ ] Document the Born/Died lifecycle event ownership contract:
-  EventLemmingBorn, EventLemmingDied, and EventLemmingFailed are
-  emitted exclusively by Terrain.spawnLemming, never by Lemming.Run.
-  This was the root cause of the double-emit bug resolved during
-  the review session.
-
-### Makefile
-
-- [ ] Add a make run-local target for quick iteration against localhost:
-
-          run-local:
-              $(GO) run . \
-                  -hit http://localhost:8080/ \
-                  -terrain 2 \
-                  -pack 2 \
-                  -until 10s \
-                  -ramp 5s \
-                  -tty=true \
-                  -save-to /tmp/lemmings-test
-
-- [ ] Add a make build-check target as the pre-commit gate:
-
-          build-check: vet fmt-check
-              $(GO) build ./...
-
-### CI
-
-- [ ] Align the Go version in .github/workflows/go.yml with go.mod.
-  go.mod declares go 1.25.0; CI should pin 1.25.x on all three
-  runners (ubuntu-latest, macos-latest, windows-latest).
-
-- [ ] Monitor FuzzHandleAuth and FuzzDashboardHTML in CI. Both bind
-  to ports and spin up HTTP servers. If either shows flakiness
-  from port contention or timeouts, move to a dedicated job with
-  a longer fuzztime or serialise them on a single runner.
-
----
-
-## Priority 4 — v0.0.1 Release Gates
-
-The following must all be true before tagging v0.0.1. Check off as
-each is verified on the release candidate.
-
-- [ ] go build ./... exits 0 with no output
-- [ ] go vet ./... exits 0 with no output
-- [ ] gofmt -l . returns no filenames
-- [x] go test -race ./... exits 0 with all tests passing (432/432)
-- [ ] make test exits 0
-- [ ] make lint exits 0
-- [ ] A real run against localhost produces a non-empty .md and .html
-  report
-- [ ] The HTML report opens in a browser without errors
-- [ ] The dashboard is accessible at localhost:4000 during a real run
-- [ ] The live ticker updates every second during a real run
-- [ ] At least one URL in the report shows Match: true
-- [ ] dropped_logs is 0 in the first real run
-- [ ] The report file path is printed to STDOUT at the end of the run
-
----
-
-## Deferred to v0.0.2 and Beyond
-
-Do not attempt to address these during the v0.0.1 cycle. They are
-recorded here so they are not lost.
-
-- [ ] Fuzz tests for ParseTarget (mailto: and s3:// URI parsers)
-- [ ] Fuzz tests for buildMessage (MIME construction with arbitrary inputs)
-- [ ] Replace net/smtp with a context-aware SMTP library
-- [ ] S3 bucket creation if bucket does not exist (with -s3-create-bucket flag)
-- [ ] SMTP retry logic with exponential backoff on transient failures
-- [ ] -local flag to force local copy alongside S3 or email delivery
-- [ ] Fibonacci ramp shape as an alternative to linear ramp
-- [ ] Per-lemming timing breakdown in the HTML report
-- [ ] Time series graph in HTML report showing visit rate over the run duration
-- [ ] Prometheus remote write support
-- [ ] Database Navigator implementations (MySQL, PostgreSQL, MongoDB, SQLite)
-- [ ] Geographically distributed load via coordinated lemmings instances
-- [ ] Report comparison mode — diff two report files and highlight regressions
-- [ ] -dry-run flag that indexes the URL pool and prints the plan
-  without spawning any lemmings
-- [ ] CI integration examples for GitLab CI and CircleCI
-- [ ] Helm chart for running lemmings as a Kubernetes Job
+- [ ] Forms in journeys: `POST` steps that read a CSRF token from the previous
+  page, so journeys can log in and check out.
+- [ ] Fibonacci ramp shape as an alternative to the linear ramp.
+- [ ] Prometheus remote write support.
+- [ ] Geographically distributed load via coordinated lemmings instances,
+  reporting into one dashboard.
+- [ ] A companion project for real-browser checks (JavaScript errors, broken
+  images, layout shift) that reads the same journey files. Kept out of this
+  binary so lemmings stays a single Go executable with no Node or Chromium.
+- [ ] Fuzz tests for ParseTarget (mailto: and s3:// URI parsers) and
+  buildMessage (MIME construction with arbitrary inputs).
+- [ ] Replace net/smtp with a context-aware SMTP library, and retry transient
+  SMTP failures with backoff.
+- [ ] S3 bucket creation behind an explicit `-s3-create-bucket` flag.
+- [ ] Database Navigator implementations (MySQL, PostgreSQL, MongoDB, SQLite).
+- [ ] Helm chart for running lemmings as a Kubernetes Job.
 
 ---
 
@@ -215,19 +46,48 @@ recorded here so they are not lost.
 
 When reviewing the package, read in this dependency order:
 
-1. REVIEW.md — high-level context
-2. events.go — fewest dependencies
-3. pool.go — URL indexing
+1. events.go — the EventBus; fewest dependencies
+2. pool.go — URL indexing and origin scoping
+3. request.go, journey.go — one HTTP visit and the checks applied to it
 4. lemming.go — the navigating agent
 5. terrain.go — depends on lemming; owns all lifecycle events
-6. swarm.go — depends on everything above
-7. report.go + target.go — tightly coupled
-8. observer.go — depends on events and swarm
-9. dashboard.go — depends on events and swarm
-10. main.go — wiring only
+6. stats.go, report.go, charts.go, templates/ — aggregates and reports
+7. target.go — report delivery
+8. swarm.go — depends on everything above
+9. observer.go — Prometheus
+10. observatory.go, dashboard.go, web/ — the live dashboard
+11. cli.go, main.go — terminal output and wiring
 
-Read each test file immediately after its source file. If a change
-touches Terrain or Lemming, the lifecycle ownership contract
-(EventLemmingBorn / EventLemmingDied / EventLemmingFailed emitted
-ONLY by Terrain) is a hard invariant — duplicating emission from
-Lemming.Run breaks every counter-based subscriber in the package.
+Read each test file immediately after its source file. If a change touches
+Terrain or Lemming, the lifecycle ownership contract (EventLemmingBorn /
+EventLemmingDied / EventLemmingFailed emitted ONLY by the Terrain) is a hard
+invariant — emitting them anywhere else breaks every counter-based subscriber
+in the package.
+
+The EventBus is synchronous: every subscriber runs on the lemming goroutine
+that emitted. Subscribers must be O(1) and hand anything slow — disk, network
+— to their own goroutine, as the trace writer does.
+
+---
+
+## Resolved in 1.0.0
+
+- [x] Accept-Encoding consistency between indexing and lemmings: neither sets
+  it, so Go decompresses gzip transparently for both.
+- [x] UA-based content variation is documented: checksum changes are
+  informational unless `-strict-checksum` is set.
+- [x] Waiting room poll interval matches the room package's 3 seconds.
+- [x] LEMMINGS_SAVE_TO is additive to -save-to, deduplicated, and tested.
+- [x] SMTP overrides apply to every mailto: target.
+- [x] Report delivery uses a fresh, bounded context after Ctrl-C.
+- [x] MailTarget honours its context for dialing and I/O deadlines.
+- [x] S3Target explains a missing region instead of a raw SDK error.
+- [x] README flags, LEMMINGS_SAVE_TO section and dependency table are current.
+- [x] TESTS.md covers report delivery, the fuzz targets and the lifecycle
+  contract.
+- [x] `make run`, `make run-journey`, `make demo` and `make build-check`.
+- [x] CI runs on demand (workflow_dispatch): lint, then race tests on Linux
+  or on Linux, macOS and Windows, with optional benchmarks and fuzzing.
+- [x] Release gates: build, vet, gofmt, race tests, a real run with reports,
+  the dashboard during a run, the live ticker, dropped_logs 0, and report paths
+  printed at the end.

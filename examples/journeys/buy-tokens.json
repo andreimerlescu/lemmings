@@ -1,0 +1,10 @@
+{
+  "name": "buy-tokens",
+  "steps": [
+    { "name": "arrive", "path": "/", "expect": { "status": [200], "content_type": "text/html", "title_contains": "Neon Arcade", "selectors": ["nav", ".grid"], "contains": ["Insert coin"] } },
+    { "name": "browse", "path": "/games", "expect": { "status": [200], "selectors": ["ul"], "contains": ["Outrun Horizon"] } },
+    { "name": "pick a game", "path": "/games/outrun", "expect": { "status": [200], "title_contains": "Outrun Horizon", "contains": ["High score"] } },
+    { "name": "checkout", "path": "/checkout", "expect": { "status": [200], "contains": ["Tokens are on the way"] } },
+    { "name": "tokens", "path": "/tokens", "expect": { "status": [200], "contains": ["10 tokens"], "not_contains": ["Something went wrong"] } }
+  ]
+}

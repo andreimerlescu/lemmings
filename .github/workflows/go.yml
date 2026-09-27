@@ -1,28 +1,69 @@
 name: Go Lemmings
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      os_target:
+        description: 'Operating system(s) to test'
+        required: true
+        default: 'ubuntu-only'
+        type: choice
+        options:
+          - 'ubuntu-only'
+          - 'all-os (ubuntu, macos, windows)'
+      run_benchmarks:
+        description: 'Run benchmark suite?'
+        required: true
+        default: false
+        type: boolean
+      run_fuzzing:
+        description: 'Run fuzz testing suite?'
+        required: true
+        default: false
+        type: boolean
+
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "needs gofmt:"; echo "$unformatted"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: Build lemmings and the demo target
+        run: go build ./...
+      - name: Dashboard JavaScript parses
+        run: node --check web/app.js && node --check web/theme.js
   test:
     runs-on: ${{ matrix.os }}
+    needs: lint
     strategy:
-      matrix:
-        os: [ ubuntu-latest, macos-latest, windows-latest ]
-        go-version: [ '1.25.x' ]
       fail-fast: false
+      matrix:
+        os: >-
+          ${{ 
+            github.event.inputs.os_target == 'all-os (ubuntu, macos, windows)' 
+            && fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') 
+            || fromJSON('["ubuntu-latest"]') 
+          }}
+        go-version: [ '1.26.x' ]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
-      - name: Unit tests with race detector
+      - name: Unit, integration and end-to-end tests with race detector
         run: go test -race -count=1 -v ./...
+
   bench:
+    if: ${{ github.event.inputs.run_benchmarks == 'true' }}
     runs-on: ubuntu-latest
     needs: test
     steps:
@@ -33,10 +74,13 @@ jobs:
           go-version: '1.25.x'
       - name: Benchmarks
         run: go test -bench=. -benchmem -run='^$' -count=1 ./...
+
   fuzz:
+    if: ${{ github.event.inputs.run_fuzzing == 'true' }}
     runs-on: ubuntu-latest
     needs: test
     strategy:
+      fail-fast: false
       matrix:
         target:
           - FuzzDetectWaitingRoom
@@ -48,7 +92,6 @@ jobs:
           - FuzzDashboardHTML
           - FuzzFormatInt
           - FuzzFormatBytes
-      fail-fast: false
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
@@ -56,4 +99,5 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: Fuzz ${{ matrix.target }}
-        run: go test -fuzz=${{ matrix.target }} -fuzztime=30s -run='^$' ./...
+        # -fuzz accepts exactly one package; the demo target is a second one.
+        run: go test -run='^$' -fuzz='^${{ matrix.target }}$' -fuzztime=30s .

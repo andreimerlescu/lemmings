@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>lemmings dashboard</title>
+<!--THEME-->
+<!--STYLE-->
+</head>
+<body>
+<main class="login">
+  <div class="card">
+    <span class="wordmark">LEMMINGS</span>
+    <p>Enter the token printed in your terminal to watch the swarm.</p>
+    <form method="POST" action="/auth" id="login">
+      <div class="status" id="status" role="status"></div>
+      <input type="password" name="token" id="token" placeholder="paste token here" autocomplete="off" spellcheck="false" autofocus required>
+      <button type="submit">unlock →</button>
+    </form>
+    <p class="hint">Tip: the <code>dashboard:</code> link in your terminal signs you in with one click.</p>
+  </div>
+</main>
+<script>
+(function () {
+  var m = /[#&]token=([0-9a-fA-F]{16,128})/.exec(location.hash);
+  if (!m) return;
+  // Remove the token from the address bar and history before anything else.
+  history.replaceState(null, '', location.pathname);
+  document.getElementById('token').value = m[1];
+  document.getElementById('status').textContent = 'signing in…';
+  document.getElementById('login').submit();
+})();
+</script>
+</body>
+</html>

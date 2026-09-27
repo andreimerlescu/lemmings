@@ -70,7 +70,7 @@ type Observer interface {
 //	obs := NewPrometheusObserver(cfg)
 //	swarm.RegisterObserver(obs)
 //
-// The observer exposes eleven metrics covering lemming lifecycle, visit
+// The observer exposes thirteen metrics covering lemming lifecycle, visit
 // outcomes, timing distributions, waiting room behaviour, and channel
 // pressure. All metrics are namespaced under "lemmings_".
 //
@@ -106,6 +106,14 @@ type PrometheusObserver struct {
 	// lemmings_visits_total counts page visits by HTTP status class.
 	// Label: status_class with values "2xx", "3xx", "4xx", "5xx".
 	visits *prometheus.CounterVec
+
+	// lemmings_failed_visits_total counts visits that failed transport,
+	// status or page checks. Cancelled visits are excluded.
+	failedVisits prometheus.Counter
+
+	// lemmings_cancelled_visits_total counts visits cut short because the
+	// lemming's life or the run ended.
+	cancelledVisits prometheus.Counter
 
 	// lemmings_visit_duration_seconds records per-visit latency.
 	// Label: url — behaviour controlled by cfg.MetricsURLLabel.
@@ -199,9 +207,9 @@ func NewPrometheusObserver(cfg SwarmConfig) *PrometheusObserver {
 		Buckets: prometheus.DefBuckets,
 	}, urlLabels)
 	if o.cfg.MetricsURLLabel == "none" {
-		o.visitDuration.With(prometheus.Labels{}).Observe(0)
+		o.visitDuration.With(prometheus.Labels{})
 	} else {
-		o.visitDuration.With(prometheus.Labels{"url": ""}).Observe(0)
+		o.visitDuration.With(prometheus.Labels{"url": ""})
 	}
 
 	o.bytesTotal = prometheus.NewCounter(prometheus.CounterOpts{
@@ -243,12 +251,24 @@ func NewPrometheusObserver(cfg SwarmConfig) *PrometheusObserver {
 			"Non-zero values are a warning but do not indicate data loss.",
 	})
 
+	o.failedVisits = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "lemmings_failed_visits_total",
+		Help: "Page visits that failed transport, status or page checks. Cancelled visits are excluded.",
+	})
+
+	o.cancelledVisits = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "lemmings_cancelled_visits_total",
+		Help: "Page visits cut short because the lemming's life or the run ended.",
+	})
+
 	// Register all collectors with the isolated registry
 	reg.MustRegister(
 		o.alive,
 		o.completed,
 		o.failed,
 		o.visits,
+		o.failedVisits,
+		o.cancelledVisits,
 		o.visitDuration,
 		o.bytesTotal,
 		o.waitingRoom,
@@ -388,11 +408,6 @@ func (o *PrometheusObserver) handleEvent(e Event) {
 		o.alive.Dec()
 		o.completed.Inc()
 
-		// Record visit-level metrics from the event if populated.
-		// Individual visit metrics arrive via EventVisitComplete —
-		// this handles the aggregate counters on lemming death.
-		o.bytesTotal.Add(float64(e.BytesIn))
-
 	case EventLemmingFailed:
 		o.failed.Inc()
 
@@ -427,6 +442,15 @@ func (o *PrometheusObserver) handleEvent(e Event) {
 // maxURLLabelCardinality, excess URLs are recorded under the synthetic
 // label value "other" and a one-time warning is logged.
 func (o *PrometheusObserver) recordVisit(e Event) {
+	o.bytesTotal.Add(float64(e.BytesIn))
+	if v := e.Visit; v != nil {
+		switch {
+		case v.Cancelled:
+			o.cancelledVisits.Inc()
+		case failedVisit(v):
+			o.failedVisits.Inc()
+		}
+	}
 	// Status class label
 	statusclass := statusClass(e.StatusCode)
 	o.visits.With(prometheus.Labels{"status_class": statusclass}).Inc()

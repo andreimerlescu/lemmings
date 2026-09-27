@@ -2,6 +2,7 @@ package main
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,12 +16,19 @@ const (
 	EventLemmingDied   EventKind = "lemming.died"
 	EventLemmingFailed EventKind = "lemming.failed"
 
-	// Visit lifecycle
+	// Visit lifecycle. EventVisitComplete is a visit that passed every
+	// check; EventVisitError is a visit that failed or was cancelled.
+	// Both carry the full *Visit.
 	EventVisitComplete EventKind = "visit.complete"
 	EventVisitError    EventKind = "visit.error"
 
-	// Waiting room
-	EventWaitingRoom EventKind = "waiting_room.entered"
+	// Waiting room. EventWaitingRoomQueued fires when a lemming is first
+	// queued and again whenever its Position changes. EventWaitingRoom
+	// fires exactly once when the stay ends — admitted or died in line —
+	// carrying the total Duration held. (Its "entered" name predates the
+	// queued event; it is kept so existing consumers keep working.)
+	EventWaitingRoomQueued EventKind = "waiting_room.queued"
+	EventWaitingRoom       EventKind = "waiting_room.entered"
 
 	// Terrain lifecycle
 	EventTerrainOnline EventKind = "terrain.online"
@@ -44,30 +52,46 @@ const (
 // to every event. Zero values are safe to ignore.
 //
 // The BytesIn and Duration fields are populated on EventVisitComplete,
-// EventVisitError, EventLemmingDied, and EventWaitingRoom so that observers
-// such as the PrometheusObserver can record metrics without needing to
-// read from a separate channel.
+// EventVisitError, and EventWaitingRoom so that observers such as the
+// PrometheusObserver can record metrics without dereferencing Visit.
 //
-// Warning: Subscribers must not retain a reference to Event after their
-// subscriber function returns. Events are value types passed by copy — but
-// the Err field is an interface and the underlying error value is shared.
+// Warning: Subscribers must not retain a reference to Event, or to the
+// Visit and Life it points at, after their subscriber function returns.
+// Copy the fields you need. The emitter may reuse or mutate those values
+// once Emit returns.
 type Event struct {
-	Kind       EventKind
-	OccurredAt time.Time
+	Kind       EventKind `json:"kind"`
+	OccurredAt time.Time `json:"occurred_at"`
 
 	// Lemming identity
-	LemmingID string
-	Terrain   int
-	Pack      int
+	LemmingID string `json:"lemming_id,omitempty"`
+	Terrain   int    `json:"terrain"`
+	Pack      int    `json:"pack"`
 
-	// Visit detail — populated on EventVisitComplete and EventVisitError
-	URL        string
-	StatusCode int
-	BytesIn    int64
-	Duration   time.Duration
+	// Visit detail — populated on EventVisitComplete and EventVisitError.
+	// On visit events Duration is the visit's server latency (see Visit).
+	URL        string        `json:"url,omitempty"`
+	StatusCode int           `json:"status_code,omitempty"`
+	BytesIn    int64         `json:"bytes_in,omitempty"`
+	Duration   time.Duration `json:"duration_ns,omitempty"`
+
+	// Position is the waiting room queue position on waiting room events.
+	Position int `json:"position,omitempty"`
+
+	// Visit is the complete visit record on EventVisitComplete and
+	// EventVisitError. Nil on every other kind.
+	Visit *Visit `json:"-"`
+
+	// Identity is the newborn lemming's persona on EventLemmingBorn.
+	// Nil on every other kind.
+	Identity *Identity `json:"-"`
+
+	// Life is the lemming's final record on the Terrain's EventLemmingDied.
+	// Nil on every other kind.
+	Life *LifeLog `json:"-"`
 
 	// Error — non-nil on failure events and failed auth attempts
-	Err error
+	Err error `json:"-"`
 }
 
 // Subscriber is a function that receives events from the bus.
@@ -79,12 +103,23 @@ type Event struct {
 // simultaneously.
 type Subscriber func(Event)
 
+// busView is an immutable snapshot of the bus published for Emit.
+type busView struct {
+	subscribers []Subscriber
+	closed      bool
+}
+
 // EventBus is a synchronous fan-out event dispatcher.
 //
 // All subscribers receive every event in registration order. Subscribers
 // are called on the goroutine that calls Emit. The bus is safe for
 // concurrent use — Subscribe, Emit, and Close may all be called from
 // multiple goroutines simultaneously.
+//
+// Emit is lock-free and allocation-free: writers (Subscribe, unsubscribe,
+// Close) mutate the bus under a mutex and publish an immutable view that
+// Emit loads atomically. A subscriber may therefore unsubscribe itself,
+// subscribe another callback, or close the bus from inside its callback.
 //
 // Usage:
 //
@@ -99,23 +134,36 @@ type Subscriber func(Event)
 // all emitters have stopped before calling Close if ordering guarantees
 // are required.
 type EventBus struct {
-	mu          sync.RWMutex
+	mu          sync.Mutex
 	subscribers []Subscriber
 	closed      bool
+	view        atomic.Pointer[busView]
 }
 
 // NewEventBus constructs an empty EventBus ready to accept subscribers.
 func NewEventBus() *EventBus {
-	return &EventBus{
+	b := &EventBus{
 		subscribers: make([]Subscriber, 0, 8),
 	}
+	b.publish()
+	return b
+}
+
+// publish stores an immutable copy of the current subscriber list.
+// Must be called with b.mu held (or before the bus is shared).
+func (b *EventBus) publish() {
+	b.view.Store(&busView{
+		subscribers: append([]Subscriber(nil), b.subscribers...),
+		closed:      b.closed,
+	})
 }
 
 // Subscribe registers a subscriber to receive all future events.
 //
 // Returns an unsubscribe function — call it to stop receiving events.
 // The slot is set to nil rather than removed, preserving the indices of
-// other subscribers registered after this one.
+// other subscribers registered after this one. Subscribing a nil function
+// or subscribing to a closed bus is a no-op that returns a no-op.
 //
 // Usage:
 //
@@ -127,14 +175,19 @@ func (b *EventBus) Subscribe(fn Subscriber) func() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if b.closed || fn == nil {
+		return func() {}
+	}
 	b.subscribers = append(b.subscribers, fn)
 	idx := len(b.subscribers) - 1
+	b.publish()
 
 	return func() {
 		b.mu.Lock()
 		defer b.mu.Unlock()
-		if idx < len(b.subscribers) {
+		if idx < len(b.subscribers) && b.subscribers[idx] != nil {
 			b.subscribers[idx] = nil
+			b.publish()
 		}
 	}
 }
@@ -148,18 +201,14 @@ func (b *EventBus) Subscribe(fn Subscriber) func() {
 // Warning: Emit is synchronous. All subscriber functions run on the calling
 // goroutine before Emit returns. Slow subscribers block the caller.
 func (b *EventBus) Emit(e Event) {
+	v := b.view.Load()
+	if v.closed {
+		return
+	}
 	if e.OccurredAt.IsZero() {
 		e.OccurredAt = time.Now()
 	}
-
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	if b.closed {
-		return
-	}
-
-	for _, fn := range b.subscribers {
+	for _, fn := range v.subscribers {
 		if fn != nil {
 			fn(e)
 		}
@@ -176,6 +225,7 @@ func (b *EventBus) Close() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.closed = true
+	b.publish()
 }
 
 // Filter returns a Subscriber that only calls fn when the event Kind
@@ -219,8 +269,9 @@ func Tee(subscribers ...Subscriber) Subscriber {
 
 // EventLog is an in-memory ordered log of events with a fixed capacity.
 //
-// When the log is full, the oldest event is evicted to make room for the
-// newest. EventLog is safe for concurrent use.
+// When the log is full, the oldest event is overwritten by the newest.
+// Recording is O(1): the log is a ring buffer, so a full log does not
+// shift its contents on every event. EventLog is safe for concurrent use.
 //
 // Usage:
 //
@@ -234,14 +285,18 @@ func Tee(subscribers ...Subscriber) Subscriber {
 type EventLog struct {
 	mu     sync.RWMutex
 	events []Event
+	start  int // index of the oldest event once the ring is full
 	cap    int
 }
 
 // NewEventLog constructs an EventLog with the given capacity.
 //
-// When full, Record evicts the oldest event before appending the newest.
+// When full, Record overwrites the oldest event with the newest.
 // A capacity of 0 is valid but produces a log that never retains events.
 func NewEventLog(capacity int) *EventLog {
+	if capacity < 0 {
+		capacity = 0
+	}
 	return &EventLog{
 		events: make([]Event, 0, capacity),
 		cap:    capacity,
@@ -255,11 +310,17 @@ func (l *EventLog) Record(e Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if len(l.events) >= l.cap {
-		copy(l.events, l.events[1:])
-		l.events = l.events[:len(l.events)-1]
+	if l.cap == 0 {
+		return
 	}
-	l.events = append(l.events, e)
+	// Retained events must not pin the records they point to.
+	e.Visit, e.Life, e.Identity = nil, nil, nil
+	if len(l.events) < l.cap {
+		l.events = append(l.events, e)
+		return
+	}
+	l.events[l.start] = e
+	l.start = (l.start + 1) % l.cap
 }
 
 // Snapshot returns a copy of all currently recorded events in order,
@@ -271,8 +332,9 @@ func (l *EventLog) Snapshot() []Event {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	out := make([]Event, len(l.events))
-	copy(out, l.events)
+	out := make([]Event, 0, len(l.events))
+	out = append(out, l.events[l.start:]...)
+	out = append(out, l.events[:l.start]...)
 	return out
 }
 

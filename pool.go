@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +20,10 @@ const (
 	// indexTimeout is the maximum time allowed for a single URL
 	// to be fetched during pool indexing.
 	indexTimeout = 10 * time.Second
+
+	// indexBudget bounds the whole indexing phase: sitemap discovery, the
+	// crawl (itself capped at 5 minutes) and checksumming every URL.
+	indexBudget = 10 * time.Minute
 
 	// indexConcurrency is how many URLs we fetch in parallel
 	// during pool construction. Kept conservative — we don't want
@@ -56,7 +63,18 @@ func BuildURLPool(
 		return nil, fmt.Errorf("invalid hit URL %q: %w", hit, err)
 	}
 
-	client := &http.Client{Timeout: indexTimeout}
+	ctx, cancel := context.WithTimeout(ctx, indexBudget)
+	defer cancel()
+	client := &http.Client{
+		Timeout: indexTimeout,
+		// Indexing never follows a redirect off the target's origin.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects || !sameOrigin(hit, req.URL.String()) {
+				return fmt.Errorf("index redirect outside scope or redirect limit exceeded")
+			}
+			return nil
+		},
+	}
 
 	pool := &URLPool{
 		Origin:    origin,
@@ -72,7 +90,7 @@ func BuildURLPool(
 
 	// ── Strategy 2: sitemap declared in robots.txt ──────────
 	robotsSitemapURL, err := findSitemapInRobots(ctx, client, origin+robotsPath)
-	if err == nil && robotsSitemapURL != "" {
+	if err == nil && robotsSitemapURL != "" && sameOrigin(origin, robotsSitemapURL) {
 		urls, err = indexSitemap(ctx, client, robotsSitemapURL)
 		if err == nil && len(urls) > 0 {
 			fmt.Printf("  sitemap found via robots.txt: %d URLs\n", len(urls))
@@ -110,6 +128,9 @@ func (p *URLPool) hydrate(
 
 	// Deduplicate and scope to origin
 	scoped := scopeToOrigin(origin, urls)
+	if len(scoped) > 10000 {
+		scoped = scoped[:10000]
+	}
 	if len(scoped) == 0 {
 		// Nothing passed origin scoping — fall back to origin root
 		scoped = []string{origin + "/"}
@@ -165,61 +186,73 @@ func (p *URLPool) hydrate(
 		return nil, fmt.Errorf("pool is empty — no URLs could be fetched from %s", origin)
 	}
 
+	sort.Strings(p.URLs)
 	return p, nil
 }
 
 // indexSitemap fetches and parses a sitemap.xml, returning all loc URLs.
 // Handles both standard sitemaps and sitemap index files (nested sitemaps).
 func indexSitemap(ctx context.Context, client *http.Client, sitemapURL string) ([]string, error) {
-	body, statusCode, _, err := fetchURL(ctx, client, sitemapURL)
-	if err != nil {
-		return nil, fmt.Errorf("fetch sitemap: %w", err)
-	}
-	if statusCode != http.StatusOK {
-		return nil, fmt.Errorf("sitemap returned %d", statusCode)
-	}
-
-	urls := extractSitemapLocs(string(body))
-
-	// If we found sitemap index entries (nested sitemaps), recurse one level
-	if len(urls) > 0 && isSitemapIndex(string(body)) {
-		var all []string
-		for _, nestedURL := range urls {
-			nested, err := indexSitemap(ctx, client, nestedURL)
-			if err != nil {
-				continue // skip broken nested sitemaps
-			}
-			all = append(all, nested...)
+	seen := map[string]bool{}
+	remaining := 10000
+	var walk func(string, int) ([]string, error)
+	walk = func(u string, depth int) ([]string, error) {
+		if depth > 8 || len(seen) >= 100 || seen[u] || !sameOrigin(sitemapURL, u) {
+			return nil, nil
 		}
-		return all, nil
+		seen[u] = true
+		body, status, _, err := fetchURL(ctx, client, u)
+		if err != nil {
+			return nil, err
+		}
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("sitemap returned %d", status)
+		}
+		urls := extractSitemapLocs(string(body))
+		if isSitemapIndex(string(body)) {
+			var all []string
+			for _, v := range urls {
+				if remaining <= 0 {
+					break
+				}
+				nested, err := walk(resolveURL(u, v), depth+1)
+				if err == nil {
+					all = append(all, nested...)
+				}
+			}
+			return all, nil
+		}
+		if len(urls) > remaining {
+			urls = urls[:remaining]
+		}
+		remaining -= len(urls)
+		return urls, nil
 	}
-
-	return urls, nil
+	return walk(sitemapURL, 0)
 }
 
 // extractSitemapLocs pulls all <loc> values from a sitemap XML body.
 // We parse manually rather than using encoding/xml to avoid struct
 // coupling to specific sitemap schema versions.
 func extractSitemapLocs(body string) []string {
-	urls := []string{} // ← non-nil empty slice instead of var declaration
-	remaining := body
-	for {
-		start := strings.Index(remaining, "<loc>")
-		if start == -1 {
+	out := []string{}
+	d := xml.NewDecoder(strings.NewReader(body))
+	for len(out) < 10000 {
+		t, err := d.Token()
+		if err != nil {
 			break
 		}
-		start += len("<loc>")
-		end := strings.Index(remaining[start:], "</loc>")
-		if end == -1 {
-			break
+		if start, ok := t.(xml.StartElement); ok && start.Name.Local == "loc" {
+			var value string
+			if err := d.DecodeElement(&value, &start); err != nil {
+				break
+			}
+			if value = strings.TrimSpace(value); value != "" {
+				out = append(out, value)
+			}
 		}
-		loc := strings.TrimSpace(remaining[start : start+end])
-		if loc != "" {
-			urls = append(urls, loc)
-		}
-		remaining = remaining[start+end:]
 	}
-	return urls
+	return out
 }
 
 // isSitemapIndex returns true if the body contains a <sitemapindex> element,
@@ -279,7 +312,7 @@ func crawlOrigin(
 
 	var crawl func(url string, depth int)
 	crawl = func(u string, depth int) {
-		if depth > maxDepth {
+		if depth > maxDepth || len(visited) >= 10000 {
 			return
 		}
 
@@ -306,7 +339,7 @@ func crawlOrigin(
 		results = append(results, u)
 		mu.Unlock()
 
-		links := extractHTMLLinks(body, origin)
+		links := extractHTMLLinks(body, u)
 		for _, link := range links {
 			crawl(link, depth+1)
 		}
@@ -327,7 +360,7 @@ func extractHTMLLinks(body []byte, origin string) []string {
 	links := []string{}
 	seen := make(map[string]bool)
 
-	doc, err := html.Parse(strings.NewReader(string(body)))
+	doc, err := html.Parse(bytes.NewReader(body))
 	if err != nil {
 		return links
 	}
@@ -363,7 +396,7 @@ func scopeToOrigin(origin string, urls []string) []string {
 
 	for _, u := range urls {
 		u = strings.TrimSpace(u)
-		if !strings.HasPrefix(u, origin) {
+		if !sameOrigin(u, origin) {
 			continue
 		}
 		if seen[u] {
@@ -376,8 +409,10 @@ func scopeToOrigin(origin string, urls []string) []string {
 	return scoped
 }
 
-// resolveURL resolves an href value against the origin.
-// Returns empty string if the result is off-origin or unparseable.
+// resolveURL resolves an href against base — an origin or the URL of the
+// page the href appeared on. Returns "" if the result is off-origin,
+// unparseable, or a link a lemming never follows (fragment, mailto:,
+// javascript:, tel:).
 func resolveURL(origin, href string) string {
 	href = strings.TrimSpace(href)
 
@@ -405,12 +440,14 @@ func resolveURL(origin, href string) string {
 	// Strip fragment — lemmings don't care about anchors
 	resolved.Fragment = ""
 
-	// Enforce origin scope — no subdomains, no external domains
-	if resolved.Host != base.Host {
+	// Enforce origin scope — no subdomains, no external domains. The
+	// prefix check also rejects hosts that only match once re-escaped.
+	out := resolved.String()
+	if !sameOrigin(out, base.String()) || !strings.HasPrefix(out, base.Scheme+"://"+base.Host) {
 		return ""
 	}
 
-	return resolved.String()
+	return out
 }
 
 // parseOrigin extracts the scheme+host from a URL string,
@@ -420,7 +457,7 @@ func parseOrigin(hit string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if u.Scheme == "" || u.Host == "" {
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 		return "", fmt.Errorf("URL must include scheme and host")
 	}
 	return u.Scheme + "://" + u.Host, nil
@@ -443,10 +480,39 @@ func fetchURL(ctx context.Context, client *http.Client, u string) ([]byte, int, 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (4<<20)+1))
+	if len(body) > 4<<20 {
+		return nil, resp.StatusCode, int64(len(body)), fmt.Errorf("index body exceeds 4 MiB")
+	}
 	if err != nil {
 		return nil, resp.StatusCode, 0, fmt.Errorf("read body: %w", err)
 	}
 
 	return body, resp.StatusCode, int64(len(body)), nil
+}
+
+// sameOrigin compares parsed origins, including effective ports. Prefix checks
+// incorrectly allow example.com.evil.test and leak redirected traffic off-target.
+func sameOrigin(a, b string) bool {
+	x, err := url.Parse(a)
+	if err != nil {
+		return false
+	}
+	y, err := url.Parse(b)
+	if err != nil {
+		return false
+	}
+	if x.User != nil || y.User != nil || (x.Scheme != "http" && x.Scheme != "https") || x.Scheme != y.Scheme || x.Hostname() == "" {
+		return false
+	}
+	port := func(u *url.URL) string {
+		if u.Port() != "" {
+			return u.Port()
+		}
+		if u.Scheme == "https" {
+			return "443"
+		}
+		return "80"
+	}
+	return strings.EqualFold(x.Hostname(), y.Hostname()) && port(x) == port(y)
 }
