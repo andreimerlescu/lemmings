@@ -594,10 +594,10 @@
 
   // ── lemming inspector ────────────────────────────────────────────────────
   const inspector = {
-    id: null, timer: 0, pending: 0, life: null,
+    id: null, timer: 0, pending: 0, life: null, shown: new Set(),
 
     follow(id) {
-      this.id = id; scene.followed = id; this.life = null;
+      this.id = id; scene.followed = id; this.life = null; this.shown = new Set();
       setText('inspector-hint', 'following');
       clearInterval(this.timer);
       this.timer = setInterval(() => this.refresh(), 1000);
@@ -676,7 +676,10 @@
       const hist = l.history.slice().reverse();
       const slowest = Math.max(1, ...hist.map((v) => v.ms));
       for (const v of hist) {
-        const li = el('li', v.f ? 'failed' : '');
+        // Only visits not shown before slide in; the list is rebuilt every
+        // refresh and must not re-animate rows the reader has already seen.
+        const li = el('li', (v.f ? 'failed' : '') + (this.shown.has(v.n) ? '' : ' fresh'));
+        this.shown.add(v.n);
         li.append(el('span', 'n', '#' + v.n));
         li.append(el('span', 'path', (v.step ? v.step + ' · ' : '') + v.p));
         li.append(el('span', 'chip ' + (v.c ? 's0' : statusClass(v.s)), v.c ? 'cut' : String(v.s || '×')));

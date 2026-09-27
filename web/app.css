@@ -175,7 +175,8 @@ a { color: var(--cyan); }
 .epitaph { font-size: 13px; padding: 8px 10px; border-radius: 8px; margin-bottom: 10px; background: var(--panel-2); }
 .epitaph.home { color: var(--green); } .epitaph.gone { color: var(--muted); }
 .life { list-style: none; overflow-y: auto; flex: 1; min-height: 0; margin: 0 -6px; padding: 0 6px; scrollbar-width: thin; }
-.life li { display: grid; grid-template-columns: 26px 1fr auto; gap: 2px 8px; padding: 7px 4px; border-bottom: 1px solid var(--line); animation: slidein .35s ease-out; }
+.life li { display: grid; grid-template-columns: 26px 1fr auto; gap: 2px 8px; padding: 7px 4px; border-bottom: 1px solid var(--line); }
+.life li.fresh { animation: slidein .35s ease-out; }
 .life li.failed { background: color-mix(in srgb, var(--red) 7%, transparent); }
 .life .n { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; padding-top: 2px; }
 .life .path { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; overflow-wrap: anywhere; }
