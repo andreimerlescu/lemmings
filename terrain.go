@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"sync"
+	"time"
 
 	"github.com/andreimerlescu/sema"
 	"golang.org/x/net/publicsuffix"
@@ -15,15 +16,17 @@ import (
 // metaphor. It owns cfg.Pack lemmings and brings them all online when
 // Launch is called.
 type Terrain struct {
-	id      int64
-	cfg     SwarmConfig
-	pool    *URLPool
-	send    func(LifeLog) // swarm's non-blocking sendLifeLog callback
-	bus     *EventBus
-	sem     sema.Semaphore
-	metrics *SwarmMetrics
-	wg      sync.WaitGroup
-	mu      sync.Mutex
+	id          int64
+	cfg         SwarmConfig
+	pool        *URLPool
+	send        func(LifeLog) // swarm's non-blocking sendLifeLog callback
+	bus         *EventBus
+	sem         sema.Semaphore
+	transport   http.RoundTripper
+	recordVisit func(Visit)
+	metrics     *SwarmMetrics
+	wg          sync.WaitGroup
+	mu          sync.Mutex
 }
 
 // NewTerrain constructs a Terrain. No lemmings are spawned until Launch.
@@ -51,10 +54,19 @@ func NewTerrain(
 // semaphore slot before running, releasing it when it dies. Launch returns
 // immediately — lemmings run in their own goroutines.
 func (t *Terrain) Launch(ctx context.Context) {
-	for i := int64(0); i < t.cfg.Pack; i++ {
-		t.wg.Add(1)
-		go t.spawnLemming(ctx, i)
-	}
+	t.wg.Add(1)
+	go func() {
+		defer t.wg.Done()
+		for i := int64(0); i < t.cfg.Pack; i++ {
+			if err := t.sem.AcquireWith(ctx); err != nil {
+				t.metrics.LemmingsFailed.Add(1)
+				t.bus.Emit(Event{Kind: EventLemmingFailed, Terrain: int(t.id), Pack: int(i), Err: err})
+				return
+			}
+			t.wg.Add(1)
+			go t.spawnAcquired(ctx, i)
+		}
+	}()
 }
 
 // Wait blocks until all lemmings in this terrain have died.
@@ -92,6 +104,14 @@ func (t *Terrain) spawnLemming(ctx context.Context, packIndex int64) {
 		return
 	}
 
+	t.runAcquired(ctx, packIndex)
+}
+
+func (t *Terrain) spawnAcquired(ctx context.Context, packIndex int64) {
+	defer t.wg.Done()
+	t.runAcquired(ctx, packIndex)
+}
+func (t *Terrain) runAcquired(ctx context.Context, packIndex int64) {
 	// Slot is held. Register Release now, and only now. The error from
 	// Release is discarded on this defer — in normal operation it will
 	// always be nil because we hold exactly one slot. A non-nil return
@@ -115,8 +135,14 @@ func (t *Terrain) spawnLemming(ctx context.Context, packIndex int64) {
 	}
 
 	client := &http.Client{
-		Jar:     jar,
-		Timeout: t.cfg.Until,
+		Jar:       jar,
+		Transport: t.transport,
+		Timeout: func() time.Duration {
+			if t.cfg.Experience.RequestTimeout > 0 {
+				return t.cfg.Experience.RequestTimeout
+			}
+			return 10 * time.Second
+		}(),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return http.ErrUseLastResponse
@@ -135,20 +161,25 @@ func (t *Terrain) spawnLemming(ctx context.Context, packIndex int64) {
 		t.metrics,
 	)
 
+	lemming.recordVisit = t.recordVisit
 	t.metrics.LemmingsAlive.Add(1)
 	t.bus.Emit(Event{
-		Kind:    EventLemmingBorn,
-		Terrain: int(t.id),
-		Pack:    int(packIndex),
+		Kind:      EventLemmingBorn,
+		LemmingID: lemming.identity.ID,
+		Terrain:   int(t.id),
+		Pack:      int(packIndex),
 	})
 
 	ll := lemming.Run(ctx)
+	t.metrics.LemmingsAlive.Add(-1)
+	t.metrics.LemmingsCompleted.Add(1)
 	t.send(ll)
 
 	t.bus.Emit(Event{
-		Kind:    EventLemmingDied,
-		Terrain: int(t.id),
-		Pack:    int(packIndex),
+		Kind:      EventLemmingDied,
+		LemmingID: lemming.identity.ID,
+		Terrain:   int(t.id),
+		Pack:      int(packIndex),
 	})
 }
 

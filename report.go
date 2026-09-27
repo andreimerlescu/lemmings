@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	htmltemplate "html/template"
 	"math"
 	"path/filepath"
 	"sort"
@@ -20,12 +22,18 @@ const reportDateFormat = "2006.01.02"
 // output files when Write is called. All ingestion is safe for concurrent
 // use — lemmings die in parallel and all call Ingest simultaneously.
 type Reporter struct {
-	cfg       SwarmConfig
-	mu        sync.Mutex
-	byPath    map[string]*pathStats
-	all       []LifeLog
-	startedAt time.Time
-	targets   []ReportTarget // delivery targets, populated via AddTarget
+	cfg             SwarmConfig
+	mu              sync.Mutex
+	byPath          map[string]*pathStats
+	all             []LifeLog
+	startedAt       time.Time
+	endedAt         time.Time
+	stats           ExperienceReport
+	latency         latencyHistogram
+	ttfb            latencyHistogram
+	globalDurations []time.Duration
+	trace           *traceWriter
+	targets         []ReportTarget // delivery targets, populated via AddTarget
 }
 
 // AddTarget registers a ReportTarget to receive the rendered report
@@ -65,6 +73,7 @@ type pathStats struct {
 	xx5         int64
 	durations   []time.Duration // kept for percentile calculation
 	waitingRoom int64           // lemmings that hit a waiting room on this path
+	hist        latencyHistogram
 	errors      int64
 }
 
@@ -74,6 +83,7 @@ func NewReporter(cfg SwarmConfig) *Reporter {
 		cfg:       cfg,
 		byPath:    make(map[string]*pathStats),
 		startedAt: time.Now(),
+		stats:     ExperienceReport{StatusCodes: map[int]int64{}, ResponseCodes: map[int]int64{}, ErrorKinds: map[string]int64{}, CheckFailures: map[string]int64{}},
 	}
 }
 
@@ -83,37 +93,112 @@ func NewReporter(cfg SwarmConfig) *Reporter {
 func (r *Reporter) Ingest(ll LifeLog) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	r.all = append(r.all, ll)
-
-	for _, visit := range ll.Visits {
-		ps, ok := r.byPath[visit.URL]
-		if !ok {
-			ps = &pathStats{URL: visit.URL}
-			r.byPath[visit.URL] = ps
+	r.stats.Sessions++
+	if ll.FailedVisits > 0 {
+		r.stats.SessionsFailed++
+	}
+	if !ll.Streamed {
+		for _, v := range ll.Visits {
+			r.recordVisitLocked(v)
 		}
+	}
+	// Only session summaries and a bounded visit tail are retained in memory.
+	sample := SessionEvidence{ID: ll.Identity.ID, UserAgent: ll.Identity.UserAgent, Language: ll.Identity.Language, Terrain: ll.Terrain, Pack: ll.Pack, Started: ll.BornAt, DurationMS: float64(ll.Duration) / float64(time.Millisecond), Visits: ll.TotalVisits, Failed: ll.FailedVisits, Cancelled: ll.CancelledVisits, ExitReason: ll.ExitReason, Omitted: ll.OmittedVisits}
+	for _, v := range ll.Visits {
+		sample.Tail = append(sample.Tail, evidence(v))
+	}
+	if len(r.stats.RetainedSessions) == 100 {
+		copy(r.stats.RetainedSessions, r.stats.RetainedSessions[1:])
+		r.stats.RetainedSessions = r.stats.RetainedSessions[:99]
+	}
+	r.stats.RetainedSessions = append(r.stats.RetainedSessions, sample)
+}
 
-		ps.Hits++
-		ps.Bytes += visit.BytesIn
-		ps.durations = append(ps.durations, visit.Duration)
-
-		if visit.WaitingRoom.Detected {
-			ps.waitingRoom++
+// RecordVisit updates totals immediately. Exact counts never rely on lifelog
+// delivery or on the bounded detailed session samples.
+func (r *Reporter) RecordVisit(v Visit) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recordVisitLocked(v)
+	if r.trace != nil {
+		r.trace.record(v)
+	}
+}
+func (r *Reporter) recordVisitLocked(v Visit) {
+	key := safeURL(v.URL)
+	ps := r.byPath[key]
+	if ps == nil {
+		if len(r.byPath) >= 1000 {
+			key = "[other paths]"
+			ps = r.byPath[key]
 		}
-		if visit.Error != nil {
-			ps.errors++
+		if ps == nil {
+			ps = &pathStats{URL: key}
+			r.byPath[key] = ps
 		}
-
-		switch {
-		case visit.StatusCode >= 200 && visit.StatusCode < 300:
-			ps.xx2++
-		case visit.StatusCode >= 300 && visit.StatusCode < 400:
-			ps.xx3++
-		case visit.StatusCode >= 400 && visit.StatusCode < 500:
-			ps.xx4++
-		case visit.StatusCode >= 500:
-			ps.xx5++
+	}
+	ps.Hits++
+	ps.Bytes += v.BytesIn
+	if !v.Cancelled {
+		ps.hist.add(v.Duration)
+		r.latency.add(v.Duration)
+		if len(ps.durations) < retainedDurations {
+			ps.durations = append(ps.durations, v.Duration)
 		}
+		if len(r.globalDurations) < retainedDurations {
+			r.globalDurations = append(r.globalDurations, v.Duration)
+		}
+		if v.Timing.TTFB > 0 {
+			r.ttfb.add(v.Timing.TTFB)
+		}
+	}
+	if v.WaitingRoom.Detected {
+		ps.waitingRoom++
+	}
+	if v.Error != nil && !v.Cancelled {
+		ps.errors++
+	}
+	switch {
+	case v.StatusCode >= 200 && v.StatusCode < 300:
+		ps.xx2++
+	case v.StatusCode >= 300 && v.StatusCode < 400:
+		ps.xx3++
+	case v.StatusCode >= 400 && v.StatusCode < 500:
+		ps.xx4++
+	case v.StatusCode >= 500:
+		ps.xx5++
+	}
+	r.stats.Visits++
+	r.stats.StatusCodes[v.StatusCode]++
+	if v.ResponseCodes != nil {
+		for code, count := range v.ResponseCodes {
+			r.stats.ResponseCodes[code] += count
+		}
+	} else {
+		for _, h := range v.Responses {
+			r.stats.ResponseCodes[h.Status]++
+		}
+	}
+	if v.Cancelled {
+		r.stats.Cancelled++
+	} else if v.failed() {
+		r.stats.Failed++
+	}
+	if v.ErrorKind != "" {
+		r.stats.ErrorKinds[v.ErrorKind]++
+	}
+	if !v.Cancelled {
+		for _, c := range v.Page.Checks {
+			if !c.Passed {
+				r.stats.CheckFailures[c.Name]++
+			}
+		}
+	}
+	if v.Expected != "" && !v.Match && v.Error == nil {
+		r.stats.ChecksumChanges++
+	}
+	if v.Page.HTML {
+		r.stats.HTMLPages++
 	}
 }
 
@@ -135,6 +220,9 @@ func (r *Reporter) Ingest(ll LifeLog) {
 // Warning: Write must be called after Run completes. Calling it while
 // lemmings are still running produces a report of incomplete data.
 func (r *Reporter) Write(ctx context.Context) error {
+	if r.trace != nil {
+		r.trace.close()
+	}
 	r.mu.Lock()
 	data := r.buildReportData()
 	r.mu.Unlock()
@@ -150,6 +238,10 @@ func (r *Reporter) Write(ctx context.Context) error {
 	}
 
 	filename := r.buildFilename()
+	jsonData, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
 
 	if len(r.targets) == 0 {
 		// No targets registered — fall back to stdout
@@ -167,6 +259,13 @@ func (r *Reporter) Write(ctx context.Context) error {
 		target := target
 		go func() {
 			err := target.Deliver(ctx, filename, md, html)
+			if err == nil {
+				if jt, ok := target.(interface {
+					DeliverJSON(context.Context, string, []byte) error
+				}); ok {
+					err = jt.DeliverJSON(ctx, filename, jsonData)
+				}
+			}
 			results <- result{name: target.Name(), err: err}
 		}()
 	}
@@ -215,7 +314,8 @@ type ReportData struct {
 	P99     time.Duration
 
 	// Per-path breakdown, sorted by hit count descending
-	Paths []PathReport
+	Experience ExperienceReport
+	Paths      []PathReport
 }
 
 // PathReport is the per-URL section of the report.
@@ -244,8 +344,29 @@ func (r *Reporter) buildReportData() ReportData {
 		TotalLemmings: r.cfg.Terrain * r.cfg.Pack,
 	}
 
-	// Collect all durations for global percentiles
-	var allDurations []time.Duration
+	if !r.endedAt.IsZero() {
+		data.Duration = r.endedAt.Sub(r.startedAt)
+	}
+	data.Config.SMTPPass = ""
+	data.Config.SMTPUser = ""
+	data.Config.SMTPFrom = ""
+	data.Config.SMTPHost = ""
+	data.Config.SaveTo = nil
+	data.Config.Hit = safeURL(data.Config.Hit)
+	data.Experience = r.stats
+	if denominator := r.stats.Visits - r.stats.Cancelled; denominator > 0 {
+		data.Experience.FailureRate = float64(r.stats.Failed) / float64(denominator)
+	}
+	if data.Duration > 0 {
+		data.Experience.Throughput = float64(r.stats.Visits) / data.Duration.Seconds()
+	}
+	data.Experience.P95TTFB = r.ttfb.quantile(95)
+	data.Experience.PercentileMethod = "exact through 4096 visits per series; then fixed histogram, upper bucket bound <=5% above 1us; TTFB always histogram; cancelled visits excluded from latency"
+	if r.trace != nil {
+		data.Experience.TraceDropped = r.trace.dropped.Load()
+		data.Experience.TraceError = r.trace.failure()
+	}
+	allDurations := append([]time.Duration(nil), r.globalDurations...)
 
 	for _, ps := range r.byPath {
 		data.TotalVisits += ps.Hits
@@ -256,7 +377,7 @@ func (r *Reporter) buildReportData() ReportData {
 		data.Total4xx += ps.xx4
 		data.Total5xx += ps.xx5
 		data.TotalErrors += ps.errors
-		allDurations = append(allDurations, ps.durations...)
+		sort.Slice(ps.durations, func(i, j int) bool { return ps.durations[i] < ps.durations[j] })
 
 		pr := PathReport{
 			URL:         ps.URL,
@@ -270,6 +391,10 @@ func (r *Reporter) buildReportData() ReportData {
 			Errors:      ps.errors,
 			P50:         percentile(ps.durations, 50),
 			P99:         percentile(ps.durations, 99),
+		}
+		if ps.hist.Count > retainedDurations {
+			pr.P50 = ps.hist.quantile(50)
+			pr.P99 = ps.hist.quantile(99)
 		}
 		data.Paths = append(data.Paths, pr)
 	}
@@ -292,6 +417,27 @@ func (r *Reporter) buildReportData() ReportData {
 		data.P99 = percentile(allDurations, 99)
 	}
 
+	if r.latency.Count > retainedDurations {
+		data.Fastest = r.latency.Min
+		data.Slowest = r.latency.Max
+		data.P50 = r.latency.quantile(50)
+		data.P90 = r.latency.quantile(90)
+		data.P95 = r.latency.quantile(95)
+		data.P99 = r.latency.quantile(99)
+	}
+	data.Experience.GateFailures = nil
+	if r.cfg.Experience.MaxFailureRate >= 0 && data.Experience.FailureRate > r.cfg.Experience.MaxFailureRate {
+		data.Experience.GateFailures = append(data.Experience.GateFailures, "HTTP visit failure rate exceeded budget")
+	}
+	if r.cfg.Experience.P95Budget > 0 && data.P95 > r.cfg.Experience.P95Budget {
+		data.Experience.GateFailures = append(data.Experience.GateFailures, "HTTP visit p95 exceeded budget")
+	}
+	if data.Experience.Browser != nil && (data.Experience.Browser.Failed > 0 || data.Experience.Browser.Error != "") {
+		data.Experience.GateFailures = append(data.Experience.GateFailures, "browser verification failed")
+	}
+	if data.Experience.TraceError != "" || data.Experience.TraceDropped > 0 || data.Experience.DroppedLifeLogs > 0 {
+		data.Experience.GateFailures = append(data.Experience.GateFailures, "evidence incomplete; inspect dropped records or trace errors")
+	}
 	return data
 }
 
@@ -322,7 +468,9 @@ var markdownTemplate = template.Must(template.New("md").Funcs(templateFuncs).Par
 | total visits    | {{formatInt .TotalVisits}} |
 | total bytes     | {{.TotalBytes | formatBytesInt}} |
 | waiting room    | {{formatInt .TotalWaitingRoom}} lemmings held |
-| errors          | {{formatInt .TotalErrors}} |
+| transport errors | {{formatInt .TotalErrors}} |
+| failed page visits | {{formatInt .Experience.Failed}} |
+| cancelled visits | {{formatInt .Experience.Cancelled}} |
 
 ## response codes
 
@@ -358,7 +506,7 @@ var markdownTemplate = template.Must(template.New("md").Funcs(templateFuncs).Par
 {{end}}
 `))
 
-var htmlTemplate = template.Must(template.New("html").Funcs(templateFuncs).Parse(`<!DOCTYPE html>
+var htmlTemplate = htmltemplate.Must(htmltemplate.New("html").Funcs(htmltemplate.FuncMap(templateFuncs)).Parse(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -398,6 +546,18 @@ tr:hover td { background: var(--surface); }
 .badge-4xx { background: rgba(239,68,68,0.15); color: var(--danger); }
 .badge-5xx { background: rgba(239,68,68,0.25); color: var(--danger); }
 .badge-wr  { background: rgba(108,142,245,0.15); color: var(--accent); }
+p { margin: .7rem 0; line-height: 1.55; }
+details { margin: .65rem 0; padding: .8rem 1rem; border: 1px solid var(--border); border-radius: var(--radius); }
+summary { cursor: pointer; overflow-wrap: anywhere; line-height: 1.5; }
+code,td { overflow-wrap: anywhere; }
+ul { padding-left: 1.2rem; line-height: 1.7; }
+.overview { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: .8rem; margin: 1.5rem 0; }
+.overview > div { padding: 1rem; border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius); }
+.overview strong { display: block; font-size: 1.5rem; margin: .35rem 0; }
+.overview span { color: var(--muted); font-size: .8rem; }
+.verdict { padding: 1rem; border: 1px solid var(--border); border-left: 4px solid var(--success); border-radius: var(--radius); }
+.verdict.fail { border-left-color: var(--danger); }
+@media (max-width:700px) { body {padding:1rem} .overview {grid-template-columns:repeat(2,minmax(0,1fr))} table{display:block;overflow-x:auto} }
 footer { margin-top: 3rem; color: var(--muted); font-size: 0.8rem;
   border-top: 1px solid var(--border); padding-top: 1rem; }
 </style>
@@ -411,6 +571,16 @@ footer { margin-top: 3rem; color: var(--muted); font-size: 0.8rem;
   <a href="{{.Config.Hit}}" style="color:var(--accent)">{{.Config.Hit}}</a>
 </p>
 
+<div class="verdict{{if .Experience.GateFailures}} fail{{end}}">
+  <strong>{{if .Experience.GateFailures}}Run failed its checks{{else}}Run complete{{end}}</strong>
+  <p>{{if .Experience.GateFailures}}{{range .Experience.GateFailures}}{{.}}. {{end}}{{else}}No enabled budget was exceeded. Review observed failures and the configured assertions below.{{end}}</p>
+</div>
+<div class="overview">
+  <div><span>HTTP PAGE FAILURES</span><strong>{{.Experience.Failed}} / {{.TotalVisits}}</strong><span>{{.Experience.Cancelled}} cancelled</span></div>
+  <div><span>BROWSER PAGE FAILURES</span><strong>{{with .Experience.Browser}}{{.Failed}} / {{.Visits}}{{else}}Disabled{{end}}</strong><span>Separate Chromium cohort</span></div>
+  <div><span>HTTP P95</span><strong>{{.P95}}</strong><span>Completed visit latency</span></div>
+  <div><span>HTTP SESSIONS</span><strong>{{.Experience.SessionsStarted}} / {{.TotalLemmings}}</strong><span>Started / planned</span></div>
+</div>
 <h2>configuration</h2>
 <table>
   <tr><th>parameter</th><th>value</th></tr>
@@ -428,7 +598,9 @@ footer { margin-top: 3rem; color: var(--muted); font-size: 0.8rem;
   <tr><td>total visits</td><td>{{formatInt .TotalVisits}}</td></tr>
   <tr><td>total bytes</td><td>{{.TotalBytes | formatBytesInt}}</td></tr>
   <tr><td>waiting room</td><td>{{formatInt .TotalWaitingRoom}} lemmings held</td></tr>
-  <tr><td>errors</td><td>{{formatInt .TotalErrors}}</td></tr>
+  <tr><td>transport errors</td><td>{{formatInt .TotalErrors}}</td></tr>
+  <tr><td>failed page visits</td><td>{{formatInt .Experience.Failed}}</td></tr>
+  <tr><td>cancelled visits</td><td>{{formatInt .Experience.Cancelled}}</td></tr>
 </table>
 
 <h2>response codes</h2>
@@ -498,7 +670,7 @@ func renderMarkdown(data ReportData) (string, error) {
 	if err := markdownTemplate.Execute(&buf, data); err != nil {
 		return "", err
 	}
-	return buf.String(), nil
+	return appendExperienceMarkdown(buf.String(), data.Experience), nil
 }
 
 func renderHTML(data ReportData) (string, error) {
@@ -506,7 +678,11 @@ func renderHTML(data ReportData) (string, error) {
 	if err := htmlTemplate.Execute(&buf, data); err != nil {
 		return "", err
 	}
-	return buf.String(), nil
+	extra, err := renderExperienceHTML(data.Experience)
+	if err != nil {
+		return "", err
+	}
+	return strings.Replace(buf.String(), "<footer>", extra+"<footer>", 1), nil
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

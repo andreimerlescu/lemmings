@@ -1,0 +1,9 @@
+{
+  "name": "deliberately-broken-pages",
+  "steps": [
+    { "name": "healthy", "path": "/", "expect": { "status": [200], "selectors": ["#app"], "contains": ["Welcome"] } },
+    { "name": "soft-error", "path": "/broken", "expect": { "status": [200], "contains": ["Welcome"], "not_contains": ["Something went wrong"] } },
+    { "name": "blank", "path": "/blank", "expect": { "selectors": ["main"] } },
+    { "name": "unavailable", "path": "/unavailable", "expect": { "status": [200] } }
+  ]
+}

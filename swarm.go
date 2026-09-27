@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,7 @@ type SwarmConfig struct {
 	SMTPHost        string
 	SMTPPort        int
 	SMTPUser        string
+	Experience      ExperienceConfig
 	SMTPPass        string
 	SMTPFrom        string
 }
@@ -52,12 +54,14 @@ type SwarmMetrics struct {
 	Total4xx          atomic.Int64
 	Total5xx          atomic.Int64
 	OverflowLogs      atomic.Int64 // lifelogs that hit the overflow channel
+	FailedVisits      atomic.Int64
+	CancelledVisits   atomic.Int64
 	DroppedLogs       atomic.Int64 // lifelogs dropped when both channels full
 }
 
 const (
-	primaryChanCap  = 500_000
-	overflowChanCap = 500_000
+	primaryChanCap  = 4096
+	overflowChanCap = 4096
 )
 
 // Swarm is the top-level coordinator. One swarm per lemmings invocation.
@@ -77,11 +81,15 @@ type Swarm struct {
 	token     string
 	startedAt time.Time
 	mu        sync.Mutex
+	transport *http.Transport
 	observers []Observer
 }
 
 // NewSwarm constructs and indexes the swarm but does not start lemmings yet.
 func NewSwarm(ctx context.Context, cfg SwarmConfig) (*Swarm, error) {
+	if err := cfg.prepareExperience(); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(ctx)
 
 	token, err := generateToken()
@@ -130,12 +138,34 @@ func NewSwarm(ctx context.Context, cfg SwarmConfig) (*Swarm, error) {
 	s.pool = pool
 	fmt.Printf("  indexed %d URLs from %s\n\n", len(pool.URLs), cfg.Hit)
 
+	s.transport = http.DefaultTransport.(*http.Transport).Clone()
+	s.transport.MaxIdleConns = limit * 2
+	s.transport.MaxIdleConnsPerHost = limit
+	s.transport.MaxConnsPerHost = limit
 	s.terrains = make([]*Terrain, cfg.Terrain)
 	for i := int64(0); i < cfg.Terrain; i++ {
 		s.terrains[i] = NewTerrain(i, cfg, pool, s.sendLifeLog, bus, sem, &s.metrics)
+		s.terrains[i].transport = s.transport
 	}
 
 	s.reporter = NewReporter(cfg)
+	if cfg.Experience.TraceFile != "" {
+		trace, err := newTraceWriter(cfg.Experience.TraceFile)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("trace: %w", err)
+		}
+		s.reporter.trace = trace
+	}
+	setupOK := false
+	defer func() {
+		if !setupOK && s.reporter.trace != nil {
+			s.reporter.trace.close()
+		}
+	}()
+	for _, t := range s.terrains {
+		t.recordVisit = s.reporter.RecordVisit
+	}
 	for _, dest := range cfg.SaveTo {
 		target, err := ParseTarget(dest)
 		if err != nil {
@@ -158,6 +188,7 @@ func NewSwarm(ctx context.Context, cfg SwarmConfig) (*Swarm, error) {
 		}
 	}
 
+	setupOK = true
 	return s, nil
 }
 
@@ -207,7 +238,30 @@ func (s *Swarm) sendLifeLog(ll LifeLog) {
 // Blocks until all lemmings are dead and results are collected.
 func (s *Swarm) Run() error {
 	defer s.cancel()
+	if s.transport != nil {
+		defer s.transport.CloseIdleConnections()
+	}
 	s.startedAt = time.Now()
+	s.reporter.startedAt = s.startedAt
+	if s.reporter.trace != nil {
+		defer s.reporter.trace.close()
+	}
+	var browserWG sync.WaitGroup
+	if s.cfg.Experience.BrowserUsers > 0 {
+		browserWG.Add(1)
+		ready := make(chan struct{})
+		go func() {
+			defer browserWG.Done()
+			result := runBrowser(s.ctx, s.cfg, ready)
+			s.reporter.mu.Lock()
+			s.reporter.stats.Browser = &result
+			s.reporter.mu.Unlock()
+		}()
+		<-ready
+	}
+	s.startedAt = time.Now()
+	s.reporter.startedAt = s.startedAt
+	s.events.Emit(Event{Kind: EventSwarmStarted})
 	defer func() {
 		for _, o := range s.observers {
 			if err := o.Detach(); err != nil {
@@ -248,6 +302,14 @@ func (s *Swarm) Run() error {
 	// All lemmings dead — close primary so collector drains and exits
 	close(s.primary)
 	collectorWg.Wait()
+	s.reporter.mu.Lock()
+	s.reporter.endedAt = time.Now()
+	s.reporter.stats.DroppedLifeLogs = s.metrics.DroppedLogs.Load()
+	s.reporter.stats.SessionsStarted = s.metrics.LemmingsCompleted.Load()
+	s.reporter.stats.SessionsNotStarted = s.cfg.Terrain*s.cfg.Pack - s.metrics.LemmingsCompleted.Load()
+	s.reporter.mu.Unlock()
+	browserWG.Wait()
+	s.events.Emit(Event{Kind: EventSwarmDone})
 
 	elapsed := time.Since(s.startedAt).Round(time.Second)
 	fmt.Printf("\n\n  all lemmings have died. elapsed: %s\n", elapsed)
@@ -327,39 +389,20 @@ func (s *Swarm) drainOverflow() {
 
 // ingest updates metrics and hands a LifeLog to the reporter and event bus.
 func (s *Swarm) ingest(ll LifeLog) {
-	s.metrics.LemmingsCompleted.Add(1)
-	s.metrics.LemmingsAlive.Add(-1)
-
-	for _, visit := range ll.Visits {
-		s.metrics.TotalVisits.Add(1)
-		s.metrics.TotalBytes.Add(visit.BytesIn)
-
-		if visit.WaitingRoom.Detected {
-			s.metrics.TotalWaitingRoom.Add(1)
+	// Importing a legacy/unstreamed LifeLog still works. Runtime lemmings update
+	// counters at source, even if the collector's detail channel is saturated.
+	if !ll.LiveRecorded {
+		s.metrics.LemmingsCompleted.Add(1)
+		s.metrics.LemmingsAlive.Add(-1)
+		for _, v := range ll.Visits {
+			s.metrics.recordVisit(v)
 		}
-
-		switch {
-		case visit.StatusCode >= 200 && visit.StatusCode < 300:
-			s.metrics.Total2xx.Add(1)
-		case visit.StatusCode >= 300 && visit.StatusCode < 400:
-			s.metrics.Total3xx.Add(1)
-		case visit.StatusCode >= 400 && visit.StatusCode < 500:
-			s.metrics.Total4xx.Add(1)
-		case visit.StatusCode >= 500:
-			s.metrics.Total5xx.Add(1)
+		if ll.Error != nil {
+			s.metrics.LemmingsFailed.Add(1)
 		}
+		s.events.Emit(Event{Kind: EventLemmingDied, LemmingID: ll.Identity.ID, Terrain: ll.Terrain, Pack: ll.Pack})
 	}
-
-	if ll.Error != nil {
-		s.metrics.LemmingsFailed.Add(1)
-	}
-
 	s.reporter.Ingest(ll)
-	s.events.Emit(Event{
-		Kind:    EventLemmingDied,
-		Terrain: ll.Terrain,
-		Pack:    ll.Pack,
-	})
 }
 
 // tickSTDOUT prints live metrics every second.
@@ -458,9 +501,8 @@ func (s *Swarm) printFinalSummary() {
 		fmt.Printf("    dropped logs:   %s\n", formatInt(dropped))
 		if dropped > 0 {
 			fmt.Println()
-			fmt.Println("  ⚠  dropped logs indicate your -limit is too low")
-			fmt.Println("     for the volume requested. increase -limit or")
-			fmt.Println("     reduce -terrain and -pack for accurate results.")
+			fmt.Println("  ⚠ session details were dropped because collection fell behind")
+			fmt.Println("     visit aggregates remain complete; reduce concurrency or inspect collector cost")
 		}
 		fmt.Println()
 	}

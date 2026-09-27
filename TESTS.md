@@ -1,3 +1,5 @@
+> Historical document from the supplied pre-upgrade snapshot. For current behavior, flags, tests and measurement limits, read [README.md](README.md) and [UPGRADE.md](UPGRADE.md).
+
 # Lemmings Test Suite
 
 > Proving that what lemmings measures is true, and that what it reports can be trusted.

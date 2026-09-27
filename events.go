@@ -67,7 +67,10 @@ type Event struct {
 	Duration   time.Duration
 
 	// Error — non-nil on failure events and failed auth attempts
-	Err error
+	Err       error `json:"-"`
+	ErrorKind string
+	Failed    bool
+	Cancelled bool
 }
 
 // Subscriber is a function that receives events from the bus.
@@ -127,6 +130,9 @@ func (b *EventBus) Subscribe(fn Subscriber) func() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if b.closed || fn == nil {
+		return func() {}
+	}
 	b.subscribers = append(b.subscribers, fn)
 	idx := len(b.subscribers) - 1
 
@@ -148,18 +154,23 @@ func (b *EventBus) Subscribe(fn Subscriber) func() {
 // Warning: Emit is synchronous. All subscriber functions run on the calling
 // goroutine before Emit returns. Slow subscribers block the caller.
 func (b *EventBus) Emit(e Event) {
+	if e.Err != nil {
+		e.ErrorKind = errorKind(e.Err)
+	}
 	if e.OccurredAt.IsZero() {
 		e.OccurredAt = time.Now()
 	}
 
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-
 	if b.closed {
+		b.mu.RUnlock()
 		return
 	}
-
-	for _, fn := range b.subscribers {
+	subscribers := append([]Subscriber(nil), b.subscribers...)
+	b.mu.RUnlock()
+	// Never call application callbacks with the bus mutex held. A subscriber
+	// may unsubscribe itself, subscribe another callback, or close the bus.
+	for _, fn := range subscribers {
 		if fn != nil {
 			fn(e)
 		}

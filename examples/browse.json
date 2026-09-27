@@ -1,0 +1,8 @@
+{
+  "name": "browse-catalog",
+  "steps": [
+    { "name": "home", "path": "/", "expect": { "status": [200], "content_type": "text/html", "title_contains": "Lemmings", "selectors": ["main", "#app"], "contains": ["Welcome"] } },
+    { "name": "catalog", "path": "/catalog", "expect": { "status": [200], "selectors": ["main"], "contains": ["Trail boots"] } },
+    { "name": "product", "path": "/product", "expect": { "status": [200], "selectors": ["#product"], "contains": ["In stock"], "not_contains": ["Something went wrong"] } }
+  ]
+}

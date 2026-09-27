@@ -21,6 +21,10 @@ build:
 install:
 	$(GO) install .
 
+.PHONY: summary
+summary:
+	summarize -s useExpanded,templates/lib,.git,.idea,summaries,lemmings -x useExpanded,jpg,LICENSE
+
 # ── Test ──────────────────────────────────────────────────────────────────────
 
 .PHONY: test
@@ -45,6 +49,20 @@ test-bench:
 
 .PHONY: test-all
 test-all: test test-fuzz test-bench
+
+.PHONY: browser-install browser-test smoke smoke-browser
+browser-install:
+	npm ci --prefix browser
+	npm --prefix browser run install-browser
+
+browser-test:
+	npm --prefix browser test
+
+smoke:
+	python3 scripts/smoke.py
+
+smoke-browser:
+	python3 scripts/smoke.py --browser
 
 .PHONY: test-cover
 test-cover:
@@ -135,3 +153,4 @@ help:
 	@echo "    FUZZTIME=30s make test-fuzz"
 	@echo "    BENCHTIME=10s make test-bench"
 	@echo ""
+

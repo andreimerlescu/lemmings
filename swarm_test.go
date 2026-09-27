@@ -1128,7 +1128,6 @@ func FuzzFormatBytes(f *testing.F) {
 func makeMinimalSwarm(tb testing.TB, primaryCap, overflowCap int) *Swarm {
 	tb.Helper()
 	bus := NewEventBus()
-	metrics := &SwarmMetrics{}
 	cfg := testConfig()
 
 	s := &Swarm{
@@ -1137,7 +1136,6 @@ func makeMinimalSwarm(tb testing.TB, primaryCap, overflowCap int) *Swarm {
 		primary:  make(chan LifeLog, primaryCap),
 		overflow: make(chan LifeLog, overflowCap),
 		events:   bus,
-		metrics:  *metrics,
 		reporter: NewReporter(cfg),
 	}
 	return s

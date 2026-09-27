@@ -1,0 +1,9 @@
+{
+  "name": "lemmings-browser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional Chromium experience verification for Lemmings",
+  "engines": { "node": ">=20" },
+  "scripts": { "install-browser": "playwright install chromium", "check": "node runner.cjs --check", "test": "node --test runner.test.cjs" },
+  "dependencies": { "playwright": "1.62.1" }
+}

@@ -641,3 +641,23 @@ func parseInt(s string) int {
 	}
 	return n
 }
+
+// DeliverJSON adds machine-readable diagnostics to local and S3 reports without
+// breaking third-party targets implementing the original ReportTarget interface.
+func (t *LocalTarget) DeliverJSON(_ context.Context, filename string, data []byte) error {
+	dir, err := t.resolveDir(filename)
+	if err != nil {
+		return err
+	}
+	if err = os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, filename+".json"), data, 0600)
+}
+func (t *S3Target) DeliverJSON(ctx context.Context, filename string, data []byte) error {
+	cfg, err := t.loadAWSConfig(ctx)
+	if err != nil {
+		return err
+	}
+	return t.upload(ctx, s3.NewFromConfig(cfg), t.objectKey(filename+".json"), "application/json", data)
+}
