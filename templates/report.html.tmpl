@@ -1,0 +1,263 @@
+{{define "dark"}}
+  --bg:#241b2f; --surface:#2a2139; --surface-2:#34294f; --line:rgba(132,139,189,.26);
+  --text:#f7f1ff; --muted:#848bbd; --pink:#ff7edb; --magenta:#f92aad; --cyan:#36f9f6;
+  --yellow:#fede5d; --orange:#ff8b39; --green:#72f1b8; --red:#fe4450; --purple:#b893ce;
+  --glow-pink:0 0 2px #100c0f,0 0 6px #dc078e,0 0 14px #fff3; --glow-green:0 0 2px #001716,0 0 10px #72f1b8;
+  --glow-yellow:0 0 2px #001716,0 0 10px #f39f05; --glow-red:0 0 2px #001716,0 0 10px #fc1f2c;
+  --sky:linear-gradient(180deg,#171520 0%,#2a1747 55%,#4b1d52 100%);
+  --sun:linear-gradient(180deg,#fede5d 0%,#ff8b39 45%,#f92aad 100%); --grid:#f92aad;
+{{end}}{{define "light"}}
+  --bg:#fdf8ff; --surface:#ffffff; --surface-2:#f4ecfd; --line:rgba(73,84,149,.2);
+  --text:#241b2f; --muted:#5d5687; --pink:#b8127c; --magenta:#c4007a; --cyan:#00767f;
+  --yellow:#8a6100; --orange:#a84a00; --green:#047a4f; --red:#cc1c33; --purple:#6d3fa0;
+  --glow-pink:none; --glow-green:none; --glow-yellow:none; --glow-red:none;
+  --sky:linear-gradient(180deg,#ffe9f6 0%,#ffd6e8 55%,#ffc2d6 100%);
+  --sun:linear-gradient(180deg,#ffb347 0%,#ff7a59 45%,#e0357f 100%); --grid:#d6246e;
+{{end}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<title>lemmings report — {{.Config.Hit}}</title>
+<style>
+:root { {{template "light"}} --radius:10px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+@media (prefers-color-scheme: dark) { :root:not(:has(#flip:checked)) { {{template "dark"}} } }
+@media (prefers-color-scheme: light) { :root:has(#flip:checked) { {{template "dark"}} } }
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+body { background:var(--bg); color:var(--text); font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+main { max-width:1120px; margin:0 auto; padding:0 20px 48px; }
+a { color:var(--cyan); }
+code,.mono { font-family:var(--mono); font-size:.9em; }
+.muted { color:var(--muted); }
+.flip { position:absolute; opacity:0; pointer-events:none; }
+.flip-label { position:absolute; top:14px; right:16px; z-index:2; cursor:pointer; font-size:12px; letter-spacing:.08em;
+  text-transform:uppercase; color:#fff; background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.35); border-radius:999px; padding:5px 12px; }
+.flip:focus-visible + .flip-label { outline:2px solid var(--cyan); outline-offset:2px; }
+
+/* ── hero: sun, horizon, perspective grid ─────────────────────────────── */
+.hero { position:relative; overflow:hidden; background:var(--sky); padding:56px 20px 0; text-align:center; min-height:300px; }
+.sun { position:absolute; left:50%; top:78px; width:240px; height:240px; margin-left:-120px; border-radius:50%; background:var(--sun);
+  -webkit-mask:linear-gradient(180deg,#000 0 52%,transparent 52% 56%,#000 56% 64%,transparent 64% 69%,#000 69% 76%,transparent 76% 82%,#000 82% 87%,transparent 87% 93%,#000 93% 96%,transparent 96%); mask:linear-gradient(180deg,#000 0 52%,transparent 52% 56%,#000 56% 64%,transparent 64% 69%,#000 69% 76%,transparent 76% 82%,#000 82% 87%,transparent 87% 93%,#000 93% 96%,transparent 96%); opacity:.9; }
+.floor { position:absolute; left:-60%; right:-60%; bottom:0; height:170px; transform:perspective(320px) rotateX(62deg); transform-origin:bottom;
+  background-image:linear-gradient(var(--grid) 2px,transparent 2px),linear-gradient(90deg,var(--grid) 2px,transparent 2px); background-size:64px 32px; opacity:.6;
+  -webkit-mask:linear-gradient(transparent,#000 40%); mask:linear-gradient(transparent,#000 40%); animation:drive 1.6s linear infinite; }
+@keyframes drive { to { background-position:0 32px; } }
+.hero h1 { position:relative; font-size:clamp(40px,8vw,78px); letter-spacing:.12em; font-weight:800; color:#fff;
+  text-shadow:var(--glow-pink); font-style:italic; }
+.hero .sub { position:relative; color:#fff; opacity:.92; margin-top:4px; font-size:14px; }
+.hero .sub a { color:#fff; }
+.hero-pad { height:150px; }
+
+/* ── verdict ───────────────────────────────────────────────────────────── */
+.verdict { margin:-40px auto 24px; position:relative; background:var(--surface); border:1px solid var(--line); border-radius:16px;
+  padding:24px 28px; display:grid; grid-template-columns:auto 1fr; gap:8px 28px; align-items:center; box-shadow:0 18px 50px rgba(20,10,40,.25); }
+.verdict .score { font-size:64px; font-weight:800; line-height:1; color:var(--green); text-shadow:var(--glow-green); font-variant-numeric:tabular-nums; }
+.verdict.warn .score { color:var(--yellow); text-shadow:var(--glow-yellow); } .verdict.bad .score { color:var(--red); text-shadow:var(--glow-red); }
+.verdict .score small { display:block; font-size:12px; letter-spacing:.2em; text-transform:uppercase; color:var(--muted); text-shadow:none; margin-top:6px; }
+.verdict h2 { font-size:22px; } .verdict p { color:var(--muted); }
+.gates { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+.gate { border:1px solid var(--line); border-radius:999px; padding:4px 12px; font-size:13px; }
+.gate.pass { color:var(--green); border-color:var(--green); } .gate.fail { color:var(--red); border-color:var(--red); font-weight:700; }
+
+/* ── tiles, cards, tables ─────────────────────────────────────────────── */
+.kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:28px; }
+@media (max-width:760px) { .kpis { grid-template-columns:repeat(2,1fr); } }
+.kpi { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; }
+.kpi span { display:block; font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+.kpi strong { display:block; font-size:24px; margin-top:4px; font-variant-numeric:tabular-nums; }
+.kpi em { font-style:normal; font-size:12px; color:var(--muted); }
+h2.section { font-size:13px; letter-spacing:.2em; text-transform:uppercase; color:var(--pink); margin:34px 0 12px; }
+.card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px; }
+.grid-2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:16px; }
+.scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:14px; font-variant-numeric:tabular-nums; }
+th { text-align:left; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--line); }
+td { padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+tr:last-child td { border-bottom:none; }
+td.num,th.num { text-align:right; white-space:nowrap; }
+td.url { font-family:var(--mono); font-size:13px; overflow-wrap:anywhere; }
+.bar { height:6px; border-radius:3px; background:var(--pink); opacity:.8; min-width:2px; }
+.chip { display:inline-block; font-family:var(--mono); font-size:12px; font-weight:700; padding:1px 7px; border-radius:6px; border:1px solid currentColor; }
+.c2xx { color:var(--green); } .c3xx { color:var(--cyan); } .c4xx { color:var(--yellow); } .c5xx { color:var(--red); } .cunknown { color:var(--purple); }
+.fail-text { color:var(--red); } .warn-text { color:var(--yellow); }
+
+/* ── charts ────────────────────────────────────────────────────────────── */
+.chart { width:100%; height:auto; display:block; margin:6px 0 18px; }
+.chart .grid { stroke:var(--line); stroke-width:1; }
+.chart .axis,.chart .unit { fill:var(--muted); font-size:12px; font-family:var(--mono); }
+.chart .line { fill:none; stroke-width:2.2; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+.chart .dash { stroke-dasharray:6 5; }
+.chart .area { stroke:none; opacity:.18; }
+.s-rate { stroke:var(--cyan); fill:var(--cyan); } .s-fail { fill:var(--red); opacity:.85; }
+.s-alive { stroke:var(--yellow); } .s-p95 { stroke:var(--pink); } .s-p50 { stroke:var(--cyan); }
+.legend { display:flex; flex-wrap:wrap; gap:16px; font-size:13px; color:var(--muted); }
+.legend i { display:inline-block; width:18px; height:3px; border-radius:2px; vertical-align:middle; margin-right:6px; }
+
+/* ── lemming lives ─────────────────────────────────────────────────────── */
+.lives { display:grid; gap:16px; }
+.life summary { display:flex; flex-wrap:wrap; gap:4px 14px; align-items:baseline; cursor:pointer; list-style:none; }
+.life summary::-webkit-details-marker { display:none; }
+.life summary::after { content:"＋"; margin-left:auto; color:var(--muted); } .life[open] summary::after { content:"－"; }
+.life[open] summary { margin-bottom:10px; }
+.steps .page-title { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; font-size:13px; }
+.life h3 { font-size:18px; } .life h3 span { color:var(--pink); }
+.life .tag { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--cyan); }
+.life .meta { color:var(--muted); font-size:13px; }
+.steps td { padding:5px 8px; }
+.steps td.bar-cell { width:30%; }
+.steps tr.failed td { background:rgba(254,68,80,.07); }
+.steps .why { color:var(--red); font-size:12px; }
+footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px; }
+
+@media (max-width:640px) { .verdict { grid-template-columns:1fr; text-align:center; } .gates { justify-content:center; } .hero-pad { height:130px; } }
+@media (prefers-reduced-motion: reduce) { .floor { animation:none; } }
+@media print { .floor { animation:none; } .flip-label { display:none; } }
+</style>
+</head>
+<body>
+<input type="checkbox" id="flip" class="flip" aria-label="Switch light or dark theme">
+<label for="flip" class="flip-label">◐ theme</label>
+
+<header class="hero">
+  <div class="sun" aria-hidden="true"></div>
+  <div class="floor" aria-hidden="true"></div>
+  <h1>LEMMINGS</h1>
+  <p class="sub">
+    <a href="{{.Config.Hit}}">{{.Config.Hit}}</a> · {{.GeneratedAt.Format "2006-01-02 15:04 MST"}} · {{round .Duration}}{{if .Journey}} · journey <strong>{{.Journey}}</strong>{{end}}
+  </p>
+  <div class="hero-pad"></div>
+</header>
+
+<main>
+<section class="verdict{{if lt .RescuedPercent 50.0}} bad{{else if lt .RescuedPercent 99.95}} warn{{end}}">
+  <div class="score">{{pct100 .RescuedPercent}}<small>rescued</small></div>
+  <div>
+    <h2>{{rescueLine .}}</h2>
+    <p>{{formatInt .Rescued}} of {{formatInt .Sessions}} lemmings lived their whole life without a single failed page.
+    {{if .Gates}}Verdict: <strong{{if eq .Verdict "FAILED"}} class="fail-text"{{end}}>{{.Verdict}}</strong>.{{else}}No CI gates were set.{{end}}</p>
+  </div>
+  {{if .Gates}}<div class="gates">{{range .Gates}}<span class="gate {{if .Passed}}pass{{else}}fail{{end}}">{{if .Passed}}✓{{else}}✗{{end}} {{.Name}} {{.Observed}} (limit {{.Limit}})</span>{{end}}</div>{{end}}
+</section>
+
+<section class="kpis">
+  <div class="kpi"><span>visits</span><strong>{{formatInt .TotalVisits}}</strong><em>{{float1 .VisitsPerSecond}} / s</em></div>
+  <div class="kpi"><span>failed</span><strong{{if .FailedVisits}} class="fail-text"{{end}}>{{pct .FailureRate}}</strong><em>{{formatInt .FailedVisits}} visits</em></div>
+  <div class="kpi"><span>p50</span><strong>{{ms .P50}}</strong><em>mean {{ms .Mean}}</em></div>
+  <div class="kpi"><span>p95</span><strong>{{ms .P95}}</strong><em>ttfb {{ms .TTFBP95}}</em></div>
+  <div class="kpi"><span>p99</span><strong>{{ms .P99}}</strong><em>max {{ms .Slowest}}</em></div>
+  <div class="kpi"><span>lemmings</span><strong>{{formatInt .LemmingsStarted}}</strong><em>of {{formatInt .TotalLemmings}} planned</em></div>
+  <div class="kpi"><span>transferred</span><strong>{{.TotalBytes | formatBytesInt}}</strong><em>decoded bodies</em></div>
+  <div class="kpi"><span>waiting room</span><strong{{if .Room.Held}} class="warn-text"{{end}}>{{formatInt .Room.Held}}</strong><em>{{if .Room.Held}}p95 wait {{round .Room.P95Wait}}{{else}}never queued{{end}}</em></div>
+</section>
+
+<h2 class="section">The run</h2>
+<div class="card">
+  <div class="legend">
+    <span><i style="background:var(--cyan)"></i>visits / s</span>
+    <span><i style="background:var(--red)"></i>failures / s</span>
+    <span><i style="background:var(--yellow)"></i>lemmings alive</span>
+    <span><i style="background:var(--pink)"></i>p95 latency</span>
+    <span><i style="background:var(--cyan)"></i>p50 latency</span>
+  </div>
+  {{timelineSVG .Timeline}}
+</div>
+
+<div class="grid-2">
+  <div>
+    <h2 class="section">Response codes</h2>
+    <div class="card"><table>
+      <tr><th>status</th><th class="num">count</th><th></th></tr>
+      {{range .StatusCodes}}<tr><td><span class="chip c{{statusClass (atoi .Label)}}">{{.Label}}</span></td><td class="num">{{formatInt .Count}}</td><td style="width:45%"><div class="bar" style="width:{{width .Share}}"></div></td></tr>
+      {{else}}<tr><td colspan="3" class="muted">No visits were recorded.</td></tr>{{end}}
+    </table></div>
+  </div>
+  <div>
+    <h2 class="section">What went wrong</h2>
+    <div class="card">
+      {{if or .ErrorKinds .FailedChecks}}<table>
+        <tr><th>cause</th><th class="num">count</th></tr>
+        {{range .ErrorKinds}}<tr><td>error: <code>{{.Label}}</code></td><td class="num">{{formatInt .Count}}</td></tr>{{end}}
+        {{range .FailedChecks}}<tr><td>check: <code>{{.Label}}</code></td><td class="num">{{formatInt .Count}}</td></tr>{{end}}
+      </table>{{else}}<p class="muted">Nothing. Every completed visit passed every check.</p>{{end}}
+      {{if .CancelledVisits}}<p class="muted" style="margin-top:10px">{{formatInt .CancelledVisits}} visits were cut short when a lemming's life ended; they are not counted as failures or in latency.</p>{{end}}
+    </div>
+  </div>
+</div>
+
+{{if .Room.Held}}
+<h2 class="section">Waiting room</h2>
+<section class="kpis">
+  <div class="kpi"><span>held</span><strong>{{formatInt .Room.Held}}</strong><em>visits queued</em></div>
+  <div class="kpi"><span>died in line</span><strong{{if .Room.DiedInLine}} class="fail-text"{{end}}>{{formatInt .Room.DiedInLine}}</strong><em>never admitted</em></div>
+  <div class="kpi"><span>deepest</span><strong>#{{.Room.MaxPosition}}</strong><em>queue position</em></div>
+  <div class="kpi"><span>mean wait</span><strong>{{round .Room.MeanWait}}</strong><em>p95 {{round .Room.P95Wait}}</em></div>
+</section>
+{{end}}
+
+{{if .Notable}}
+<h2 class="section">Lemmings worth meeting</h2>
+<div class="lives">
+{{range $i, $l := .Notable}}{{with $l}}
+  <details class="card life"{{if eq $i 0}} open{{end}}>
+    <summary>
+      <span class="tag">{{.Title}}</span>
+      <h3>{{.Name}} <span class="mono">#{{shortID .ID}}</span></h3>
+      <span class="meta">{{.Why}} · {{.Persona}} · {{lang .Language}} · terrain {{.Terrain}}, pack {{.Pack}} · lived {{round .Lifespan}} · {{formatInt .Visits}} pages{{if .Failed}}, <span class="fail-text">{{formatInt .Failed}} failed</span>{{end}} · left: {{.ExitReason}}</span>
+    </summary>
+    <div class="scroll"><table class="steps">
+      {{range .Steps}}<tr{{if .Failed}} class="failed"{{end}}>
+        <td class="num muted">{{.Seq}}</td>
+        <td class="url">{{if .Step}}<strong>{{.Step}}</strong> {{end}}{{.Path}}{{if .Title}}<br><span class="muted page-title">{{.Title}}</span>{{end}}{{if .Why}}<br><span class="why">{{.Why}}</span>{{end}}</td>
+        <td>{{if .Status}}<span class="chip c{{statusClass .Status}}">{{.Status}}</span>{{else}}<span class="chip cunknown">—</span>{{end}}</td>
+        <td class="bar-cell"><div class="bar" style="width:{{width .Bar}};{{if .Failed}}background:var(--red){{end}}"></div></td>
+        <td class="num">{{float1 .Millis}} ms{{if .QueuedMS}}<br><span class="muted">queued {{float1 .QueuedMS}} ms</span>{{end}}</td>
+      </tr>{{end}}
+    </table></div>
+    {{if .Omitted}}<p class="muted" style="margin-top:8px">{{formatInt .Omitted}} earlier pages not shown.</p>{{end}}
+  </details>
+{{end}}{{end}}
+</div>
+{{end}}
+
+<h2 class="section">Per-path breakdown</h2>
+<div class="card scroll"><table>
+  <tr><th>path</th><th class="num">hits</th><th></th><th class="num">p50</th><th class="num">p95</th><th class="num">p99</th><th class="num">2xx</th><th class="num">3xx</th><th class="num">4xx</th><th class="num">5xx</th><th class="num">failed</th><th class="num">bytes</th></tr>
+  {{range .Paths}}<tr>
+    <td class="url">{{.URL}}</td><td class="num">{{formatInt .Hits}}</td><td style="width:90px"><div class="bar" style="width:{{width .HitShare}}"></div></td>
+    <td class="num">{{ms .P50}}</td><td class="num">{{ms .P95}}</td><td class="num">{{ms .P99}}</td>
+    <td class="num c2xx">{{formatInt .XX2}}</td><td class="num c3xx">{{formatInt .XX3}}</td><td class="num c4xx">{{formatInt .XX4}}</td><td class="num c5xx">{{formatInt .XX5}}</td>
+    <td class="num{{if .Failed}} fail-text{{end}}">{{formatInt .Failed}}</td><td class="num muted">{{.Bytes}}</td>
+  </tr>{{end}}
+</table></div>
+
+<div class="grid-2">
+  <div>
+    <h2 class="section">Configuration</h2>
+    <div class="card"><table>
+      <tr><td>terrain × pack</td><td class="num">{{formatInt .Config.Terrain}} × {{formatInt .Config.Pack}} = {{formatInt .TotalLemmings}}</td></tr>
+      <tr><td>limit</td><td class="num">{{.Config.Limit}}</td></tr>
+      <tr><td>until · ramp</td><td class="num">{{.Config.Until}} · {{.Config.Ramp}}</td></tr>
+      <tr><td>think time</td><td class="num">{{.Config.ThinkMin}} – {{.Config.ThinkMax}}</td></tr>
+      <tr><td>navigation</td><td class="num">{{if .Journey}}journey “{{.Journey}}”{{else}}{{.Config.Navigation}}{{end}}</td></tr>
+      <tr><td>max pages</td><td class="num">{{if .Config.MaxPages}}{{.Config.MaxPages}}{{else}}until lifespan{{end}}</td></tr>
+      <tr><td>strict checksum</td><td class="num">{{.Config.StrictChecksum}}</td></tr>
+    </table></div>
+  </div>
+  <div>
+    <h2 class="section">Evidence</h2>
+    <div class="card"><table>
+      <tr><td>percentiles</td><td>{{.PercentileMethod}}</td></tr>
+      <tr><td>lemmings never started</td><td class="num">{{formatInt .LemmingsUnborn}}</td></tr>
+      <tr><td>checksum changes</td><td class="num">{{formatInt .ChecksumChanges}}{{if not .Config.StrictChecksum}} <span class="muted">(informational)</span>{{end}}</td></tr>
+      <tr><td>life records dropped</td><td class="num{{if .DroppedLogs}} warn-text{{end}}">{{formatInt .DroppedLogs}}</td></tr>
+      {{if .TraceFile}}<tr><td>trace file</td><td><code>{{.TraceFile}}</code><br>{{formatInt .TraceWritten}} written{{if .TraceDropped}}, <span class="warn-text">{{formatInt .TraceDropped}} dropped</span>{{end}}{{if .TraceError}}<br><span class="fail-text">{{.TraceError}}</span>{{end}}</td></tr>{{end}}
+      {{range .ExitReasons}}<tr><td>left by {{.Label}}</td><td class="num">{{formatInt .Count}}</td></tr>{{end}}
+    </table></div>
+  </div>
+</div>
+
+<footer>generated by lemmings v{{.Version}} · {{.GeneratedAt.Format "2006-01-02 15:04:05 MST"}}</footer>
+</main>
+</body>
+</html>

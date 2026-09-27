@@ -818,9 +818,11 @@ func TestSnapshot_FormatsBytesHumanReadable(t *testing.T) {
 
 // ── handleEvent ───────────────────────────────────────────────────────────────
 
-// TestHandleEvent_BroadcastsToClients verifies that handleEvent fans the
-// event out to all connected SSE clients via the client registry.
-func TestHandleEvent_BroadcastsToClients(t *testing.T) {
+// TestHandleEvent_ReachesClientsInNextFrame verifies that an event
+// handled by the dashboard reaches connected clients in the next stage
+// frame. Events are batched into frames rather than broadcast one by one,
+// so the browser's work stays bounded however large the swarm.
+func TestHandleEvent_ReachesClientsInNextFrame(t *testing.T) {
 	d, _ := newTestDashboard(t)
 
 	// Register a client manually
@@ -835,14 +837,28 @@ func TestHandleEvent_BroadcastsToClients(t *testing.T) {
 		Pack:      2,
 		URL:       "http://example.com/",
 	})
+	d.sendFrame(false)
 
 	select {
 	case evt := <-ch:
-		if evt.Kind != string(EventLemmingBorn) {
-			t.Errorf("expected kind %q, got %q", EventLemmingBorn, evt.Kind)
+		if evt.Kind != "frame" {
+			t.Fatalf("expected kind %q, got %q", "frame", evt.Kind)
+		}
+		f, ok := evt.Data.(frame)
+		if !ok {
+			t.Fatalf("expected frame data, got %T", evt.Data)
+		}
+		found := false
+		for _, ev := range f.Events {
+			if ev.Kind == "b" && ev.ID == "test-lemming" && ev.Terrain == 1 {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("frame should announce the lemming's birth, got %+v", f.Events)
 		}
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("handleEvent did not broadcast to registered client")
+		t.Fatal("sendFrame did not broadcast to registered client")
 	}
 }
 

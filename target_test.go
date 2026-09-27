@@ -97,12 +97,7 @@ func TestLocalTarget_Deliver_CreatesFiles(t *testing.T) {
 	dir := t.TempDir()
 	lt := &LocalTarget{basePath: dir}
 
-	err := lt.Deliver(
-		context.Background(),
-		"lemmings.2026.04.14.example.com",
-		"# markdown content",
-		"<html><body>html content</body></html>",
-	)
+	err := lt.Deliver(context.Background(), report("lemmings.2026.04.14.example.com", "# markdown content", "<html><body>html content</body></html>"))
 	if err != nil {
 		t.Fatalf("Deliver error: %v", err)
 	}
@@ -128,7 +123,7 @@ func TestLocalTarget_Deliver_FileContents(t *testing.T) {
 	md := "# test markdown"
 	html := "<html><body>test html</body></html>"
 
-	if err := lt.Deliver(context.Background(), "lemmings.2026.04.14.localhost-8080", md, html); err != nil {
+	if err := lt.Deliver(context.Background(), report("lemmings.2026.04.14.localhost-8080", md, html)); err != nil {
 		t.Fatalf("Deliver error: %v", err)
 	}
 
@@ -157,7 +152,7 @@ func TestLocalTarget_Deliver_CreatesDirectoryTree(t *testing.T) {
 	nested := filepath.Join(base, "deep", "nested", "path")
 	lt := &LocalTarget{basePath: nested}
 
-	err := lt.Deliver(context.Background(), "lemmings.2026.04.14.example.com", "md", "html")
+	err := lt.Deliver(context.Background(), report("lemmings.2026.04.14.example.com", "md", "html"))
 	if err != nil {
 		t.Fatalf("Deliver should create missing directories: %v", err)
 	}
@@ -170,10 +165,10 @@ func TestLocalTarget_Deliver_OverwritesExisting(t *testing.T) {
 	lt := &LocalTarget{basePath: dir}
 
 	filename := "lemmings.2026.04.14.example.com"
-	if err := lt.Deliver(context.Background(), filename, "first", "first html"); err != nil {
+	if err := lt.Deliver(context.Background(), report(filename, "first", "first html")); err != nil {
 		t.Fatalf("first Deliver error: %v", err)
 	}
-	if err := lt.Deliver(context.Background(), filename, "second", "second html"); err != nil {
+	if err := lt.Deliver(context.Background(), report(filename, "second", "second html")); err != nil {
 		t.Fatalf("second Deliver error: %v", err)
 	}
 
@@ -525,7 +520,7 @@ func TestMailTarget_Deliver_SMTPFailure(t *testing.T) {
 		},
 	}
 
-	err := target.Deliver(context.Background(), "filename", "md", "html")
+	err := target.Deliver(context.Background(), report("filename", "md", "html"))
 	if err == nil {
 		t.Error("expected error when SMTP server is unreachable")
 	}
@@ -834,7 +829,7 @@ func BenchmarkLocalTarget_Deliver(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		filename := fmt.Sprintf("lemmings.2026.04.14.bench-%d.com", i)
-		lt.Deliver(context.Background(), filename, md, html)
+		lt.Deliver(context.Background(), report(filename, md, html))
 	}
 }
 
@@ -867,11 +862,16 @@ type mockTarget struct {
 }
 
 func (m *mockTarget) Name() string { return m.name }
-func (m *mockTarget) Deliver(ctx context.Context, filename, md, html string) error {
+func (m *mockTarget) Deliver(ctx context.Context, r RenderedReport) error {
 	if m.deliverFn != nil {
-		return m.deliverFn(ctx, filename, md, html)
+		return m.deliverFn(ctx, r.Filename, r.Markdown, r.HTML)
 	}
 	return nil
+}
+
+// report builds a RenderedReport for delivery tests.
+func report(filename, md, html string) RenderedReport {
+	return RenderedReport{Filename: filename, Markdown: md, HTML: html}
 }
 
 // startTestSMTPServer starts a minimal TCP listener that accepts one
@@ -936,13 +936,4 @@ func acceptOneSMTPMessage(l net.Listener, received chan<- []byte) {
 			conn.Write([]byte("250 OK\r\n"))
 		}
 	}
-}
-
-// min returns the smaller of two ints. Used for safe string truncation
-// in error messages.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
