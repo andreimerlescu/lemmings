@@ -21,6 +21,10 @@ const (
 	// to be fetched during pool indexing.
 	indexTimeout = 10 * time.Second
 
+	// indexBudget bounds the whole indexing phase: sitemap discovery, the
+	// crawl (itself capped at 5 minutes) and checksumming every URL.
+	indexBudget = 10 * time.Minute
+
 	// indexConcurrency is how many URLs we fetch in parallel
 	// during pool construction. Kept conservative — we don't want
 	// to load test the target during the indexing phase.
@@ -59,14 +63,18 @@ func BuildURLPool(
 		return nil, fmt.Errorf("invalid hit URL %q: %w", hit, err)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, indexBudget)
 	defer cancel()
-	client := &http.Client{Timeout: indexTimeout, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 10 || !sameOrigin(hit, req.URL.String()) {
-			return fmt.Errorf("index redirect outside scope or redirect limit exceeded")
-		}
-		return nil
-	}}
+	client := &http.Client{
+		Timeout: indexTimeout,
+		// Indexing never follows a redirect off the target's origin.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects || !sameOrigin(hit, req.URL.String()) {
+				return fmt.Errorf("index redirect outside scope or redirect limit exceeded")
+			}
+			return nil
+		},
+	}
 
 	pool := &URLPool{
 		Origin:    origin,
@@ -401,8 +409,10 @@ func scopeToOrigin(origin string, urls []string) []string {
 	return scoped
 }
 
-// resolveURL resolves an href value against the origin.
-// Returns empty string if the result is off-origin or unparseable.
+// resolveURL resolves an href against base — an origin or the URL of the
+// page the href appeared on. Returns "" if the result is off-origin,
+// unparseable, or a link a lemming never follows (fragment, mailto:,
+// javascript:, tel:).
 func resolveURL(origin, href string) string {
 	href = strings.TrimSpace(href)
 
@@ -430,12 +440,14 @@ func resolveURL(origin, href string) string {
 	// Strip fragment — lemmings don't care about anchors
 	resolved.Fragment = ""
 
-	// Enforce origin scope — no subdomains, no external domains
-	if !sameOrigin(resolved.String(), base.String()) {
+	// Enforce origin scope — no subdomains, no external domains. The
+	// prefix check also rejects hosts that only match once re-escaped.
+	out := resolved.String()
+	if !sameOrigin(out, base.String()) || !strings.HasPrefix(out, base.Scheme+"://"+base.Host) {
 		return ""
 	}
 
-	return resolved.String()
+	return out
 }
 
 // parseOrigin extracts the scheme+host from a URL string,

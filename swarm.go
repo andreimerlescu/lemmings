@@ -21,44 +21,47 @@ import (
 // built in code only needs the fields it cares about. Call validate (NewSwarm
 // does) to apply defaults and reject impossible combinations.
 type SwarmConfig struct {
-	Hit             string
-	Terrain         int64
-	Pack            int64
-	Limit           int
-	Until           time.Duration
-	Ramp            time.Duration
-	Crawl           bool
-	CrawlDepth      int
-	DashboardPort   int
-	TTY             bool
-	Color           bool
-	Version         string
-	Observe         bool
-	MetricsPort     int
-	MetricsURLLabel string
-	SaveTo          []string
-	SMTPHost        string
-	SMTPPort        int
-	SMTPUser        string
-	SMTPPass        string
-	SMTPFrom        string
+	Hit             string        `json:"hit"`
+	Terrain         int64         `json:"terrain"`
+	Pack            int64         `json:"pack"`
+	Limit           int           `json:"limit"`
+	Until           time.Duration `json:"until_ns"`
+	Ramp            time.Duration `json:"ramp_ns"`
+	Crawl           bool          `json:"crawl"`
+	CrawlDepth      int           `json:"crawl_depth"`
+	DashboardPort   int           `json:"-"`
+	TTY             bool          `json:"-"`
+	Color           bool          `json:"-"`
+	Version         string        `json:"version"`
+	Observe         bool          `json:"observe"`
+	MetricsPort     int           `json:"-"`
+	MetricsURLLabel string        `json:"metrics_url_label"`
+
+	// Delivery settings never appear in reports: they hold credentials,
+	// addresses and bucket names that a shared report must not leak.
+	SaveTo   []string `json:"-"`
+	SMTPHost string   `json:"-"`
+	SMTPPort int      `json:"-"`
+	SMTPUser string   `json:"-"`
+	SMTPPass string   `json:"-"`
+	SMTPFrom string   `json:"-"`
 
 	// Behaviour of each lemming.
-	ThinkMin       time.Duration // minimum pause between pages
-	ThinkMax       time.Duration // maximum pause between pages
-	RequestTimeout time.Duration // per request; 0 means defaultRequestTimeout
-	MaxBodyBytes   int64         // per response; 0 means defaultMaxBodyBytes
-	MaxPages       int           // per lemming; 0 means until -until expires
-	Navigation     string        // NavigationLinks or NavigationRandom
-	StrictChecksum bool          // a checksum change fails the visit
-	JourneyFile    string        // path to a -journey JSON file
-	Journey        *Journey      // loaded from JourneyFile by validate
-	TraceFile      string        // JSONL file receiving every visit
+	ThinkMin       time.Duration `json:"think_min_ns"`       // minimum pause between pages
+	ThinkMax       time.Duration `json:"think_max_ns"`       // maximum pause between pages
+	RequestTimeout time.Duration `json:"request_timeout_ns"` // per request; 0 means defaultRequestTimeout
+	MaxBodyBytes   int64         `json:"max_body_bytes"`     // per response; 0 means defaultMaxBodyBytes
+	MaxPages       int           `json:"max_pages"`          // per lemming; 0 means until -until expires
+	Navigation     string        `json:"navigation"`         // NavigationLinks or NavigationRandom
+	StrictChecksum bool          `json:"strict_checksum"`    // a checksum change fails the visit
+	JourneyFile    string        `json:"-"`                  // path to a -journey JSON file
+	Journey        *Journey      `json:"-"`                  // loaded from JourneyFile by validate
+	TraceFile      string        `json:"-"`                  // JSONL file receiving every visit
 
 	// CI gates. A gate that trips makes the run exit with code 2.
-	FailureGate    bool          // enforce MaxFailureRate
-	MaxFailureRate float64       // 0..1 share of non-cancelled visits
-	P95Budget      time.Duration // 0 disables the latency gate
+	FailureGate    bool          `json:"failure_gate"`     // enforce MaxFailureRate
+	MaxFailureRate float64       `json:"max_failure_rate"` // 0..1 share of non-cancelled visits
+	P95Budget      time.Duration `json:"p95_budget_ns"`    // 0 disables the latency gate
 }
 
 // validate applies defaults and rejects configurations that cannot run.
