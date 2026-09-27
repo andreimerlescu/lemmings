@@ -26,6 +26,10 @@ build-check: vet fmt-check
 install:
 	$(GO) install .
 
+.PHONY: summary
+summary:
+	summarize -s useExpanded,templates/lib,.git,.idea,summaries,lemmings -x useExpanded,jpg,LICENSE
+
 # ── Test ──────────────────────────────────────────────────────────────────────
 
 .PHONY: test
