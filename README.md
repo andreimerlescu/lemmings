@@ -5,6 +5,8 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/andreimerlescu/lemmings.svg)](https://pkg.go.dev/github.com/andreimerlescu/lemmings)
 [![Go Report Card](https://goreportcard.com/badge/github.com/andreimerlescu/lemmings)](https://goreportcard.com/report/github.com/andreimerlescu/lemmings)
 [![Apache 2.0 License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+![Unique](https://counthis.app/github?repository=andreimerlescu/lemmings&label=Unique) 
+![Visitors](https://counthis.app/g/qyjy5vwjtjgbjfzy)
 
 ![The lemmings dashboard: lemmings walk a synthwave terrain while charts, a waiting room queue and a followed lemming's life update live](docs/images/dashboard-dark.jpg)
 
