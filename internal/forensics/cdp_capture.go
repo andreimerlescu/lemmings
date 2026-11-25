@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
 	"github.com/andreimerlescu/lemmings/v2/internal/journey"
 	"github.com/andreimerlescu/lemmings/v2/internal/secrets"
+	"golang.org/x/net/publicsuffix"
 )
 
 const (
@@ -66,10 +68,11 @@ func (c *HTTPFallbackCapturer) Capture(_ context.Context, req CaptureRequest) (A
 
 // CDPOptions configures the pure-Go Headless Chromium capturer.
 type CDPOptions struct {
-	ChromeBin string
-	CDPURL    string
-	Format    string // "jpeg" (default) or "png"
-	Timeout   time.Duration
+	ChromeBin      string
+	CDPURL         string
+	AllowRemoteCDP bool
+	Format         string // "jpeg" (default) or "png"
+	Timeout        time.Duration
 }
 
 // CDPCapturer captures real screenshots, JS console output, and rendered DOM
@@ -95,7 +98,7 @@ func NewCDPCapturer(ctx context.Context, opts CDPOptions) (*CDPCapturer, error) 
 	var b *browserInstance
 	var err error
 	if strings.TrimSpace(opts.CDPURL) != "" {
-		b, err = connectRemoteBrowser(ctx, opts.CDPURL)
+		b, err = connectRemoteBrowser(ctx, opts.CDPURL, opts.AllowRemoteCDP)
 	} else {
 		bin, findErr := FindBrowser(opts.ChromeBin)
 		if findErr != nil {
@@ -238,8 +241,12 @@ func (c *CDPCapturer) Capture(ctx context.Context, req CaptureRequest) (Artifact
 		art.CaptureWarning = "navigation error: " + navRes.ErrorText
 	}
 
-	// Collect events until loadEventFired + short settle window (or timeout).
-	consoleEntries := collectSessionEvents(capCtx, evCh, cdpSettleWindow)
+	// Collect events until loadEventFired + short settle window (or event budget),
+	// reserving a grace window for final-origin check, DOM extraction, and screenshot
+	// capture so pages that never emit Page.loadEventFired still produce a screenshot.
+	eventCtx, eventCancel := eventCollectionContext(capCtx, c.timeout)
+	consoleEntries := collectSessionEvents(eventCtx, evCh, cdpSettleWindow)
+	eventCancel()
 	art.Console = consoleEntries
 	art.ConsoleErrors = countConsoleErrors(consoleEntries)
 
@@ -268,14 +275,44 @@ func (c *CDPCapturer) Capture(ctx context.Context, req CaptureRequest) (Artifact
 	return art, nil
 }
 
+func eventCollectionContext(capCtx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	dl, ok := capCtx.Deadline()
+	if !ok {
+		return capCtx, func() {}
+	}
+	grace := min(2*time.Second, timeout/4)
+	if grace <= 0 {
+		return capCtx, func() {}
+	}
+	if rem := time.Until(dl); rem > grace {
+		return context.WithDeadline(capCtx, dl.Add(-grace))
+	}
+	// Already inside the grace window: stop waiting for loadEventFired immediately
+	// so the remaining budget goes to origin check, DOM extraction, and screenshot.
+	ctx, cancel := context.WithCancel(capCtx)
+	cancel()
+	return ctx, cancel
+}
+
 func injectReplayCookies(ctx context.Context, conn *cdpConn, sid, targetURL string, cookies []ReplayCookie) {
+	params := buildReplayCookieParams(targetURL, cookies)
+	if len(params) > 0 {
+		_ = conn.Call(ctx, sid, "Network.setCookies", map[string]any{"cookies": params}, nil)
+	}
+}
+
+func buildReplayCookieParams(targetURL string, cookies []ReplayCookie) []map[string]any {
 	u, err := url.Parse(targetURL)
 	if err != nil || u.Hostname() == "" {
-		return
+		return nil
 	}
+	targetHost := u.Hostname()
 	params := make([]map[string]any, 0, len(cookies))
 	for _, ck := range cookies {
 		if ck.Name == "" {
+			continue
+		}
+		if !cookieDomainAllowed(ck.Domain, targetHost) {
 			continue
 		}
 		m := map[string]any{
@@ -286,8 +323,8 @@ func injectReplayCookies(ctx context.Context, conn *cdpConn, sid, targetURL stri
 			"secure":   ck.Secure,
 			"httpOnly": ck.HTTPOnly,
 		}
-		if ck.Domain != "" {
-			m["domain"] = ck.Domain
+		if dom := strings.TrimSpace(ck.Domain); dom != "" {
+			m["domain"] = dom
 		}
 		if ck.Path == "" {
 			m["path"] = "/"
@@ -297,9 +334,52 @@ func injectReplayCookies(ctx context.Context, conn *cdpConn, sid, targetURL stri
 		}
 		params = append(params, m)
 	}
-	if len(params) > 0 {
-		_ = conn.Call(ctx, sid, "Network.setCookies", map[string]any{"cookies": params}, nil)
+	return params
+}
+
+// cookieDomainAllowed validates that cookieDomain may be replayed for targetHost.
+// Empty cookieDomain represents a host-only cookie on targetHost. Non-empty
+// cookieDomain (with at most one leading ".") must equal targetHost or be a
+// proper dot-boundary parent domain of targetHost, rejecting IP suffix tricks,
+// public suffixes/TLDs, and unrelated domains.
+func cookieDomainAllowed(cookieDomain, targetHost string) bool {
+	target := strings.ToLower(strings.TrimSpace(targetHost))
+	if target == "" {
+		return false
 	}
+	raw := strings.ToLower(strings.TrimSpace(cookieDomain))
+	if raw == "" {
+		return true
+	}
+	dom := strings.TrimPrefix(raw, ".")
+	if dom == "" || strings.HasPrefix(dom, ".") || strings.HasSuffix(dom, ".") {
+		return false
+	}
+	if strings.ContainsAny(dom, " \t\r\n/@") {
+		return false
+	}
+	// IP literals (IPv4 or IPv6) only allow exact IP equality; never parent-domain suffix matching.
+	if domIP, err := netip.ParseAddr(dom); err == nil {
+		targetIP, terr := netip.ParseAddr(target)
+		return terr == nil && domIP == targetIP
+	}
+	if strings.Contains(dom, ":") {
+		return false
+	}
+	if _, err := netip.ParseAddr(target); err == nil {
+		return false
+	}
+	if dom == target {
+		return true
+	}
+	// Reject single-label parent domains (e.g. "com") and ICANN public suffixes.
+	if !strings.Contains(dom, ".") {
+		return false
+	}
+	if ps, icann := publicsuffix.PublicSuffix(dom); icann && ps == dom {
+		return false
+	}
+	return strings.HasSuffix(target, "."+dom)
 }
 
 func collectSessionEvents(ctx context.Context, evCh <-chan cdpEvent, settle time.Duration) []ConsoleEntry {
@@ -312,39 +392,59 @@ func collectSessionEvents(ctx context.Context, evCh <-chan cdpEvent, settle time
 		}
 	}()
 
+	handle := func(ev cdpEvent, allowTimer bool) {
+		switch ev.Method {
+		case "Page.loadEventFired":
+			if allowTimer && settleTimer == nil {
+				settleTimer = time.NewTimer(settle)
+				settleC = settleTimer.C
+			}
+		case "Runtime.consoleAPICalled":
+			if entry, ok := parseConsoleAPICalled(ev.Params); ok && len(out) < maxConsoleEntries {
+				out = append(out, entry)
+			}
+		case "Runtime.exceptionThrown":
+			if entry, ok := parseExceptionThrown(ev.Params); ok && len(out) < maxConsoleEntries {
+				out = append(out, entry)
+			}
+		case "Log.entryAdded":
+			if entry, ok := parseLogEntryAdded(ev.Params); ok && len(out) < maxConsoleEntries {
+				out = append(out, entry)
+			}
+		case "Network.loadingFailed":
+			if entry, ok := parseNetworkFailed(ev.Params); ok && len(out) < maxConsoleEntries {
+				out = append(out, entry)
+			}
+		}
+	}
+
+	drainBuffered := func() {
+		for {
+			select {
+			case ev, ok := <-evCh:
+				if !ok {
+					return
+				}
+				handle(ev, false)
+			default:
+				return
+			}
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
+			drainBuffered()
 			return out
 		case <-settleC:
+			drainBuffered()
 			return out
 		case ev, ok := <-evCh:
 			if !ok {
 				return out
 			}
-			switch ev.Method {
-			case "Page.loadEventFired":
-				if settleTimer == nil {
-					settleTimer = time.NewTimer(settle)
-					settleC = settleTimer.C
-				}
-			case "Runtime.consoleAPICalled":
-				if entry, ok := parseConsoleAPICalled(ev.Params); ok && len(out) < maxConsoleEntries {
-					out = append(out, entry)
-				}
-			case "Runtime.exceptionThrown":
-				if entry, ok := parseExceptionThrown(ev.Params); ok && len(out) < maxConsoleEntries {
-					out = append(out, entry)
-				}
-			case "Log.entryAdded":
-				if entry, ok := parseLogEntryAdded(ev.Params); ok && len(out) < maxConsoleEntries {
-					out = append(out, entry)
-				}
-			case "Network.loadingFailed":
-				if entry, ok := parseNetworkFailed(ev.Params); ok && len(out) < maxConsoleEntries {
-					out = append(out, entry)
-				}
-			}
+			handle(ev, true)
 		}
 	}
 }

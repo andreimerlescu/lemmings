@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"mime"
 	"strings"
 	"sync"
 	"time"
@@ -159,107 +160,307 @@ func runOneScout(
 		"acceptLanguage": lang,
 	}, nil)
 
+	origin := strings.TrimSpace(cfg.Origin)
+	if origin == "" && cfg.Hit != "" {
+		origin, _ = discovery.ParseOrigin(cfg.Hit)
+	}
+
 	targets := buildScoutTargets(cfg, idx)
+	if len(targets) == 0 {
+		return
+	}
+	isJourney := cfg.Journey != nil && len(cfg.Journey.Steps) > 0
 	var trail []string
 	var totalVisits, failedVisits int64
 	referrer := ""
 
-	for seq, target := range targets {
-		if ctx.Err() != nil {
+	for seq := 0; ctx.Err() == nil; seq++ {
+		if isJourney && seq >= len(targets) {
 			break
 		}
+		target := targets[seq%len(targets)]
 		visitCtx, visitCancel := context.WithTimeout(ctx, cdp.timeout)
 		start := time.Now()
-		_ = cdp.browser.conn.Call(visitCtx, sid, "Page.navigate", map[string]any{"url": target.url}, nil)
-		consoleEntries, docStatus := collectScoutVisitEvents(visitCtx, evCh, target.url, 600*time.Millisecond)
-		latencyMS := float64(time.Since(start)) / float64(time.Millisecond)
+
+		// Drain late CDP events from previous page so they never bleed into this visit.
+		drainCDPEvents(evCh)
+
+		var navRes struct {
+			FrameID   string `json:"frameId"`
+			ErrorText string `json:"errorText"`
+		}
+		navErr := cdp.browser.conn.Call(visitCtx, sid, "Page.navigate", map[string]any{"url": target.url}, &navRes)
+
+		var (
+			evRes        scoutVisitResult
+			navErrorText string
+			docStatus    int
+			docCT        string
+		)
+		if navErr != nil {
+			navErrorText = navErr.Error()
+		} else {
+			eventCtx, eventCancel := eventCollectionContext(visitCtx, cdp.timeout)
+			evRes = collectScoutVisitEvents(eventCtx, evCh, navRes.FrameID, 600*time.Millisecond)
+			eventCancel()
+			if navRes.ErrorText != "" {
+				navErrorText = navRes.ErrorText
+				docStatus = 0
+			} else {
+				docStatus = evRes.docStatus
+				docCT = evRes.contentType
+			}
+		}
+
+		dur := time.Since(start)
+		latencyMS := float64(dur) / float64(time.Millisecond)
 
 		totalVisits++
 		path := discovery.PathOf(target.url)
 		trail = appendTrail(trail, path, 8)
+		safeTargetURL := discovery.SafeURL(target.url)
 
-		domHTML := evalString(visitCtx, cdp.browser.conn, sid, "document.documentElement ? document.documentElement.outerHTML.slice(0, 131072) : ''")
-		consoleErrs := countConsoleErrors(consoleEntries)
-		evid, _ := journey.InspectPage([]byte(domHTML), "text/html", max(docStatus, 200), target.expect, target.url)
+		// Determine actual final URL and verify it did not escape target origin
+		// before touching DOM, cookies, or screenshots.
+		observedURL := evRes.frameURL
+		if observedURL == "" {
+			observedURL = evRes.docURL
+		}
+		finalURL := observedURL
+		offOrigin := origin != "" && observedURL != "" && !scoutOriginAllowed(origin, observedURL, navErrorText != "")
+		if !offOrigin && navErr == nil {
+			if locURL := evalString(visitCtx, cdp.browser.conn, sid, "window.location.href"); locURL != "" {
+				finalURL = locURL
+			}
+		}
+		if finalURL == "" {
+			finalURL = target.url
+		}
+		if origin != "" && !scoutOriginAllowed(origin, finalURL, navErrorText != "") {
+			offOrigin = true
+		}
 
-		trigger := scoutTriggerReason(docStatus, consoleEntries, consoleErrs, evid)
-		if trigger != "" {
+		if offOrigin {
 			failedVisits++
-			fp := Fingerprint(path, docStatus, trigger)
-			if ok, reason := store.TryReserve(fp); ok {
-				shot, _ := captureScreenshot(visitCtx, cdp.browser.conn, sid, cdp.format, 1280, 800)
-				cookies := fetchCDPCookies(visitCtx, cdp.browser.conn, sid, target.url, cfg.FingerprintKey)
-				ex := journey.ExtractErrorBody(docStatus, "text/html", nil, []byte(domHTML))
-				art := Artifact{
-					ID:            newArtifactID(),
-					Fingerprint:   fp,
-					CapturedAt:    time.Now(),
-					URL:           discovery.SafeURL(target.url),
-					Path:          path,
-					TriggerReason: trigger,
-					CaptureMode:   ModeCDPScout,
-					StatusCode:    docStatus,
-					LatencyMS:     latencyMS,
-					Session: SessionSnapshot{
-						LemmingNumber:  num,
-						LemmingID:      scoutID,
-						LemmingName:    scoutName,
-						Source:         "browser-scout",
-						Terrain:        -1,
-						Pack:           idx,
-						Persona:        "Chrome · Headless Scout",
-						UserAgent:      ua,
-						Language:       lang,
-						NavigationMode: "scout",
-						JourneyName:    target.journeyName,
-						JourneyStep:    target.stepName,
-						VisitSequence:  seq + 1,
-						SessionAgeMS:   float64(time.Since(bornAt)) / float64(time.Millisecond),
-						TotalVisits:    totalVisits,
-						FailedVisits:   failedVisits,
-						Referrer:       referrer,
-						RecentTrail:    append([]string(nil), trail...),
-						CookieJar:      cookies,
-					},
-					Console:       consoleEntries,
-					ConsoleErrors: consoleErrs,
-					ErrorBody:     ex,
-					Screenshot:    shot,
-					ReviewStatus:  ReviewUnreviewed,
-				}
-				summary := store.Save(art)
-				if bus != nil {
+			warnMsg := fmt.Sprintf("scout redirected off target origin to %s; DOM, cookies, and screenshot skipped", discovery.SafeURL(finalURL))
+			visitErr := fmt.Errorf("%s", warnMsg)
+			if store != nil {
+				fp := Fingerprint(path, docStatus, "off-origin-redirect")
+				if ok, reason := store.TryReserve(fp); ok {
+					art := Artifact{
+						ID:             newArtifactID(),
+						Fingerprint:    fp,
+						CapturedAt:     time.Now(),
+						URL:            safeTargetURL,
+						Path:           path,
+						TriggerReason:  "off-origin-redirect",
+						CaptureMode:    ModeCDPScout,
+						CaptureWarning: warnMsg,
+						StatusCode:     docStatus,
+						LatencyMS:      latencyMS,
+						Session: SessionSnapshot{
+							LemmingNumber:  num,
+							LemmingID:      scoutID,
+							LemmingName:    scoutName,
+							Source:         "browser-scout",
+							Terrain:        -1,
+							Pack:           idx,
+							Persona:        "Chrome · Headless Scout",
+							UserAgent:      ua,
+							Language:       lang,
+							NavigationMode: "scout",
+							JourneyName:    target.journeyName,
+							JourneyStep:    target.stepName,
+							VisitSequence:  seq + 1,
+							SessionAgeMS:   float64(time.Since(bornAt)) / float64(time.Millisecond),
+							TotalVisits:    totalVisits,
+							FailedVisits:   failedVisits,
+							Referrer:       referrer,
+							RecentTrail:    append([]string(nil), trail...),
+							CookieJar:      CookieJarSnapshot{Health: "empty"},
+						},
+						ErrorBody: journey.ExtractedError{
+							Format:     "empty",
+							StatusCode: docStatus,
+							Summary:    warnMsg,
+						},
+						ReviewStatus: ReviewUnreviewed,
+					}
+					summary := store.Save(art)
+					if bus != nil {
+						bus.Emit(events.Event{
+							Kind:          events.ArtifactCaptured,
+							LemmingID:     scoutID,
+							LemmingNumber: num,
+							Terrain:       -1,
+							Pack:          idx,
+							URL:           art.URL,
+							StatusCode:    docStatus,
+							ArtifactID:    art.ID,
+							CaptureMode:   ModeCDPScout,
+							ReviewStatus:  string(ReviewUnreviewed),
+							Payload:       summary,
+						})
+					}
+				} else if bus != nil {
 					bus.Emit(events.Event{
-						Kind:          events.ArtifactCaptured,
+						Kind:          events.ArtifactDropped,
 						LemmingID:     scoutID,
 						LemmingNumber: num,
 						Terrain:       -1,
 						Pack:          idx,
-						URL:           art.URL,
+						URL:           safeTargetURL,
 						StatusCode:    docStatus,
-						ArtifactID:    art.ID,
-						CaptureMode:   ModeCDPScout,
-						ConsoleErrors: consoleErrs,
-						ReviewStatus:  string(ReviewUnreviewed),
-						Payload:       summary,
+						DropReason:    reason,
 					})
 				}
-			} else if bus != nil {
+			}
+			if bus != nil {
 				bus.Emit(events.Event{
-					Kind:          events.ArtifactDropped,
+					Kind:          events.ScoutVisit,
 					LemmingID:     scoutID,
 					LemmingNumber: num,
 					Terrain:       -1,
 					Pack:          idx,
-					URL:           discovery.SafeURL(target.url),
+					URL:           safeTargetURL,
 					StatusCode:    docStatus,
-					DropReason:    reason,
+					Duration:      dur,
+					Failed:        true,
+					Err:           visitErr,
 				})
 			}
+			referrer = safeTargetURL
+			visitCancel()
+
+			if isJourney && seq+1 >= len(targets) {
+				break
+			}
+			if !scoutThink(ctx, cfg.ThinkMin, cfg.ThinkMax) {
+				break
+			}
+			continue
 		}
-		referrer = discovery.SafeURL(target.url)
+
+		var pageBody string
+		if navErr == nil {
+			pageBody = evalString(visitCtx, cdp.browser.conn, sid, scoutBodyExpr(docCT))
+		}
+		consoleEntries := evRes.entries
+		consoleErrs := countConsoleErrors(consoleEntries)
+		evid, _ := journey.InspectPage([]byte(pageBody), docCT, docStatus, target.expect, target.url)
+
+		trigger := scoutTriggerReason(navErrorText, docStatus, consoleEntries, consoleErrs, evid)
+		visitFailed := trigger != ""
+		var visitErr error
+		if visitFailed {
+			failedVisits++
+			if navErr != nil {
+				visitErr = navErr
+			} else if navErrorText != "" {
+				visitErr = fmt.Errorf("navigation error: %s", navErrorText)
+			} else {
+				visitErr = fmt.Errorf("scout trigger: %s", trigger)
+			}
+			if store != nil {
+				fp := Fingerprint(path, docStatus, trigger)
+				if ok, reason := store.TryReserve(fp); ok {
+					shot, _ := captureScreenshot(visitCtx, cdp.browser.conn, sid, cdp.format, 1280, 800)
+					cookies := fetchCDPCookies(visitCtx, cdp.browser.conn, sid, target.url, cfg.FingerprintKey)
+					ex := journey.ExtractErrorBody(docStatus, docCT, nil, []byte(pageBody))
+					var capWarn string
+					if navErrorText != "" {
+						capWarn = "navigation error: " + navErrorText
+					}
+					art := Artifact{
+						ID:             newArtifactID(),
+						Fingerprint:    fp,
+						CapturedAt:     time.Now(),
+						URL:            safeTargetURL,
+						Path:           path,
+						TriggerReason:  trigger,
+						CaptureMode:    ModeCDPScout,
+						CaptureWarning: capWarn,
+						StatusCode:     docStatus,
+						LatencyMS:      latencyMS,
+						Session: SessionSnapshot{
+							LemmingNumber:  num,
+							LemmingID:      scoutID,
+							LemmingName:    scoutName,
+							Source:         "browser-scout",
+							Terrain:        -1,
+							Pack:           idx,
+							Persona:        "Chrome · Headless Scout",
+							UserAgent:      ua,
+							Language:       lang,
+							NavigationMode: "scout",
+							JourneyName:    target.journeyName,
+							JourneyStep:    target.stepName,
+							VisitSequence:  seq + 1,
+							SessionAgeMS:   float64(time.Since(bornAt)) / float64(time.Millisecond),
+							TotalVisits:    totalVisits,
+							FailedVisits:   failedVisits,
+							Referrer:       referrer,
+							RecentTrail:    append([]string(nil), trail...),
+							CookieJar:      cookies,
+						},
+						Console:       consoleEntries,
+						ConsoleErrors: consoleErrs,
+						ErrorBody:     ex,
+						Screenshot:    shot,
+						ReviewStatus:  ReviewUnreviewed,
+					}
+					summary := store.Save(art)
+					if bus != nil {
+						bus.Emit(events.Event{
+							Kind:          events.ArtifactCaptured,
+							LemmingID:     scoutID,
+							LemmingNumber: num,
+							Terrain:       -1,
+							Pack:          idx,
+							URL:           art.URL,
+							StatusCode:    docStatus,
+							ArtifactID:    art.ID,
+							CaptureMode:   ModeCDPScout,
+							ConsoleErrors: consoleErrs,
+							ReviewStatus:  string(ReviewUnreviewed),
+							Payload:       summary,
+						})
+					}
+				} else if bus != nil {
+					bus.Emit(events.Event{
+						Kind:          events.ArtifactDropped,
+						LemmingID:     scoutID,
+						LemmingNumber: num,
+						Terrain:       -1,
+						Pack:          idx,
+						URL:           safeTargetURL,
+						StatusCode:    docStatus,
+						DropReason:    reason,
+					})
+				}
+			}
+		}
+		if bus != nil {
+			bus.Emit(events.Event{
+				Kind:          events.ScoutVisit,
+				LemmingID:     scoutID,
+				LemmingNumber: num,
+				Terrain:       -1,
+				Pack:          idx,
+				URL:           safeTargetURL,
+				StatusCode:    docStatus,
+				Duration:      dur,
+				Failed:        visitFailed,
+				Cancelled:     ctx.Err() != nil && navErr != nil,
+				Err:           visitErr,
+			})
+		}
+		referrer = safeTargetURL
 		visitCancel()
 
+		if isJourney && seq+1 >= len(targets) {
+			break
+		}
 		if !scoutThink(ctx, cfg.ThinkMin, cfg.ThinkMax) {
 			break
 		}
@@ -302,9 +503,63 @@ func buildScoutTargets(cfg ScoutConfig, idx int) []scoutTarget {
 	return out
 }
 
-func collectScoutVisitEvents(ctx context.Context, evCh <-chan cdpEvent, targetURL string, settle time.Duration) ([]ConsoleEntry, int) {
-	var entries []ConsoleEntry
-	docStatus := 200
+type scoutVisitResult struct {
+	entries     []ConsoleEntry
+	docStatus   int
+	contentType string
+	docURL      string
+	frameURL    string
+}
+
+func drainCDPEvents(evCh <-chan cdpEvent) {
+	for {
+		select {
+		case _, ok := <-evCh:
+			if !ok {
+				return
+			}
+		default:
+			return
+		}
+	}
+}
+
+func scoutOriginAllowed(origin, finalURL string, allowBlank bool) bool {
+	if origin == "" || finalURL == "" {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(finalURL))
+	if strings.HasPrefix(lower, "chrome-error://") {
+		return true
+	}
+	if allowBlank && lower == "about:blank" {
+		return true
+	}
+	return discovery.SameOrigin(origin, finalURL)
+}
+
+func scoutBodyExpr(contentType string) string {
+	media, _, _ := mime.ParseMediaType(contentType)
+	media = strings.ToLower(media)
+	if media == "" || media == "text/html" || media == "application/xhtml+xml" {
+		return "document.documentElement ? document.documentElement.outerHTML.slice(0, 131072) : ''"
+	}
+	return "(document.body && document.body.innerText) ? document.body.innerText.slice(0, 131072) : (document.documentElement ? document.documentElement.outerHTML.slice(0, 131072) : '')"
+}
+
+func responseContentType(headers map[string]any, mimeType string) string {
+	for k, v := range headers {
+		if strings.EqualFold(k, "content-type") {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return strings.TrimSpace(mimeType)
+}
+
+func collectScoutVisitEvents(ctx context.Context, evCh <-chan cdpEvent, mainFrameID string, settle time.Duration) scoutVisitResult {
+	res := scoutVisitResult{docStatus: 0}
 	var settleTimer *time.Timer
 	var settleC <-chan time.Time
 	defer func() {
@@ -313,64 +568,107 @@ func collectScoutVisitEvents(ctx context.Context, evCh <-chan cdpEvent, targetUR
 		}
 	}()
 
+	handle := func(ev cdpEvent, allowTimer bool) {
+		switch ev.Method {
+		case "Page.loadEventFired":
+			if allowTimer && settleTimer == nil {
+				settleTimer = time.NewTimer(settle)
+				settleC = settleTimer.C
+			}
+		case "Page.frameNavigated":
+			var p struct {
+				Frame struct {
+					ID       string `json:"id"`
+					ParentID string `json:"parentId"`
+					URL      string `json:"url"`
+				} `json:"frame"`
+			}
+			if err := json.Unmarshal(ev.Params, &p); err == nil {
+				if p.Frame.ParentID == "" && (mainFrameID == "" || p.Frame.ID == "" || p.Frame.ID == mainFrameID) && p.Frame.URL != "" {
+					res.frameURL = p.Frame.URL
+				}
+			}
+		case "Network.responseReceived":
+			var p struct {
+				Type     string `json:"type"`
+				FrameID  string `json:"frameId"`
+				Response struct {
+					URL      string         `json:"url"`
+					Status   int            `json:"status"`
+					MIMEType string         `json:"mimeType"`
+					Headers  map[string]any `json:"headers"`
+				} `json:"response"`
+			}
+			if err := json.Unmarshal(ev.Params, &p); err == nil {
+				if p.Type == "Document" && (mainFrameID == "" || p.FrameID == "" || p.FrameID == mainFrameID) {
+					res.docStatus = p.Response.Status
+					res.docURL = p.Response.URL
+					if ct := responseContentType(p.Response.Headers, p.Response.MIMEType); ct != "" {
+						res.contentType = ct
+					}
+				} else if p.Response.Status >= 400 && len(res.entries) < maxConsoleEntries {
+					res.entries = append(res.entries, ConsoleEntry{
+						Level:     "network",
+						Text:      fmt.Sprintf("subresource %s returned HTTP %d", discovery.SafeURL(p.Response.URL), p.Response.Status),
+						SourceURL: discovery.SafeURL(p.Response.URL),
+						Timestamp: time.Now(),
+					})
+				}
+			}
+		case "Runtime.consoleAPICalled":
+			if entry, ok := parseConsoleAPICalled(ev.Params); ok && len(res.entries) < maxConsoleEntries {
+				res.entries = append(res.entries, entry)
+			}
+		case "Runtime.exceptionThrown":
+			if entry, ok := parseExceptionThrown(ev.Params); ok && len(res.entries) < maxConsoleEntries {
+				res.entries = append(res.entries, entry)
+			}
+		case "Log.entryAdded":
+			if entry, ok := parseLogEntryAdded(ev.Params); ok && len(res.entries) < maxConsoleEntries {
+				res.entries = append(res.entries, entry)
+			}
+		case "Network.loadingFailed":
+			if entry, ok := parseNetworkFailed(ev.Params); ok && len(res.entries) < maxConsoleEntries {
+				res.entries = append(res.entries, entry)
+			}
+		}
+	}
+
+	drainBuffered := func() {
+		for {
+			select {
+			case ev, ok := <-evCh:
+				if !ok {
+					return
+				}
+				handle(ev, false)
+			default:
+				return
+			}
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
-			return entries, docStatus
+			drainBuffered()
+			return res
 		case <-settleC:
-			return entries, docStatus
+			drainBuffered()
+			return res
 		case ev, ok := <-evCh:
 			if !ok {
-				return entries, docStatus
+				return res
 			}
-			switch ev.Method {
-			case "Page.loadEventFired":
-				if settleTimer == nil {
-					settleTimer = time.NewTimer(settle)
-					settleC = settleTimer.C
-				}
-			case "Network.responseReceived":
-				var p struct {
-					Type     string `json:"type"`
-					Response struct {
-						URL    string `json:"url"`
-						Status int    `json:"status"`
-					} `json:"response"`
-				}
-				if err := json.Unmarshal(ev.Params, &p); err == nil {
-					if p.Type == "Document" && discovery.PathOf(p.Response.URL) == discovery.PathOf(targetURL) {
-						docStatus = p.Response.Status
-					} else if p.Response.Status >= 400 && len(entries) < maxConsoleEntries {
-						entries = append(entries, ConsoleEntry{
-							Level:     "network",
-							Text:      fmt.Sprintf("subresource %s returned HTTP %d", discovery.SafeURL(p.Response.URL), p.Response.Status),
-							SourceURL: discovery.SafeURL(p.Response.URL),
-							Timestamp: time.Now(),
-						})
-					}
-				}
-			case "Runtime.consoleAPICalled":
-				if entry, ok := parseConsoleAPICalled(ev.Params); ok && len(entries) < maxConsoleEntries {
-					entries = append(entries, entry)
-				}
-			case "Runtime.exceptionThrown":
-				if entry, ok := parseExceptionThrown(ev.Params); ok && len(entries) < maxConsoleEntries {
-					entries = append(entries, entry)
-				}
-			case "Log.entryAdded":
-				if entry, ok := parseLogEntryAdded(ev.Params); ok && len(entries) < maxConsoleEntries {
-					entries = append(entries, entry)
-				}
-			case "Network.loadingFailed":
-				if entry, ok := parseNetworkFailed(ev.Params); ok && len(entries) < maxConsoleEntries {
-					entries = append(entries, entry)
-				}
-			}
+			handle(ev, true)
 		}
 	}
 }
 
-func scoutTriggerReason(status int, entries []ConsoleEntry, consoleErrs int, evid journey.PageEvidence) string {
+func scoutTriggerReason(navError string, status int, entries []ConsoleEntry, consoleErrs int, evid journey.PageEvidence) string {
+	if navError != "" || status == 0 {
+		return "nav-error"
+	}
 	if status >= 400 {
 		return fmt.Sprintf("http-%d", status)
 	}
