@@ -39,6 +39,8 @@ var (
 	ErrTooManyRedirects = fmt.Errorf("stopped after %d redirects", maxRedirects)
 	// ErrBodyTooLarge is returned when a decoded response body exceeds MaxBodyBytes.
 	ErrBodyTooLarge = errors.New("response body exceeds -max-body-bytes")
+	// ErrTruncatedBody is returned when fewer bytes are read than declared by Content-Length.
+	ErrTruncatedBody = errors.New("response body truncated before Content-Length")
 )
 
 // RequestTiming breaks down where time went on a visit's final HTTP request.
@@ -68,6 +70,7 @@ type fetchResponse struct {
 	timing      RequestTiming
 	retryAfter  time.Duration
 	elapsed     time.Duration
+	finishedAt  time.Time
 	err         error
 }
 
@@ -142,8 +145,12 @@ func (l *Lemming) fetch(ctx context.Context, rawURL string) fetchResponse {
 				if err == nil {
 					err = ErrBodyTooLarge
 				}
+			} else if (err == nil || errors.Is(err, io.ErrUnexpectedEOF)) &&
+				resp.ContentLength >= 0 && !resp.Uncompressed && r.bytes < resp.ContentLength &&
+				req.Method != http.MethodHead {
+				err = fmt.Errorf("%w: read %d of %d bytes", ErrTruncatedBody, r.bytes, resp.ContentLength)
 			}
-			if err != nil && !errors.Is(err, ErrBodyTooLarge) {
+			if err != nil && !errors.Is(err, ErrBodyTooLarge) && !errors.Is(err, ErrTruncatedBody) {
 				err = fmt.Errorf("read body: %w", err)
 			}
 		}
@@ -161,6 +168,7 @@ func (l *Lemming) fetch(ctx context.Context, rawURL string) fetchResponse {
 	}
 
 	r.timing = tr.result()
+	r.finishedAt = time.Now()
 	r.elapsed = time.Since(start)
 	r.err = err
 	return r
@@ -244,6 +252,14 @@ func ErrorKind(err error) string {
 		return "redirect-loop"
 	case errors.Is(err, ErrBodyTooLarge):
 		return "body-too-large"
+	case errors.Is(err, ErrTruncatedBody):
+		return "truncated"
+	case errors.Is(err, errQueueCookiesRequired):
+		return "queue-cookies"
+	case errors.Is(err, errQueueExpired):
+		return "queue-expired"
+	case errors.Is(err, errQueueNotAdmitted):
+		return "queue-not-admitted"
 	case errors.As(err, &dnsErr):
 		return "dns"
 	case errors.As(err, &certErr), errors.As(err, &unknownAuthority), errors.As(err, &hostnameErr):

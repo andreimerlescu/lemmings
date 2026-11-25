@@ -1,13 +1,19 @@
 package swarm
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math/rand"
+	"mime"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -40,16 +46,36 @@ var acceptLanguages = []string{
 }
 
 const (
-	waitingRoomSignature      = `/queue/status`
-	waitingRoomPositionMarker = `id="position">`
-	lifeTailSize              = 40
-	recentTrailCap            = 8
-	failureBackoff            = 100 * time.Millisecond
-	maxRetryAfter             = 5 * time.Minute
-	maxForensicsBodyBytes     = 512 << 10
+	waitingRoomSignature    = `/queue/status`
+	concertWaitingJSMarker  = `/_concert/waiting.js`
+	defaultQueueStatusURL   = `/queue/status`
+	concertAdmitCookieName  = `concert_admit`
+	roomTicketCookieName    = `room_ticket`
+	lifeTailSize            = 40
+	recentTrailCap          = 8
+	failureBackoff          = 100 * time.Millisecond
+	maxRetryAfter           = 5 * time.Minute
+	maxForensicsBodyBytes   = 512 << 10
+	maxQueueStatusBodyBytes = 64 << 10
+	maxAssetCacheEntries    = 2048
 )
 
-var waitingRoomPollInterval = 3 * time.Second
+// Waiting room detection modes reported on WaitingRoomSignal.Mode and WaitingRoomMetric.Mode.
+const (
+	WaitingRoomModeConcertHTML = "concert-html"
+	WaitingRoomModeLegacyHTML  = "legacy-html"
+	WaitingRoomModeConcertJSON = "concert-json"
+)
+
+var (
+	waitingRoomPollInterval = 3 * time.Second
+	waitingRoom429Backoff   = 3 * time.Second
+	waitingRoomMaxBackoff   = 10 * time.Second
+
+	errQueueCookiesRequired = errors.New("waiting room requires cookies")
+	errQueueExpired         = errors.New("waiting room ticket expired or evicted")
+	errQueueNotAdmitted     = errors.New("waiting room reload was not admitted")
+)
 
 // Exit reasons recorded on LifeLog.ExitReason.
 const (
@@ -71,13 +97,48 @@ type Identity struct {
 	Language  string    `json:"language"`
 }
 
+// WaitingRoomSignal describes a detected waiting-room response across Concert HTML,
+// legacy HTML (room / Neon Arcade), and Concert -api-json 429 JSON responses.
+type WaitingRoomSignal struct {
+	Detected   bool
+	Mode       string // "concert-html", "legacy-html", "concert-json"
+	Position   int
+	StatusURL  string
+	RetryAfter time.Duration
+}
+
 // WaitingRoomMetric captures a lemming's waiting room stay.
 type WaitingRoomMetric struct {
-	Detected  bool          `json:"detected"`
-	Position  int           `json:"position"`
-	EnteredAt time.Time     `json:"entered_at"`
-	ExitedAt  time.Time     `json:"exited_at"`
-	Duration  time.Duration `json:"duration_ns"`
+	Detected    bool          `json:"detected"`
+	Position    int           `json:"position"`
+	EnteredAt   time.Time     `json:"entered_at"`
+	ExitedAt    time.Time     `json:"exited_at"`
+	Duration    time.Duration `json:"duration_ns"`
+	Polls       int           `json:"polls,omitempty"`
+	Admitted    bool          `json:"admitted,omitempty"`
+	Expired     bool          `json:"expired,omitempty"`
+	Denied      bool          `json:"denied,omitempty"`
+	Rejected503 bool          `json:"rejected_503,omitempty"`
+	Mode        string        `json:"mode,omitempty"`
+	StatusURL   string        `json:"status_url,omitempty"`
+}
+
+// AssetVisit records a single same-origin subresource fetch made by a lemming
+// when -assets is enabled. Assets are tracked separately from page visits.
+type AssetVisit struct {
+	LemmingID     string
+	LemmingNumber int64
+	PageURL       string
+	URL           string
+	Class         string
+	StatusCode    int
+	BytesIn       int64
+	Duration      time.Duration
+	Failed        bool
+	Denied403     bool
+	ErrorKind     string
+	Timestamp     time.Time
+	FinishedAt    time.Time
 }
 
 // Visit is the atomic unit of measurement — one page hit by one lemming.
@@ -108,6 +169,11 @@ type Visit struct {
 	Failed        bool
 	Cancelled     bool
 	Timestamp     time.Time
+	FinishedAt    time.Time
+	QueuePolls    int
+	ConcertAdmit  bool
+	RoomTicket    bool
+	Banned        bool
 }
 
 // EffectiveLatency returns server Latency, falling back to Duration when unset.
@@ -139,6 +205,10 @@ func WhyFailed(v *Visit) string {
 		return v.ErrorKind
 	case v.Error != nil:
 		return ErrorKind(v.Error)
+	case v.WaitingRoom.Denied:
+		return "waiting room denied (403)"
+	case v.WaitingRoom.Expired:
+		return "waiting room ticket expired"
 	}
 	for _, c := range v.Page.Checks {
 		if !c.Passed {
@@ -206,10 +276,11 @@ type Lemming struct {
 	forensics *forensics.Coordinator
 	rng       *rand.Rand
 
-	referrer string
-	links    []string
-	trail    []string
-	step     int
+	referrer   string
+	links      []string
+	trail      []string
+	step       int
+	assetCache map[string]bool
 }
 
 // NewLemming constructs a Lemming. client carries the lemming's private cookie jar
@@ -237,14 +308,15 @@ func NewLemming(
 			Pack:    pack,
 			BornAt:  time.Now(),
 		},
-		cfg:       cfg,
-		pool:      pool,
-		client:    client,
-		jar:       jar,
-		bus:       bus,
-		metrics:   metrics,
-		forensics: coord,
-		rng:       rand.New(rand.NewSource(seed)),
+		cfg:        cfg,
+		pool:       pool,
+		client:     client,
+		jar:        jar,
+		bus:        bus,
+		metrics:    metrics,
+		forensics:  coord,
+		rng:        rand.New(rand.NewSource(seed)),
+		assetCache: make(map[string]bool),
 	}
 	l.identity.UserAgent = userAgents[l.rng.Intn(len(userAgents))]
 	l.identity.Language = acceptLanguages[l.rng.Intn(len(acceptLanguages))]
@@ -457,6 +529,9 @@ func (l *Lemming) remember(ll *LifeLog, v *Visit, links []string) {
 			Duration:      v.EffectiveLatency(),
 			Failed:        v.Failed,
 			Cancelled:     v.Cancelled,
+			QueuePolls:    v.QueuePolls,
+			Banned:        v.Banned,
+			AdmitPass:     v.ConcertAdmit,
 			Payload:       v,
 			Err:           v.Error,
 		})
@@ -521,20 +596,55 @@ func (l *Lemming) hit(ctx context.Context, targetURL string, step *journey.Step)
 	headers := resp.headers
 	contentType := resp.contentType
 
-	if resp.err == nil {
-		visit.Checksum = discovery.SHA512Hex(body)
-		visit.Match = visit.Checksum == visit.Expected
-		if inRoom, position := DetectWaitingRoom(body); inRoom {
-			body, headers, contentType = l.waitInRoom(ctx, targetURL, &visit, position, headers, contentType)
+	if parsedInitial, err := url.Parse(visit.FinalURL); err == nil {
+		if l.hasActiveCookie(parsedInitial, roomTicketCookieName) {
+			visit.RoomTicket = true
 		}
 	}
+
+	if resp.err == nil {
+		if sig, inRoom := DetectWaitingRoomResponse(resp.status, contentType, headers, body); inRoom {
+			body, headers, contentType = l.waitInRoom(ctx, targetURL, &visit, sig, headers, contentType)
+		} else {
+			if resp.status == http.StatusServiceUnavailable && isConcertBreaker503(contentType, body) {
+				visit.WaitingRoom.Rejected503 = true
+			}
+			visit.Checksum = discovery.SHA512Hex(body)
+			visit.Match = visit.Checksum == visit.Expected
+		}
+	}
+
+	visit.FinishedAt = time.Now()
 	visit.Duration = time.Since(start)
+	visit.QueuePolls = visit.WaitingRoom.Polls
 	visit.ErrorKind = ErrorKind(visit.Error)
 	visit.Cancelled = visit.Error != nil && ctx.Err() != nil
 
+	finalURL := visit.FinalURL
+	if finalURL == "" {
+		finalURL = targetURL
+	}
+	parsedFinal, _ := url.Parse(finalURL)
+	if parsedFinal != nil {
+		visit.ConcertAdmit = l.hasActiveCookie(parsedFinal, concertAdmitCookieName)
+		if l.hasActiveCookie(parsedFinal, roomTicketCookieName) {
+			visit.RoomTicket = true
+		}
+	}
+
+	if !visit.Cancelled {
+		if visit.WaitingRoom.Denied || visit.StatusCode == http.StatusForbidden {
+			visit.Banned = true
+		} else if visit.StatusCode == http.StatusTooManyRequests && !visit.WaitingRoom.Detected {
+			visit.Banned = true
+		}
+	}
+
 	var links []string
-	if !visit.Cancelled && visit.Error == nil {
-		visit.Page, links = journey.InspectPage(body, contentType, visit.StatusCode, expect, visit.FinalURL)
+	if !visit.Cancelled && visit.Error == nil && !visit.WaitingRoom.Denied && !visit.WaitingRoom.Expired {
+		visit.Page, links = journey.InspectPage(body, contentType, visit.StatusCode, expect, finalURL)
+		links = filterSiteLinks(links)
+		visit.Page.LinkCount = len(links)
 		if l.cfg.StrictChecksum {
 			visit.Page.Checks = append(visit.Page.Checks, journey.CheckResult{
 				Name:   "checksum",
@@ -543,28 +653,55 @@ func (l *Lemming) hit(ctx context.Context, targetURL string, step *journey.Step)
 			})
 		}
 	}
-	visit.Failed = !visit.Cancelled && (visit.Error != nil || visit.Page.FailedChecks() > 0)
+	visit.Failed = !visit.Cancelled && (visit.Failed || visit.Error != nil || visit.Page.FailedChecks() > 0)
+
+	// Opt-in asset tier: fetch same-origin subresources after a successful HTML
+	// page visit (including after waiting-room admission). Runs after Visit
+	// timings are finalized so assets never mix into page latency or TotalVisits.
+	if !visit.Cancelled && !visit.Failed && visit.Page.HTML && l.cfg.Assets && l.cfg.AssetsPerPage > 0 && parsedFinal != nil {
+		l.loadPageAssets(ctx, parsedFinal, body)
+	}
+
 	return visit, links, body, headers, contentType
+}
+
+type queueStatusResponse struct {
+	Ready           *bool `json:"ready"`
+	Position        int   `json:"position"`
+	Waiting         *bool `json:"waiting"`
+	CookiesRequired bool  `json:"cookies_required"`
 }
 
 func (l *Lemming) waitInRoom(
 	ctx context.Context,
 	targetURL string,
 	visit *Visit,
-	position int,
+	sig WaitingRoomSignal,
 	lastHeaders http.Header,
 	lastContentType string,
 ) ([]byte, http.Header, string) {
+	pollURL, pollPath, ok := resolvePollURL(targetURL, sig.StatusURL)
+	if !ok {
+		visit.Error = ErrOffsiteRedirect
+		visit.Failed = true
+		return nil, lastHeaders, lastContentType
+	}
+
 	visit.WaitingRoom = WaitingRoomMetric{
 		Detected:  true,
-		Position:  position,
+		Position:  sig.Position,
 		EnteredAt: time.Now(),
+		Mode:      sig.Mode,
+		StatusURL: pollPath,
 	}
-	l.emitQueued(targetURL, position)
+	l.emitQueued(targetURL, sig.Position)
 
 	defer func() {
-		visit.WaitingRoom.ExitedAt = time.Now()
+		if visit.WaitingRoom.ExitedAt.IsZero() {
+			visit.WaitingRoom.ExitedAt = time.Now()
+		}
 		visit.WaitingRoom.Duration = visit.WaitingRoom.ExitedAt.Sub(visit.WaitingRoom.EnteredAt)
+		visit.QueuePolls = visit.WaitingRoom.Polls
 		if l.bus != nil {
 			l.bus.Emit(events.Event{
 				Kind:          events.WaitingRoom,
@@ -574,47 +711,482 @@ func (l *Lemming) waitInRoom(
 				Pack:          int(l.identity.Pack),
 				URL:           targetURL,
 				Position:      visit.WaitingRoom.Position,
+				QueuePolls:    visit.WaitingRoom.Polls,
 				Duration:      visit.WaitingRoom.Duration,
+				Banned:        visit.Banned,
+				AdmitPass:     visit.ConcertAdmit,
 			})
 		}
 	}()
 
-	ticker := time.NewTicker(waitingRoomPollInterval)
-	defer ticker.Stop()
+	nextWait := waitingRoomPollInterval
+	if sig.RetryAfter > 0 {
+		nextWait = sig.RetryAfter
+	}
+	netFailures := 0
+	lastPos := sig.Position
 
 	for {
-		select {
-		case <-ctx.Done():
+		if !l.sleepContext(ctx, nextWait) {
 			visit.Error = ctx.Err()
 			return nil, lastHeaders, lastContentType
-		case <-ticker.C:
-			resp := l.fetch(ctx, targetURL)
-			visit.StatusCode = resp.status
-			visit.BytesIn += resp.bytes
-			visit.Hops = AppendHops(visit.Hops, resp.hops...)
-			if resp.err != nil {
-				visit.Error = resp.err
-				continue
+		}
+
+		pollBody, pollStatus, pollRetryAfter, pollDur, pollErr := l.pollQueueStatus(ctx, pollURL)
+		visit.WaitingRoom.Polls++
+		visit.QueuePolls = visit.WaitingRoom.Polls
+		visit.Hops = AppendHops(visit.Hops, ResponseHop{
+			URL:    discovery.SafeURL(pollURL),
+			Status: pollStatus,
+		})
+
+		if pollErr != nil {
+			l.emitQueuePoll(pollURL, pollStatus, lastPos, visit.WaitingRoom.Polls, pollDur, true, pollErr)
+			if ctx.Err() != nil {
+				visit.Error = ctx.Err()
+				return nil, lastHeaders, lastContentType
 			}
+			netFailures++
+			nextWait = l.pollErrorBackoff(netFailures)
+			continue
+		}
+
+		switch pollStatus {
+		case http.StatusForbidden:
+			l.emitQueuePoll(pollURL, pollStatus, lastPos, visit.WaitingRoom.Polls, pollDur, true, nil)
+			visit.WaitingRoom.Denied = true
+			visit.Banned = true
+			visit.Failed = true
+			visit.StatusCode = http.StatusForbidden
 			visit.Error = nil
-			resp.applyTo(visit)
-			lastHeaders = resp.headers
-			lastContentType = resp.contentType
+			return pollBody, lastHeaders, lastContentType
 
-			if inRoom, pos := DetectWaitingRoom(resp.body); inRoom {
-				if pos != visit.WaitingRoom.Position {
-					visit.WaitingRoom.Position = pos
-					l.emitQueued(targetURL, pos)
-				}
-				continue
+		case http.StatusTooManyRequests:
+			l.emitQueuePoll(pollURL, pollStatus, lastPos, visit.WaitingRoom.Polls, pollDur, false, nil)
+			base := max(pollRetryAfter, waitingRoom429Backoff)
+			nextWait = base + l.pollJitter(base)
+			continue
+		}
+
+		if pollStatus < 200 || pollStatus >= 300 {
+			l.emitQueuePoll(pollURL, pollStatus, lastPos, visit.WaitingRoom.Polls, pollDur, true, nil)
+			netFailures++
+			nextWait = l.pollErrorBackoff(netFailures)
+			continue
+		}
+
+		var qs queueStatusResponse
+		if err := json.Unmarshal(pollBody, &qs); err != nil {
+			l.emitQueuePoll(pollURL, pollStatus, lastPos, visit.WaitingRoom.Polls, pollDur, true, err)
+			netFailures++
+			nextWait = l.pollErrorBackoff(netFailures)
+			continue
+		}
+
+		netFailures = 0
+		pos := max(qs.Position, 0)
+		l.emitQueuePoll(pollURL, pollStatus, pos, visit.WaitingRoom.Polls, pollDur, qs.CookiesRequired, nil)
+
+		if qs.CookiesRequired {
+			visit.Error = errQueueCookiesRequired
+			visit.Failed = true
+			return pollBody, lastHeaders, lastContentType
+		}
+
+		ready := false
+		if qs.Ready != nil {
+			ready = *qs.Ready
+		} else if qs.Waiting == nil {
+			// Legacy / Neon Arcade protocol omits "ready"; position == 0 means admitted.
+			ready = qs.Position <= 0
+		}
+
+		if qs.Waiting != nil && !*qs.Waiting && !ready {
+			visit.WaitingRoom.Expired = true
+			visit.Failed = true
+			visit.Error = errQueueExpired
+			return pollBody, lastHeaders, lastContentType
+		}
+
+		if !ready {
+			if pos > visit.WaitingRoom.Position {
+				visit.WaitingRoom.Position = pos
 			}
+			if pos != lastPos {
+				lastPos = pos
+				l.emitQueued(targetURL, pos)
+			}
+			nextWait = waitingRoomPollInterval + l.pollJitter(waitingRoomPollInterval)
+			continue
+		}
 
-			visit.Latency = resp.elapsed
-			visit.Checksum = discovery.SHA512Hex(resp.body)
-			visit.Match = visit.Checksum == visit.Expected
-			return resp.body, lastHeaders, lastContentType
+		// Admitted! Record pure queue exit time BEFORE loading the origin page
+		// so WaitingRoom.Duration and Visit.Latency stay cleanly separated.
+		visit.WaitingRoom.ExitedAt = time.Now()
+
+		reload := l.fetch(ctx, targetURL)
+		visit.BytesIn += reload.bytes
+		visit.Hops = AppendHops(visit.Hops, reload.hops...)
+		reload.applyTo(visit)
+		if reload.err != nil {
+			return nil, reload.headers, reload.contentType
+		}
+		if reload.status == http.StatusForbidden {
+			visit.WaitingRoom.Denied = true
+			visit.Banned = true
+			visit.Failed = true
+			return reload.body, reload.headers, reload.contentType
+		}
+		if reload.status == http.StatusServiceUnavailable {
+			visit.WaitingRoom.Rejected503 = true
+			return reload.body, reload.headers, reload.contentType
+		}
+		if _, stillQueued := DetectWaitingRoomResponse(reload.status, reload.contentType, reload.headers, reload.body); stillQueued {
+			visit.WaitingRoom.Admitted = false
+			visit.Failed = true
+			visit.Error = errQueueNotAdmitted
+			return reload.body, reload.headers, reload.contentType
+		}
+		if reload.status == http.StatusTooManyRequests {
+			visit.WaitingRoom.Admitted = false
+			visit.Banned = true
+			return reload.body, reload.headers, reload.contentType
+		}
+
+		visit.WaitingRoom.Admitted = true
+		visit.Latency = reload.elapsed
+		visit.Checksum = discovery.SHA512Hex(reload.body)
+		visit.Match = visit.Checksum == visit.Expected
+		if u, err := url.Parse(visit.FinalURL); err == nil {
+			visit.ConcertAdmit = l.hasActiveCookie(u, concertAdmitCookieName)
+		}
+		return reload.body, reload.headers, reload.contentType
+	}
+}
+
+func (l *Lemming) pollQueueStatus(ctx context.Context, pollURL string) ([]byte, int, time.Duration, time.Duration, error) {
+	timeout := l.cfg.RequestTimeout
+	if timeout <= 0 {
+		timeout = DefaultRequestTimeout
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	start := time.Now()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, pollURL, nil)
+	if err != nil {
+		return nil, 0, 0, time.Since(start), fmt.Errorf("build queue poll request: %w", err)
+	}
+	req.Header.Set("User-Agent", l.identity.UserAgent)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Language", l.identity.Language)
+
+	client := *l.client
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if !discovery.SameOrigin(pollURL, next.URL.String()) {
+			return ErrOffsiteRedirect
+		}
+		if len(via) >= maxRedirects {
+			return ErrTooManyRedirects
+		}
+		return nil
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+			_ = resp.Body.Close()
+		}
+		return nil, status, 0, time.Since(start), fmt.Errorf("queue poll request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	retryAfter := ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxQueueStatusBodyBytes))
+	if readErr != nil {
+		return body, resp.StatusCode, retryAfter, time.Since(start), fmt.Errorf("read queue status: %w", readErr)
+	}
+	return body, resp.StatusCode, retryAfter, time.Since(start), nil
+}
+
+func (l *Lemming) loadPageAssets(ctx context.Context, pageURL *url.URL, htmlBody []byte) {
+	refs := journey.ExtractAssets(pageURL, htmlBody)
+	if len(refs) == 0 {
+		return
+	}
+	if l.assetCache == nil {
+		l.assetCache = make(map[string]bool)
+	}
+
+	pageURLStr := pageURL.String()
+	queue := make([]journey.AssetRef, 0, len(refs))
+	seenInPage := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		if _, dup := seenInPage[ref.URL]; dup {
+			continue
+		}
+		seenInPage[ref.URL] = struct{}{}
+		queue = append(queue, ref)
+	}
+
+	fetched := 0
+	for len(queue) > 0 && fetched < l.cfg.AssetsPerPage && ctx.Err() == nil {
+		ref := queue[0]
+		queue = queue[1:]
+		if l.assetCache[ref.URL] {
+			continue
+		}
+		if !discovery.SameOrigin(pageURLStr, ref.URL) {
+			continue
+		}
+
+		fetched++
+		av, cssBody, contentType, finalAssetURL, fetchErr := l.fetchAsset(ctx, pageURLStr, ref)
+		if fetchErr != nil && ctx.Err() != nil {
+			// Parent lifespan ended mid-asset fetch; do not report as a server failure.
+			return
+		}
+
+		if l.metrics != nil {
+			l.metrics.RecordAsset(&av)
+		}
+
+		assetParsed, _ := url.Parse(finalAssetURL)
+		if assetParsed == nil {
+			assetParsed, _ = url.Parse(ref.URL)
+		}
+		admitPass := l.hasActiveCookie(assetParsed, concertAdmitCookieName)
+
+		if l.bus != nil {
+			kind := events.AssetComplete
+			if av.Failed {
+				kind = events.AssetError
+			}
+			l.bus.Emit(events.Event{
+				Kind:          kind,
+				LemmingID:     l.identity.ID,
+				LemmingNumber: l.identity.Number,
+				Terrain:       int(l.identity.Terrain),
+				Pack:          int(l.identity.Pack),
+				URL:           av.URL,
+				StatusCode:    av.StatusCode,
+				BytesIn:       av.BytesIn,
+				Duration:      av.Duration,
+				Failed:        av.Failed,
+				AssetClass:    av.Class,
+				Banned:        av.Denied403,
+				AdmitPass:     admitPass,
+				Payload:       &av,
+				Err:           fetchErr,
+			})
+		}
+
+		// Cache 2xx and 304 responses per lemming (capped at maxAssetCacheEntries).
+		if !av.Failed && ((av.StatusCode >= 200 && av.StatusCode < 300) || av.StatusCode == http.StatusNotModified) {
+			if len(l.assetCache) < maxAssetCacheEntries {
+				l.assetCache[ref.URL] = true
+			}
+		}
+
+		// For 200 CSS responses, discover and enqueue sub-assets (fonts, images,
+		// @imports) within the same cfg.AssetsPerPage budget.
+		if !av.Failed && av.StatusCode == http.StatusOK && len(cssBody) > 0 && isCSSAsset(contentType, av.Class) {
+			cssBase := assetParsed
+			if cssBase != nil {
+				for _, sub := range journey.ExtractCSSAssets(cssBase, cssBody) {
+					if l.assetCache[sub.URL] {
+						continue
+					}
+					if _, dup := seenInPage[sub.URL]; dup {
+						continue
+					}
+					seenInPage[sub.URL] = struct{}{}
+					queue = append(queue, sub)
+				}
+			}
 		}
 	}
+}
+
+func (l *Lemming) fetchAsset(
+	ctx context.Context,
+	pageURL string,
+	ref journey.AssetRef,
+) (AssetVisit, []byte, string, string, error) {
+	timeout := l.cfg.RequestTimeout
+	if timeout <= 0 {
+		timeout = DefaultRequestTimeout
+	}
+	limit := l.cfg.MaxBodyBytes
+	if limit <= 0 {
+		limit = DefaultMaxBodyBytes
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	start := time.Now()
+	av := AssetVisit{
+		LemmingID:     l.identity.ID,
+		LemmingNumber: l.identity.Number,
+		PageURL:       pageURL,
+		URL:           ref.URL,
+		Class:         ref.Class,
+		Timestamp:     start,
+	}
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, ref.URL, nil)
+	if err != nil {
+		av.FinishedAt = time.Now()
+		av.Duration = time.Since(start)
+		av.Failed = true
+		av.ErrorKind = ErrorKind(err)
+		return av, nil, "", ref.URL, fmt.Errorf("build asset request: %w", err)
+	}
+	req.Header.Set("User-Agent", l.identity.UserAgent)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", l.identity.Language)
+	if pageURL != "" {
+		req.Header.Set("Referer", discovery.SafeURL(pageURL))
+	}
+
+	client := *l.client
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if !discovery.SameOrigin(ref.URL, next.URL.String()) {
+			return ErrOffsiteRedirect
+		}
+		if len(via) >= maxRedirects {
+			return ErrTooManyRedirects
+		}
+		return nil
+	}
+
+	resp, err := client.Do(req)
+	finalAssetURL := ref.URL
+	contentType := ""
+	var cssBody []byte
+
+	if resp != nil {
+		av.StatusCode = resp.StatusCode
+		if resp.Request != nil && resp.Request.URL != nil {
+			finalAssetURL = resp.Request.URL.String()
+		}
+		contentType = resp.Header.Get("Content-Type")
+		if cls := journey.ClassifyAsset(finalAssetURL, contentType); cls != "other" || av.Class == "" {
+			av.Class = cls
+		}
+
+		if err == nil {
+			keepCSS := resp.StatusCode == http.StatusOK && isCSSAsset(contentType, av.Class)
+			if keepCSS {
+				var body []byte
+				body, err = io.ReadAll(io.LimitReader(resp.Body, limit+1))
+				av.BytesIn = int64(len(body))
+				if av.BytesIn > limit {
+					av.BytesIn = limit
+					body = body[:limit]
+					if err == nil {
+						err = ErrBodyTooLarge
+					}
+				}
+				cssBody = body
+			} else {
+				var n int64
+				n, err = io.Copy(io.Discard, io.LimitReader(resp.Body, limit+1))
+				av.BytesIn = n
+				if av.BytesIn > limit {
+					av.BytesIn = limit
+					if err == nil {
+						err = ErrBodyTooLarge
+					}
+				}
+			}
+
+			if !errors.Is(err, ErrBodyTooLarge) &&
+				(err == nil || errors.Is(err, io.ErrUnexpectedEOF)) &&
+				resp.ContentLength >= 0 && !resp.Uncompressed && av.BytesIn < resp.ContentLength &&
+				req.Method != http.MethodHead {
+				err = fmt.Errorf("%w: read %d of %d bytes", ErrTruncatedBody, av.BytesIn, resp.ContentLength)
+			}
+			if err != nil && !errors.Is(err, ErrBodyTooLarge) && !errors.Is(err, ErrTruncatedBody) {
+				err = fmt.Errorf("read asset body: %w", err)
+			}
+		}
+		_ = resp.Body.Close()
+	} else if err != nil {
+		err = fmt.Errorf("do asset request: %w", err)
+	}
+
+	av.FinishedAt = time.Now()
+	av.Duration = time.Since(start)
+	if av.Class == "" {
+		av.Class = journey.ClassifyAsset(finalAssetURL, contentType)
+	}
+	av.ErrorKind = ErrorKind(err)
+	if av.StatusCode == http.StatusForbidden {
+		av.Denied403 = true
+	}
+	if err != nil || av.StatusCode < 200 || av.StatusCode >= 400 {
+		av.Failed = true
+	}
+	return av, cssBody, contentType, finalAssetURL, err
+}
+
+func (l *Lemming) hasActiveCookie(u *url.URL, name string) bool {
+	if u == nil || name == "" {
+		return false
+	}
+	if l.jar != nil {
+		return l.jar.HasActiveCookie(u, name)
+	}
+	if l.client != nil && l.client.Jar != nil {
+		for _, c := range l.client.Jar.Cookies(u) {
+			if c != nil && c.Name == name && c.Value != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (l *Lemming) sleepContext(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (l *Lemming) pollJitter(base time.Duration) time.Duration {
+	if base <= 0 || l.rng == nil {
+		return 0
+	}
+	maxJitter := min(base/5, 500*time.Millisecond)
+	if maxJitter <= 0 {
+		return 0
+	}
+	return time.Duration(l.rng.Int63n(int64(maxJitter) + 1))
+}
+
+func (l *Lemming) pollErrorBackoff(failures int) time.Duration {
+	shift := min(max(failures-1, 0), 4)
+	base := waitingRoomPollInterval
+	if base <= 0 {
+		base = time.Second
+	}
+	d := base << shift
+	if d > waitingRoomMaxBackoff || d <= 0 {
+		d = waitingRoomMaxBackoff
+	}
+	return d + l.pollJitter(d)
 }
 
 func (l *Lemming) emitQueued(targetURL string, position int) {
@@ -632,34 +1204,315 @@ func (l *Lemming) emitQueued(targetURL string, position int) {
 	})
 }
 
+func (l *Lemming) emitQueuePoll(pollURL string, status, position, polls int, dur time.Duration, failed bool, err error) {
+	if l.bus == nil {
+		return
+	}
+	l.bus.Emit(events.Event{
+		Kind:          events.QueuePoll,
+		LemmingID:     l.identity.ID,
+		LemmingNumber: l.identity.Number,
+		Terrain:       int(l.identity.Terrain),
+		Pack:          int(l.identity.Pack),
+		URL:           pollURL,
+		StatusCode:    status,
+		Position:      position,
+		QueuePolls:    polls,
+		Duration:      dur,
+		Failed:        failed,
+		Err:           err,
+	})
+}
+
 func (l *Lemming) pickURL() string {
 	if l.pool == nil || len(l.pool.URLs) == 0 {
 		return l.cfg.Hit
 	}
-	return l.pool.URLs[l.rng.Intn(len(l.pool.URLs))]
+	n := len(l.pool.URLs)
+	off := l.rng.Intn(n)
+	for i := range n {
+		candidate := l.pool.URLs[(off+i)%n]
+		if !isConcertInternalURL(candidate) {
+			return candidate
+		}
+	}
+	return l.cfg.Hit
 }
 
-// DetectWaitingRoom checks body for the room package's waiting room signature
-// and extracts its queue position (clamped to >= 0).
-func DetectWaitingRoom(body []byte) (bool, int) {
+// DetectWaitingRoomResponse inspects an HTTP response for all three supported
+// waiting room formats:
+//   - Concert HTML (waiting.html): /_concert/waiting.js + id="position" or
+//     class="queue-page" + id="position" (Mode: "concert-html").
+//   - Legacy HTML (room / Neon Arcade): /queue/status + id="position"
+//     (Mode: "legacy-html").
+//   - Concert -api-json 429 JSON: status 429 with {"queued": true, ...}
+//     (Mode: "concert-json").
+func DetectWaitingRoomResponse(status int, contentType string, headers http.Header, body []byte) (WaitingRoomSignal, bool) {
+	if len(body) == 0 {
+		return WaitingRoomSignal{}, false
+	}
+
+	var headerRetry time.Duration
+	if headers != nil {
+		headerRetry = ParseRetryAfter(headers.Get("Retry-After"), time.Now())
+	}
+
+	// (c) Concert -api-json 429 JSON queue response.
+	if status == http.StatusTooManyRequests && isJSONContentTypeOrEmpty(contentType) {
+		trimmed := bytes.TrimSpace(body)
+		if len(trimmed) > 0 && len(trimmed) <= maxQueueStatusBodyBytes && trimmed[0] == '{' {
+			var payload struct {
+				Queued            bool   `json:"queued"`
+				StatusURL         string `json:"status_url"`
+				RetryAfterSeconds int    `json:"retry_after_seconds"`
+				Position          int    `json:"position"`
+			}
+			if err := json.Unmarshal(trimmed, &payload); err == nil && payload.Queued {
+				retryAfter := clampRetryAfterSeconds(payload.RetryAfterSeconds)
+				if retryAfter == 0 {
+					retryAfter = headerRetry
+				}
+				return WaitingRoomSignal{
+					Detected:   true,
+					Mode:       WaitingRoomModeConcertJSON,
+					Position:   max(payload.Position, 0),
+					StatusURL:  sanitizeStatusURL(payload.StatusURL),
+					RetryAfter: retryAfter,
+				}, true
+			}
+		}
+	}
+
+	// (a) Concert HTML and (b) Legacy HTML waiting rooms.
+	if status != 0 && (status < 200 || status >= 300) && status != http.StatusTooManyRequests {
+		return WaitingRoomSignal{}, false
+	}
+	if !isHTMLContentTypeOrEmpty(contentType) {
+		return WaitingRoomSignal{}, false
+	}
+
 	s := string(body)
-	if !strings.Contains(s, waitingRoomSignature) {
+	if !hasPositionMarker(s) {
+		return WaitingRoomSignal{}, false
+	}
+
+	// (a) Concert waiting.html.
+	if strings.Contains(s, concertWaitingJSMarker) ||
+		strings.Contains(s, `class="queue-page"`) ||
+		strings.Contains(s, `class='queue-page'`) {
+		return WaitingRoomSignal{
+			Detected:   true,
+			Mode:       WaitingRoomModeConcertHTML,
+			Position:   extractWaitingRoomPosition(s),
+			StatusURL:  defaultQueueStatusURL,
+			RetryAfter: headerRetry,
+		}, true
+	}
+
+	// (b) Legacy room / Neon Arcade HTML.
+	if strings.Contains(s, waitingRoomSignature) {
+		return WaitingRoomSignal{
+			Detected:   true,
+			Mode:       WaitingRoomModeLegacyHTML,
+			Position:   extractWaitingRoomPosition(s),
+			StatusURL:  defaultQueueStatusURL,
+			RetryAfter: headerRetry,
+		}, true
+	}
+
+	return WaitingRoomSignal{}, false
+}
+
+// DetectWaitingRoom checks body for Concert waiting.html or legacy waiting room
+// HTML signatures and extracts its queue position (clamped to >= 0).
+func DetectWaitingRoom(body []byte) (bool, int) {
+	sig, ok := DetectWaitingRoomResponse(http.StatusOK, "text/html", nil, body)
+	if !ok {
 		return false, 0
 	}
-	idx := strings.Index(s, waitingRoomPositionMarker)
-	if idx == -1 {
-		return true, 0
+	return true, sig.Position
+}
+
+func hasPositionMarker(s string) bool {
+	return strings.Contains(s, `id="position"`) || strings.Contains(s, `id='position'`)
+}
+
+func extractWaitingRoomPosition(s string) int {
+	idx := strings.Index(s, `id="position"`)
+	if idx < 0 {
+		idx = strings.Index(s, `id='position'`)
 	}
-	start := idx + len(waitingRoomPositionMarker)
-	end := strings.Index(s[start:], "<")
-	if end == -1 {
-		return true, 0
+	if idx < 0 {
+		return 0
 	}
-	pos, err := strconv.Atoi(strings.TrimSpace(s[start : start+end]))
+	rest := s[idx+len(`id="position"`):]
+	gt := strings.IndexByte(rest, '>')
+	if gt < 0 {
+		return 0
+	}
+	rest = rest[gt+1:]
+	if lt := strings.IndexByte(rest, '<'); lt >= 0 {
+		rest = rest[:lt]
+	}
+	pos, err := strconv.Atoi(strings.TrimSpace(rest))
 	if err != nil || pos < 0 {
-		return true, 0
+		return 0
 	}
-	return true, pos
+	return pos
+}
+
+func isJSONContentTypeOrEmpty(ct string) bool {
+	ct = strings.TrimSpace(ct)
+	if ct == "" {
+		return true
+	}
+	media, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		if semi := strings.IndexByte(ct, ';'); semi >= 0 {
+			ct = ct[:semi]
+		}
+		media = strings.ToLower(strings.TrimSpace(ct))
+	} else {
+		media = strings.ToLower(strings.TrimSpace(media))
+	}
+	return media == "application/json" || strings.HasSuffix(media, "+json")
+}
+
+func isHTMLContentTypeOrEmpty(ct string) bool {
+	ct = strings.TrimSpace(ct)
+	if ct == "" {
+		return true
+	}
+	media, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		if semi := strings.IndexByte(ct, ';'); semi >= 0 {
+			ct = ct[:semi]
+		}
+		media = strings.ToLower(strings.TrimSpace(ct))
+	} else {
+		media = strings.ToLower(strings.TrimSpace(media))
+	}
+	return media == "text/html" || media == "application/xhtml+xml"
+}
+
+func isCSSAsset(contentType, class string) bool {
+	ct := strings.TrimSpace(contentType)
+	if ct != "" {
+		media, _, err := mime.ParseMediaType(ct)
+		if err != nil {
+			if semi := strings.IndexByte(ct, ';'); semi >= 0 {
+				ct = ct[:semi]
+			}
+			media = strings.ToLower(strings.TrimSpace(ct))
+		} else {
+			media = strings.ToLower(strings.TrimSpace(media))
+		}
+		return media == "text/css"
+	}
+	return class == "style"
+}
+
+func isConcertBreaker503(contentType string, body []byte) bool {
+	if !isJSONContentTypeOrEmpty(contentType) || len(body) == 0 || len(body) > maxQueueStatusBodyBytes {
+		return false
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return false
+	}
+	var payload struct {
+		Queued *bool `json:"queued"`
+	}
+	if err := json.Unmarshal(trimmed, &payload); err != nil {
+		return false
+	}
+	return payload.Queued != nil && !*payload.Queued
+}
+
+func clampRetryAfterSeconds(secs int) time.Duration {
+	if secs <= 0 {
+		return 0
+	}
+	maxSecs := int(maxRetryAfter / time.Second)
+	if secs > maxSecs {
+		return maxRetryAfter
+	}
+	return time.Duration(secs) * time.Second
+}
+
+// sanitizeStatusURL ensures a status_url from a JSON waiting-room payload is a
+// safe same-origin relative path, falling back to "/queue/status" otherwise.
+func sanitizeStatusURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return defaultQueueStatusURL
+	}
+	if strings.HasPrefix(raw, "//") || strings.ContainsAny(raw, "\\\r\n") {
+		return defaultQueueStatusURL
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil {
+		return defaultQueueStatusURL
+	}
+	if !strings.HasPrefix(raw, "/") {
+		return defaultQueueStatusURL
+	}
+	u.Fragment = ""
+	u.RawFragment = ""
+	return u.String()
+}
+
+func resolvePollURL(targetURL, statusURL string) (resolvedURL, normalizedPath string, ok bool) {
+	base, err := url.Parse(targetURL)
+	if err != nil || base.Host == "" {
+		return "", "", false
+	}
+	candidate := strings.TrimSpace(statusURL)
+	if candidate == "" {
+		candidate = defaultQueueStatusURL
+	}
+	ref, err := url.Parse(candidate)
+	if err != nil || ref.User != nil {
+		ref, _ = url.Parse(defaultQueueStatusURL)
+	}
+	resolved := base.ResolveReference(ref)
+	resolved.Fragment = ""
+	resolved.RawFragment = ""
+
+	if !discovery.SameOrigin(targetURL, resolved.String()) {
+		fallbackRef, _ := url.Parse(defaultQueueStatusURL)
+		resolved = base.ResolveReference(fallbackRef)
+		if !discovery.SameOrigin(targetURL, resolved.String()) {
+			return "", "", false
+		}
+	}
+	return resolved.String(), resolved.RequestURI(), true
+}
+
+func isConcertInternalURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	p := u.Path
+	if p == "/_concert" || strings.HasPrefix(p, "/_concert/") {
+		return true
+	}
+	cleaned := path.Clean("/" + p)
+	return cleaned == "/_concert" || strings.HasPrefix(cleaned, "/_concert/")
+}
+
+func filterSiteLinks(links []string) []string {
+	if len(links) == 0 {
+		return links
+	}
+	out := links[:0]
+	for _, link := range links {
+		if !isConcertInternalURL(link) {
+			out = append(out, link)
+		}
+	}
+	return out
 }
 
 func generateLemmingID(number, terrain, pack int64) string {
