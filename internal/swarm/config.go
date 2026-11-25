@@ -30,7 +30,33 @@ const (
 	CaptureFormatPNG  = "png"
 )
 
+// DefaultAssetsPerPage bounds the number of uncached same-origin assets fetched
+// per HTML page visit when -assets is enabled.
+const DefaultAssetsPerPage = 8
+
 var validReportSlug = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// DefaultConfig returns a Config populated with safe default values.
+func DefaultConfig() Config {
+	return Config{
+		Terrain:         1,
+		Pack:            1,
+		Limit:           1,
+		Until:           time.Minute,
+		RampShape:       RampLinear,
+		RequestTimeout:  DefaultRequestTimeout,
+		MaxBodyBytes:    DefaultMaxBodyBytes,
+		Navigation:      journey.NavigationLinks,
+		Assets:          false,
+		AssetsPerPage:   DefaultAssetsPerPage,
+		CaptureMax:      50,
+		CapturePerError: 3,
+		CaptureWorkers:  2,
+		CaptureTimeout:  8 * time.Second,
+		CaptureFormat:   CaptureFormatJPEG,
+		AllowRemoteCDP:  false,
+	}
+}
 
 // Config is the validated configuration value object shared across bounded contexts.
 // Delivery credentials and paths are marked json:"-" so they can never serialize
@@ -72,6 +98,8 @@ type Config struct {
 	MaxPages       int              `json:"max_pages"`
 	Navigation     string           `json:"navigation"`
 	StrictChecksum bool             `json:"strict_checksum"`
+	Assets         bool             `json:"assets"`
+	AssetsPerPage  int              `json:"assets_per_page"`
 	JourneyFile    string           `json:"-"`
 	Journey        *journey.Journey `json:"-"`
 	TraceFile      string           `json:"-"`
@@ -85,6 +113,7 @@ type Config struct {
 	CaptureFormat        string        `json:"capture_format"`
 	ChromeBin            string        `json:"-"`
 	CDPURL               string        `json:"-"`
+	AllowRemoteCDP       bool          `json:"-"`
 	Scouts               int           `json:"scouts"`
 	RevealSessionCookies bool          `json:"-"`
 	ReviewMode           bool          `json:"-"`
@@ -122,6 +151,8 @@ func (c *Config) Validate() error {
 		return errors.New("-max-body-bytes must be 0..64MiB")
 	case c.MaxPages < 0:
 		return errors.New("-max-pages must not be negative")
+	case c.AssetsPerPage < 0 || c.AssetsPerPage > 64:
+		return fmt.Errorf("-assets-per-page must be 0..64, got %d", c.AssetsPerPage)
 	case c.P95Budget < 0:
 		return errors.New("-p95-budget must not be negative")
 	case c.FailureGate && (math.IsNaN(c.MaxFailureRate) || c.MaxFailureRate < 0 || c.MaxFailureRate > 1):
@@ -166,6 +197,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("-capture-format must be jpeg or png, got %q", c.CaptureFormat)
 	}
 
+	if c.AssetsPerPage == 0 {
+		c.AssetsPerPage = DefaultAssetsPerPage
+	}
 	if c.CaptureMax == 0 {
 		c.CaptureMax = 50
 	}

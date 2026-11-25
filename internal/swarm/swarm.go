@@ -3,6 +3,7 @@ package swarm
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +18,7 @@ import (
 // Metrics holds exact live atomic counters readable by the CLI ticker,
 // dashboard, and reporters.
 type Metrics struct {
+	LemmingsStarted   atomic.Int64
 	LemmingsAlive     atomic.Int64
 	LemmingsCompleted atomic.Int64
 	LemmingsFailed    atomic.Int64
@@ -34,14 +36,33 @@ type Metrics struct {
 	DroppedLogs       atomic.Int64
 	ArtifactsCaptured atomic.Int64
 	ScoutsAlive       atomic.Int64
+	AssetRequests     atomic.Int64
+	AssetFailed       atomic.Int64
+	AssetBytes        atomic.Int64
+	AssetDenied403    atomic.Int64
+	QueuePolls        atomic.Int64
+	Bans429           atomic.Int64
+	Bans403           atomic.Int64
+	ScoutVisits       atomic.Int64
+	ScoutFailures     atomic.Int64
 }
 
 // RecordVisit counts one completed visit atomically.
+// Cancelled visits increment TotalVisits, TotalBytes, TotalWaitingRoom (when
+// detected), and CancelledVisits, and skip HTTP status classes so partial
+// shutdown reads never distort status distributions.
 func (m *Metrics) RecordVisit(v *Visit) {
+	if v == nil {
+		return
+	}
 	m.TotalVisits.Add(1)
 	m.TotalBytes.Add(v.BytesIn)
 	if v.WaitingRoom.Detected {
 		m.TotalWaitingRoom.Add(1)
+	}
+	if v.Cancelled {
+		m.CancelledVisits.Add(1)
+		return
 	}
 	switch {
 	case v.StatusCode >= 200 && v.StatusCode < 300:
@@ -53,11 +74,31 @@ func (m *Metrics) RecordVisit(v *Visit) {
 	case v.StatusCode >= 500:
 		m.Total5xx.Add(1)
 	}
-	switch {
-	case v.Cancelled:
-		m.CancelledVisits.Add(1)
-	case v.Failed:
+	if v.Failed {
 		m.FailedVisits.Add(1)
+	}
+	if v.Banned {
+		switch v.StatusCode {
+		case http.StatusTooManyRequests:
+			m.Bans429.Add(1)
+		case http.StatusForbidden:
+			m.Bans403.Add(1)
+		}
+	}
+}
+
+// RecordAsset counts one completed same-origin asset fetch atomically.
+func (m *Metrics) RecordAsset(a *AssetVisit) {
+	if a == nil {
+		return
+	}
+	m.AssetRequests.Add(1)
+	m.AssetBytes.Add(a.BytesIn)
+	if a.Failed {
+		m.AssetFailed.Add(1)
+	}
+	if a.Denied403 || a.StatusCode == http.StatusForbidden {
+		m.AssetDenied403.Add(1)
 	}
 }
 
@@ -183,6 +224,15 @@ func New(ctx context.Context, cfg Config, opts Options) (*Swarm, error) {
 			s.metrics.ScoutsAlive.Add(-1)
 		}
 	}, events.ScoutStarted, events.ScoutDone))
+	bus.Subscribe(events.Filter(func(events.Event) {
+		s.metrics.QueuePolls.Add(1)
+	}, events.QueuePoll))
+	bus.Subscribe(events.Filter(func(e events.Event) {
+		s.metrics.ScoutVisits.Add(1)
+		if e.Failed {
+			s.metrics.ScoutFailures.Add(1)
+		}
+	}, events.ScoutVisit))
 
 	s.terrains = make([]*Terrain, cfg.Terrain)
 	for i := int64(0); i < cfg.Terrain; i++ {

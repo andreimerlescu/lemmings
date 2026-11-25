@@ -136,6 +136,7 @@ func (t *Terrain) live(ctx context.Context, packIndex int64) {
 	ident := lemming.Identity()
 
 	if t.metrics != nil {
+		t.metrics.LemmingsStarted.Add(1)
 		t.metrics.LemmingsAlive.Add(1)
 	}
 	if t.bus != nil {
@@ -188,10 +189,13 @@ func (t *Terrain) newClient() (*http.Client, *InspectingJar, error) {
 }
 
 func newLemmingTransport() *http.Transport {
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: discovery.SafeDialContext(&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}),
+		TLSClientConfig:       discovery.MinTLSConfig(),
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          6,
 		MaxIdleConnsPerHost:   6,
