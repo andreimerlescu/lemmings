@@ -635,61 +635,6 @@ func TestTerrain_ZeroPackSize(t *testing.T) {
 	}
 }
 
-// ── Benchmarks ────────────────────────────────────────────────────────────────
-
-// BenchmarkTerrain_Launch_Pack100 measures the time to launch 100 lemmings
-// and wait for all of them to complete against a local httptest server.
-func BenchmarkTerrain_Launch_Pack100(b *testing.B) {
-	srv := newBenchServer(b).
-		withNormalPage("/").
-		withNormalPage("/about").
-		withNormalPage("/pricing").
-		build()
-
-	cfg := testConfig()
-	cfg.Hit = srv.URL + "/"
-	cfg.Pack = 100
-	cfg.Until = 50 * time.Millisecond
-
-	pool := testPool(srv.URL)
-	bus := NewEventBus()
-	sem := newTestSema(200)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		terrain := NewTerrain(int64(i), cfg, pool, noopSend, bus, sem, testMetrics())
-		terrain.Launch(context.Background())
-		terrain.Wait()
-	}
-}
-
-// BenchmarkTerrain_Launch_Pack1000 measures the time to launch 1000 lemmings
-// and wait for all of them to complete. Tests scheduler and semaphore pressure
-// at scale.
-func BenchmarkTerrain_Launch_Pack1000(b *testing.B) {
-	srv := newBenchServer(b).
-		withNormalPage("/").
-		withNormalPage("/about").
-		withNormalPage("/pricing").
-		build()
-
-	cfg := testConfig()
-	cfg.Hit = srv.URL + "/"
-	cfg.Pack = 1000
-	cfg.Until = 50 * time.Millisecond
-
-	pool := testPool(srv.URL)
-	bus := NewEventBus()
-	sem := newTestSema(500)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		terrain := NewTerrain(int64(i), cfg, pool, noopSend, bus, sem, testMetrics())
-		terrain.Launch(context.Background())
-		terrain.Wait()
-	}
-}
-
 // ── Internal test helpers ─────────────────────────────────────────────────────
 
 // noopSend is a send callback that discards all LifeLogs.

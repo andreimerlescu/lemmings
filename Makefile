@@ -1,4 +1,6 @@
 BINARY     := lemmings
+BIN_DIR    := bin
+PLATFORMS  := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 MODULE     := github.com/andreimerlescu/lemmings
 GO         := go
 GOFLAGS    := -race
@@ -6,8 +8,14 @@ BENCHTIME  ?= 5s
 FUZZTIME   ?= 10s
 COVEROUT   := coverage.out
 DEMO_ADDR  ?= 127.0.0.1:8080
+GO_BUILD_FLAGS := -trimpath
+GO_LDFLAGS     := -s -w
 
 .DEFAULT_GOAL := all
+
+os   = $(word 1,$(subst /, ,$1))
+arch = $(word 2,$(subst /, ,$1))
+ext  = $(if $(filter windows,$(call os,$1)),.exe,)
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
@@ -15,8 +23,7 @@ DEMO_ADDR  ?= 127.0.0.1:8080
 all: lint test build
 
 .PHONY: build
-build:
-	$(GO) build -trimpath -o bin/$(BINARY) .
+build:  test-all summary $(PLATFORMS)
 
 .PHONY: build-check
 build-check: vet fmt-check
@@ -135,6 +142,15 @@ run-journey:
 		-max-failure-rate 0.05 \
 		-p95-budget 750ms \
 		-save-to bin/reports
+
+
+build: $(PLATFORMS)
+
+$(PLATFORMS):
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=0 GOOS=$(call os,$@) GOARCH=$(call arch,$@) \
+		go build $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" \
+		-o $(BIN_DIR)/$(BINARY)-$(call os,$@)-$(call arch,$@)$(call ext,$@) .
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 

@@ -974,29 +974,6 @@ func BenchmarkDetectWaitingRoom_WaitingRoom(b *testing.B) {
 	}
 }
 
-// BenchmarkRun measures a lemming's full Run lifecycle against a local
-// httptest server with a 3-URL pool.
-func BenchmarkRun(b *testing.B) {
-	srv := newBenchServer(b).
-		withNormalPage("/").
-		withNormalPage("/about").
-		withNormalPage("/pricing").
-		build()
-
-	cfg := testConfig()
-	cfg.Hit = srv.URL
-	cfg.Until = 500 * time.Millisecond
-	pool := testPool(srv.URL)
-	bus := NewEventBus()
-	metrics := testMetrics()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		l := NewLemming(0, int64(i), cfg, pool, newTestClient(), bus, metrics)
-		l.Run(context.Background())
-	}
-}
-
 // ── Fuzz ─────────────────────────────────────────────────────────────────────
 
 // FuzzDetectWaitingRoom verifies that detectWaitingRoom never panics on

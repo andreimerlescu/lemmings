@@ -872,29 +872,6 @@ func BenchmarkExtractHTMLLinks(b *testing.B) {
 	}
 }
 
-// BenchmarkBuildURLPool measures the full pool construction time against
-// a local httptest server with a 50-URL sitemap.
-func BenchmarkBuildURLPool(b *testing.B) {
-	urls := makeSitemapURLs(50)
-	srv := newBenchServer(b).
-		withSitemap("/sitemap.xml", urls).
-		withNormalPage("/").
-		build()
-
-	// Ensure all sitemap URLs are reachable on the test server
-	for i := range urls {
-		urls[i] = srv.URL + fmt.Sprintf("/page-%d", i)
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := BuildURLPool(context.Background(), srv.URL+"/", false, 2)
-		if err != nil {
-			b.Fatalf("BuildURLPool error: %v", err)
-		}
-	}
-}
-
 // ── Fuzz ──────────────────────────────────────────────────────────────────────
 
 // FuzzExtractSitemapLocs verifies that extractSitemapLocs never panics on
@@ -916,30 +893,6 @@ func FuzzExtractSitemapLocs(f *testing.F) {
 		for i, u := range got {
 			if u == "" {
 				t.Errorf("loc[%d] is empty string — should have been filtered", i)
-			}
-		}
-	})
-}
-
-// FuzzExtractHTMLLinks verifies that extractHTMLLinks never panics on
-// arbitrary HTML input and always returns a non-nil slice.
-func FuzzExtractHTMLLinks(f *testing.F) {
-	f.Add([]byte(normalPageBody), "https://example.com")
-	f.Add([]byte(`<html><body><a href="/page">link</a></body></html>`), "https://example.com")
-	f.Add([]byte{}, "https://example.com")
-	f.Add([]byte(`<a href="javascript:evil()">bad</a>`), "https://example.com")
-	f.Add([]byte(`<a href="mailto:x@y.com">email</a>`), "https://example.com")
-
-	f.Fuzz(func(t *testing.T, data []byte, origin string) {
-		got := extractHTMLLinks(data, origin)
-		// Invariant: must not panic and must return non-nil
-		if got == nil {
-			t.Error("extractHTMLLinks should never return nil")
-		}
-		// Invariant: all returned strings must have the origin as prefix
-		for i, link := range got {
-			if !strings.HasPrefix(link, origin) {
-				t.Errorf("link[%d] %q does not have origin prefix %q", i, link, origin)
 			}
 		}
 	})

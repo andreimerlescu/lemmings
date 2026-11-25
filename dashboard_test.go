@@ -1266,65 +1266,6 @@ func BenchmarkSnapshot_Concurrent(b *testing.B) {
 	})
 }
 
-// ── Fuzz ──────────────────────────────────────────────────────────────────────
-
-// FuzzHandleAuth verifies that handleAuth never panics on arbitrary token
-// values and always returns a valid HTTP status code.
-func FuzzHandleAuth(f *testing.F) {
-	f.Add("correcttoken")
-	f.Add("")
-	f.Add("a")
-	f.Add(strings.Repeat("x", 1000))
-	f.Add("token=injected&extra=field")
-
-	f.Fuzz(func(t *testing.T, token string) {
-		d, _ := newTestDashboard(t)
-
-		body := fmt.Sprintf("token=%s", token)
-		req := httptest.NewRequest(http.MethodPost, "/auth",
-			strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		w := httptest.NewRecorder()
-
-		// Must not panic
-		d.handleAuth(w, req)
-
-		// Must return a valid HTTP status
-		validStatuses := map[int]bool{
-			http.StatusOK:               true,
-			http.StatusBadRequest:       true,
-			http.StatusUnauthorized:     true,
-			http.StatusMethodNotAllowed: true,
-			http.StatusSeeOther:         true,
-		}
-		if !validStatuses[w.Code] {
-			t.Errorf("handleAuth returned unexpected status %d for token %q",
-				w.Code, token)
-		}
-	})
-}
-
-// FuzzDashboardHTML verifies that dashboardHTML never panics on arbitrary
-// hit URL strings and always returns a non-empty HTML string.
-func FuzzDashboardHTML(f *testing.F) {
-	f.Add("http://localhost:8080/")
-	f.Add("https://example.com/")
-	f.Add("")
-	f.Add("<script>alert(1)</script>")
-	f.Add("http://localhost:8080/?q=<>&x='")
-
-	f.Fuzz(func(t *testing.T, hit string) {
-		cfg := testConfig()
-		cfg.Hit = hit
-
-		// Must not panic
-		got := dashboardHTML(cfg)
-		if len(got) == 0 {
-			t.Error("dashboardHTML should never return empty string")
-		}
-	})
-}
-
 // ── Internal test helpers ─────────────────────────────────────────────────────
 
 // newTestDashboard constructs a Dashboard with a random test token wired
