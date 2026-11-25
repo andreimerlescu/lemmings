@@ -3,6 +3,88 @@
 All notable changes to lemmings are recorded here. Versions follow
 [Semantic Versioning](https://semver.org).
 
+## 2.0.0 — 2026-11-25
+
+A major architectural, security, and forensics upgrade: Lemmings is now
+structured into clean Go bounded contexts (`cmd/lemmings` + `internal/*`),
+captures live error screenshots, JS console logs, cookie jar state, and
+extracted error bodies, streams them into the Admin Portal for triage review,
+and embeds everything cleanly into final reports.
+
+### Live Error Forensics & Screenshots
+
+- **Zero-Node pure-Go Chrome DevTools Protocol (CDP) engine.** Auto-detects
+  local Chrome/Chromium (or connects to `-cdp-url`), replays failing visits
+  inside isolated ephemeral incognito contexts with the lemming's cookies, user
+  agent, language, and viewport, and captures compressed screenshots, JS console
+  logs/exceptions, and failed subresources — falling back cleanly to HTTP-only
+  forensics when no browser is present.
+- **Four-part error artifacts** for every captured failure:
+  1. Session state, sequential lemming number (`#1..N`), breadcrumb trail, and
+     cookie jar status (`InspectingJar` metadata + HMAC fingerprint; raw cookie
+     values always redacted in reports).
+  2. JavaScript console errors, warnings, uncaught exceptions, and failed
+     subresources.
+  3. Visual screenshot (JPEG/PNG) bounded and deduplicated (`-capture-max`,
+     `-capture-per-error`, `-capture-workers`, `-capture-timeout`).
+  4. Parsed & extracted error page body (HTML, JSON/RFC-7807 Problem Details,
+     XML, or plain text with secret scrubbing and allowlisted diagnostic headers).
+- **Real-browser Scouts (`-scouts N`).** Optional browser-backed lemmings run
+  concurrently with the HTTP swarm to surface pure client-side JS and rendering
+  errors on HTTP `200 OK` pages.
+
+### Admin Portal Triage & Review Mode
+
+- **Live Error Forensics Gallery** streaming into the portal via SSE as
+  screenshots finish, with filter tabs (`All`, `Unreviewed`, `5xx`, `4xx`,
+  `JS Errors`, `Check Failures`) and search.
+- **4-Panel Artifact Inspector Modal** (Screenshot, Session & Cookie Jar,
+  Extracted Error & Body, JS Console) with triage actions (`Bug`, `Flaky`,
+  `Expected`, `Ignored`, `Unreviewed` + admin note) persisted directly into the
+  final HTML, Markdown, and JSON reports.
+- **Post-run Review Mode (`-review`).** Holds the portal open after the swarm
+  completes so the admin can review and tag screenshots before clicking
+  **Finalize & Write Report** (or pressing Ctrl-C).
+
+### Architecture, Reports & Developer Experience
+
+- **DDD Package Refactor.** Flat root `package main` refactored into
+  `cmd/lemmings/main.go` and 12 cohesive `internal/*` packages (`version`,
+  `secrets`, `events`, `discovery`, `journey`, `forensics`, `swarm`, `report`,
+  `delivery`, `dashboard`, `metrics`, `cli`).
+- **Hybrid Forensics Reports & Naming.** Self-contained HTML embeds bounded
+  base64 screenshots (12 MiB cap for local/S3, 2 MiB cap for email); Local and
+  S3 targets also write `.artifacts/<id>.<ext>` files for Markdown relative
+  image links and lean JSON. Added `-unique-report` and `-report-name`.
+- **Regression Comparison (`lemmings compare`).** Compare baseline vs candidate
+  JSON reports with `-max-failure-delta`, `-max-p95-delta`, `-max-rescued-drop`,
+  new/resolved error fingerprints, and CI exit code `2` on regression.
+- **Ramp Shapes & Dry Run.** Added `-ramp-shape` (`linear`, `fibonacci`, `step`)
+  and `-dry-run` pre-flight validation.
+- **Documentation Suite.** Complete end-user and security documentation under
+  `docs/` and refreshed `README.md`.
+
+### Security Hardening (`SEC-01`..`SEC-10`)
+
+- **Breaking Change:** Removed `-smtp-pass` / `-spw` CLI flag so SMTP
+  credentials never appear in process `argv` (`ps aux`). Use
+  `-smtp-pass-file` (requires `0600` permissions), `-smtp-pass-stdin`,
+  `LEMMINGS_SMTP_PASS_FILE`, or `LEMMINGS_SMTP_PASS`.
+- Introduced redacting `secrets.Secret` value type and `secrets.ScrubText`
+  across error excerpts, JS console logs, and reports.
+- Hardened `MailTarget` against SMTP header CRLF injection (`SEC-02`) and
+  fail-closed TLS (`MinVersion: tls.VersionTLS12`, `-smtp-require-tls`, `SEC-03`).
+- Added loopback `Host`-header guard to Prometheus `/metrics` (`SEC-04`).
+- Replaced raw dashboard token cookies with HMAC-SHA256 signed random session
+  cookies, added per-IP auth rate limiting (`429`), and added
+  `http.NewCrossOriginProtection()` CSRF checks on all state-changing routes (`SEC-05`).
+- Confined `LocalTarget` writes via Go's `os.OpenRoot` (`SEC-06`) and trace
+  files to `0600`.
+- Bounded sitemap indexing concurrency to a fixed worker pool (`SEC-07`) and
+  joined every dashboard/metrics/CDP goroutine cleanly on shutdown (`SEC-08`).
+- Scrubbed spawned headless Chromium child environment to a minimal allowlist
+  so ambient host tokens never reach the browser process (`SEC-09`).
+
 ## 1.0.0 — 2026-09-27
 
 The first stable release. Lemmings now behaves like a crowd of real

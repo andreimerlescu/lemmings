@@ -1,0 +1,1073 @@
+package report
+
+import (
+	"bytes"
+	"context"
+	"embed"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	htmltemplate "html/template"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"text/template"
+	"time"
+
+	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
+	"github.com/andreimerlescu/lemmings/v2/internal/events"
+	"github.com/andreimerlescu/lemmings/v2/internal/forensics"
+	"github.com/andreimerlescu/lemmings/v2/internal/swarm"
+)
+
+const (
+	reportDateFormat         = "2006.01.02"
+	reportTimestampFormat    = "2006.01.02.150405Z"
+	maxReportPaths           = 1000
+	otherPath                = "[other paths]"
+	exactGlobalSamples       = 4096
+	exactPathSamples         = 512
+	reportTailSteps          = 40
+	maxHTMLInlineImageBytes  = 12 << 20 // 12 MiB cap for self-contained HTML data URIs
+	maxEmailInlineImageBytes = 2 << 20  // 2 MiB cap for SMTP-safe inline HTML reports
+)
+
+//go:embed templates/report.md.tmpl templates/report.html.tmpl
+var reportTemplates embed.FS
+
+// Target receives a rendered report for delivery (Local, S3, SMTP).
+type Target interface {
+	Deliver(ctx context.Context, report Rendered) error
+	Name() string
+}
+
+// ArtifactAsset is a standalone screenshot file written alongside reports on
+// Local and S3 targets so Markdown renders relative image links natively.
+type ArtifactAsset struct {
+	Filename string // e.g. "<id>.jpg"
+	MIMEType string
+	Data     []byte
+}
+
+// Rendered is a report rendered in every output format plus standalone assets.
+type Rendered struct {
+	Filename     string
+	Domain       string
+	Markdown     string
+	HTML         string
+	HTMLForEmail string
+	JSON         []byte
+	Artifacts    []ArtifactAsset
+}
+
+// ForensicsReport embeds capture statistics and all redacted error artifacts
+// (including admin triage verdicts and notes) into the final report.
+type ForensicsReport struct {
+	Stats     forensics.Stats      `json:"stats"`
+	Artifacts []forensics.Artifact `json:"artifacts,omitempty"`
+}
+
+// Data is the complete computed dataset passed to every renderer and JSON export.
+type Data struct {
+	Version     string        `json:"version"`
+	GeneratedAt time.Time     `json:"generated_at"`
+	Duration    time.Duration `json:"duration_ns"`
+	Config      swarm.Config  `json:"config"`
+	Journey     string        `json:"journey,omitempty"`
+
+	TotalLemmings    int64 `json:"total_lemmings"`
+	LemmingsStarted  int64 `json:"lemmings_started"`
+	LemmingsUnborn   int64 `json:"lemmings_not_started"`
+	TotalVisits      int64 `json:"total_visits"`
+	TotalBytes       int64 `json:"total_bytes"`
+	TotalWaitingRoom int64 `json:"total_waiting_room"`
+	Total2xx         int64 `json:"total_2xx"`
+	Total3xx         int64 `json:"total_3xx"`
+	Total4xx         int64 `json:"total_4xx"`
+	Total5xx         int64 `json:"total_5xx"`
+	TotalErrors      int64 `json:"total_transport_errors"`
+
+	FailedVisits    int64   `json:"failed_visits"`
+	CancelledVisits int64   `json:"cancelled_visits"`
+	FailureRate     float64 `json:"failure_rate"`
+	VisitsPerSecond float64 `json:"visits_per_second"`
+	Sessions        int64   `json:"sessions_observed"`
+	Rescued         int64   `json:"sessions_flawless"`
+	RescuedPercent  float64 `json:"rescued_percent"`
+	ChecksumChanges int64   `json:"checksum_changes"`
+	HTMLPages       int64   `json:"html_pages"`
+
+	Fastest          time.Duration `json:"fastest_ns"`
+	Slowest          time.Duration `json:"slowest_ns"`
+	Mean             time.Duration `json:"mean_ns"`
+	P50              time.Duration `json:"p50_ns"`
+	P90              time.Duration `json:"p90_ns"`
+	P95              time.Duration `json:"p95_ns"`
+	P99              time.Duration `json:"p99_ns"`
+	TTFBP50          time.Duration `json:"ttfb_p50_ns"`
+	TTFBP95          time.Duration `json:"ttfb_p95_ns"`
+	PercentileMethod string        `json:"percentile_method"`
+
+	Room         RoomReport      `json:"waiting_room"`
+	StatusCodes  []CountRow      `json:"status_codes"`
+	ErrorKinds   []CountRow      `json:"error_kinds"`
+	FailedChecks []CountRow      `json:"failed_checks"`
+	ExitReasons  []CountRow      `json:"exit_reasons"`
+	Timeline     []TimelinePoint `json:"timeline"`
+	Notable      []NotableLife   `json:"notable_lemmings"`
+	Forensics    ForensicsReport `json:"forensics"`
+
+	Gates        []GateResult `json:"gates"`
+	Verdict      string       `json:"verdict"`
+	DroppedLogs  int64        `json:"dropped_lifelogs"`
+	TraceFile    string       `json:"trace_file,omitempty"`
+	TraceWritten int64        `json:"trace_written,omitempty"`
+	TraceDropped int64        `json:"trace_dropped,omitempty"`
+	TraceError   string       `json:"trace_error,omitempty"`
+
+	Paths []PathReport `json:"paths"`
+}
+
+// GatesFailed reports whether any CI gate failed.
+func (d Data) GatesFailed() bool { return anyFailed(d.Gates) }
+
+// PathReport is the per-URL breakdown row.
+type PathReport struct {
+	URL         string        `json:"url"`
+	Hits        int64         `json:"hits"`
+	Bytes       string        `json:"bytes"`
+	XX2         int64         `json:"2xx"`
+	XX3         int64         `json:"3xx"`
+	XX4         int64         `json:"4xx"`
+	XX5         int64         `json:"5xx"`
+	WaitingRoom int64         `json:"waiting_room"`
+	Errors      int64         `json:"transport_errors"`
+	Failed      int64         `json:"failed"`
+	P50         time.Duration `json:"p50_ns"`
+	P95         time.Duration `json:"p95_ns"`
+	P99         time.Duration `json:"p99_ns"`
+	HitShare    float64       `json:"hit_share"`
+}
+
+// RoomReport summarizes waiting room activity.
+type RoomReport struct {
+	Held        int64         `json:"held"`
+	DiedInLine  int64         `json:"died_in_line"`
+	MaxPosition int           `json:"max_position"`
+	MeanWait    time.Duration `json:"mean_wait_ns"`
+	P95Wait     time.Duration `json:"p95_wait_ns"`
+	LongestWait time.Duration `json:"longest_wait_ns"`
+}
+
+// CountRow is one labelled count row.
+type CountRow struct {
+	Label string  `json:"label"`
+	Count int64   `json:"count"`
+	Share float64 `json:"share"`
+}
+
+// GateResult is the outcome of one CI gate.
+type GateResult struct {
+	Name     string `json:"name"`
+	Limit    string `json:"limit"`
+	Observed string `json:"observed"`
+	Passed   bool   `json:"passed"`
+}
+
+// LiveStats is the dashboard's once-a-second aggregate snapshot.
+type LiveStats struct {
+	Visits         int64           `json:"visits"`
+	Failed         int64           `json:"failed"`
+	Cancelled      int64           `json:"cancelled"`
+	FailureRate    float64         `json:"failure_rate"`
+	P50            time.Duration   `json:"p50_ns"`
+	P95            time.Duration   `json:"p95_ns"`
+	P99            time.Duration   `json:"p99_ns"`
+	TTFBP95        time.Duration   `json:"ttfb_p95_ns"`
+	Sessions       int64           `json:"sessions"`
+	Rescued        int64           `json:"rescued"`
+	RescuedPercent float64         `json:"rescued_percent"`
+	Room           RoomReport      `json:"room"`
+	Timeline       []TimelinePoint `json:"timeline,omitempty"`
+	Paths          []PathReport    `json:"paths,omitempty"`
+	StatusCodes    []CountRow      `json:"status_codes,omitempty"`
+	Causes         []CountRow      `json:"causes,omitempty"`
+}
+
+// NotableLife is one lemming highlighted in the final report.
+type NotableLife struct {
+	Title      string        `json:"title"`
+	Why        string        `json:"why"`
+	Number     int64         `json:"number"`
+	ID         string        `json:"id"`
+	Name       string        `json:"name"`
+	Persona    string        `json:"persona"`
+	Language   string        `json:"language"`
+	Terrain    int           `json:"terrain"`
+	Pack       int           `json:"pack"`
+	Lifespan   time.Duration `json:"lifespan_ns"`
+	Visits     int64         `json:"visits"`
+	Failed     int64         `json:"failed"`
+	Cancelled  int64         `json:"cancelled"`
+	ExitReason string        `json:"exit_reason"`
+	Omitted    int64         `json:"omitted_steps"`
+	Steps      []LifeStep    `json:"steps"`
+}
+
+// LifeStep is one visit inside a NotableLife.
+type LifeStep struct {
+	Seq       int     `json:"seq"`
+	Step      string  `json:"step,omitempty"`
+	Path      string  `json:"path"`
+	Status    int     `json:"status"`
+	Millis    float64 `json:"ms"`
+	Title     string  `json:"title,omitempty"`
+	Failed    bool    `json:"failed"`
+	Cancelled bool    `json:"cancelled"`
+	QueuedMS  float64 `json:"queued_ms,omitempty"`
+	Why       string  `json:"why,omitempty"`
+	Bar       float64 `json:"bar"`
+}
+
+type pathStats struct {
+	URL         string
+	Hits        int64
+	Bytes       int64
+	xx2         int64
+	xx3         int64
+	xx4         int64
+	xx5         int64
+	waitingRoom int64
+	errors      int64
+	failed      int64
+	LatencySeries
+}
+
+type notableSet struct {
+	explorer, unlucky, patientZero, patient *swarm.LifeLog
+}
+
+func (n *notableSet) consider(ll *swarm.LifeLog) {
+	keep := func(slot **swarm.LifeLog, better bool) {
+		if better {
+			c := *ll
+			*slot = &c
+		}
+	}
+	keep(&n.explorer, ll.TotalVisits > 0 && (n.explorer == nil || ll.TotalVisits > n.explorer.TotalVisits))
+	keep(&n.unlucky, ll.SlowestVisit > 0 && (n.unlucky == nil || ll.SlowestVisit > n.unlucky.SlowestVisit))
+	keep(&n.patientZero, !ll.FirstFailureAt.IsZero() &&
+		(n.patientZero == nil || ll.FirstFailureAt.Before(n.patientZero.FirstFailureAt)))
+	keep(&n.patient, ll.LongestWait > 0 && (n.patient == nil || ll.LongestWait > n.patient.LongestWait))
+}
+
+func (n *notableSet) lives() []NotableLife {
+	var out []NotableLife
+	add := func(ll *swarm.LifeLog, title, why string) {
+		if ll != nil {
+			out = append(out, notableLife(ll, title, why))
+		}
+	}
+	if n.explorer != nil {
+		add(n.explorer, "The Explorer", fmt.Sprintf("visited the most pages: %s", FormatInt(n.explorer.TotalVisits)))
+	}
+	if n.patientZero != nil {
+		add(n.patientZero, "Patient Zero", "hit the first failure of the run")
+	}
+	if n.unlucky != nil {
+		add(n.unlucky, "The Unlucky One", "got the slowest page of the run: "+n.unlucky.SlowestVisit.Round(time.Millisecond).String())
+	}
+	if n.patient != nil {
+		add(n.patient, "The Patient One", "spent longest in the waiting room: "+n.patient.LongestWait.Round(time.Second).String())
+	}
+	return out
+}
+
+func notableLife(ll *swarm.LifeLog, title, why string) NotableLife {
+	life := NotableLife{
+		Title:      title,
+		Why:        why,
+		Number:     ll.Identity.Number,
+		ID:         ll.Identity.ID,
+		Name:       ll.Identity.Name,
+		Persona:    swarm.PersonaOf(ll.Identity.UserAgent),
+		Language:   ll.Identity.Language,
+		Terrain:    ll.Terrain,
+		Pack:       ll.Pack,
+		Lifespan:   ll.Duration.Round(time.Millisecond),
+		Visits:     ll.TotalVisits,
+		Failed:     ll.FailedVisits,
+		Cancelled:  ll.CancelledVisits,
+		ExitReason: ll.ExitReason,
+		Omitted:    ll.OmittedVisits,
+	}
+	visits := ll.Visits
+	if len(visits) > reportTailSteps {
+		life.Omitted += int64(len(visits) - reportTailSteps)
+		visits = visits[len(visits)-reportTailSteps:]
+	}
+	var slowest float64
+	for i := range visits {
+		v := &visits[i]
+		step := LifeStep{
+			Seq:       v.Sequence,
+			Step:      v.Step,
+			Path:      discovery.PathOf(v.URL),
+			Status:    v.StatusCode,
+			Millis:    Millis(v.EffectiveLatency()),
+			Title:     v.Page.Title,
+			Failed:    swarm.FailedVisit(v),
+			Cancelled: v.Cancelled,
+			QueuedMS:  Millis(v.WaitingRoom.Duration),
+			Why:       swarm.WhyFailed(v),
+		}
+		slowest = math.Max(slowest, step.Millis)
+		life.Steps = append(life.Steps, step)
+	}
+	for i := range life.Steps {
+		if slowest > 0 {
+			life.Steps[i].Bar = life.Steps[i].Millis / slowest
+		}
+	}
+	return life
+}
+
+// Reporter accumulates live visits, completed lemming lives, and forensics
+// artifacts, then renders and delivers the final reports. Safe for concurrent use.
+type Reporter struct {
+	cfg        swarm.Config
+	mu         sync.Mutex
+	byPath     map[string]*pathStats
+	startedAt  time.Time
+	endedAt    time.Time
+	targets    []Target
+	trace      *TraceWriter
+	forensics  *forensics.Store
+	unsub      func()
+	onErrorLog func(targetName string, err error)
+
+	latency  LatencySeries
+	ttfb     Histogram
+	timeline *Timeline
+
+	visits, failed, cancelled  int64
+	checksumChanges, htmlPages int64
+	statusCodes                map[int]int64
+	errorKinds                 map[string]int64
+	failedChecks               map[string]int64
+
+	roomHeld, roomDied int64
+	roomWait           Histogram
+	roomMaxPosition    int
+
+	sessions, flawless int64
+	exitReasons        map[string]int64
+	notable            notableSet
+
+	started, notStarted, dropped int64
+}
+
+// New constructs a Reporter for cfg.
+func New(cfg swarm.Config) *Reporter {
+	return &Reporter{
+		cfg:          cfg,
+		byPath:       make(map[string]*pathStats),
+		startedAt:    time.Now(),
+		latency:      LatencySeries{exactCap: exactGlobalSamples},
+		timeline:     NewTimeline(),
+		statusCodes:  make(map[int]int64),
+		errorKinds:   make(map[string]int64),
+		failedChecks: make(map[string]int64),
+		exitReasons:  make(map[string]int64),
+	}
+}
+
+// SetForensics attaches the forensics Store so captured screenshots and admin
+// triage reviews are embedded into the final report.
+func (r *Reporter) SetForensics(store *forensics.Store) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.forensics = store
+}
+
+// SetTrace attaches an optional JSONL trace writer.
+func (r *Reporter) SetTrace(tw *TraceWriter) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.trace = tw
+}
+
+// SetDeliveryErrorHook registers an optional callback invoked when a target fails.
+func (r *Reporter) SetDeliveryErrorHook(fn func(targetName string, err error)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onErrorLog = fn
+}
+
+// AddTarget registers a delivery target. Call before Write.
+func (r *Reporter) AddTarget(t Target) {
+	r.targets = append(r.targets, t)
+}
+
+// Attach subscribes the reporter to visit and lifecycle events on bus.
+func (r *Reporter) Attach(bus *events.Bus) {
+	r.unsub = bus.Subscribe(events.Filter(r.handleEvent,
+		events.VisitComplete, events.VisitError, events.LemmingBorn, events.LemmingDied))
+}
+
+func (r *Reporter) handleEvent(e events.Event) {
+	switch e.Kind {
+	case events.VisitComplete, events.VisitError:
+		if v, ok := e.Payload.(*swarm.Visit); ok && v != nil {
+			r.RecordVisit(v)
+		}
+	case events.LemmingBorn, events.LemmingDied:
+		r.mu.Lock()
+		b := r.timeline.bucket(e.OccurredAt.Sub(r.startedAt))
+		if e.Kind == events.LemmingBorn {
+			b.Born++
+		} else {
+			b.Died++
+		}
+		r.mu.Unlock()
+	}
+}
+
+// MarkStarted sets the start timestamp of the run.
+func (r *Reporter) MarkStarted(at time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.startedAt = at
+}
+
+// MarkEnded records run completion and swarm-level lemming counters.
+func (r *Reporter) MarkEnded(at time.Time, m *swarm.Metrics) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.endedAt = at
+	if m != nil {
+		r.started = m.LemmingsCompleted.Load()
+		r.notStarted = m.LemmingsFailed.Load()
+		r.dropped = m.DroppedLogs.Load()
+	}
+}
+
+// RecordVisit folds one completed visit into all aggregates and the trace stream.
+func (r *Reporter) RecordVisit(v *swarm.Visit) {
+	r.mu.Lock()
+	r.recordVisitLocked(v, time.Now())
+	tw := r.trace
+	r.mu.Unlock()
+	if tw != nil {
+		tw.Record(v)
+	}
+}
+
+func (r *Reporter) recordVisitLocked(v *swarm.Visit, finished time.Time) {
+	failed := swarm.FailedVisit(v)
+
+	key := discovery.SafeURL(v.URL)
+	ps := r.byPath[key]
+	if ps == nil {
+		if len(r.byPath) >= maxReportPaths {
+			key = otherPath
+			ps = r.byPath[key]
+		}
+		if ps == nil {
+			ps = &pathStats{URL: key, LatencySeries: LatencySeries{exactCap: exactPathSamples}}
+			r.byPath[key] = ps
+		}
+	}
+	ps.Hits++
+	ps.Bytes += v.BytesIn
+	if v.WaitingRoom.Detected {
+		ps.waitingRoom++
+	}
+	if v.Error != nil && !v.Cancelled {
+		ps.errors++
+	}
+	if failed {
+		ps.failed++
+	}
+	switch {
+	case v.StatusCode >= 200 && v.StatusCode < 300:
+		ps.xx2++
+	case v.StatusCode >= 300 && v.StatusCode < 400:
+		ps.xx3++
+	case v.StatusCode >= 400 && v.StatusCode < 500:
+		ps.xx4++
+	case v.StatusCode >= 500:
+		ps.xx5++
+	}
+
+	r.visits++
+	r.statusCodes[v.StatusCode]++
+	bucket := r.timeline.bucket(finished.Sub(r.startedAt))
+	bucket.Visits++
+	bucket.Bytes += v.BytesIn
+	bucket.Status[statusIndex(v.StatusCode)]++
+
+	if v.Cancelled {
+		r.cancelled++
+		bucket.Cancelled++
+	} else {
+		ps.Add(v.EffectiveLatency())
+		r.latency.Add(v.EffectiveLatency())
+		bucket.Latency.Add(v.EffectiveLatency())
+		if v.Timing.TTFB > 0 {
+			r.ttfb.Add(v.Timing.TTFB)
+		}
+		if failed {
+			r.failed++
+			bucket.Failed++
+		}
+	}
+
+	if v.ErrorKind != "" {
+		r.errorKinds[v.ErrorKind]++
+	} else if v.Error != nil && !v.Cancelled {
+		r.errorKinds[swarm.ErrorKind(v.Error)]++
+	}
+	for _, c := range v.Page.Checks {
+		if !c.Passed {
+			r.failedChecks[c.Name]++
+		}
+	}
+	if v.Expected != "" && !v.Match && v.Error == nil {
+		r.checksumChanges++
+	}
+	if v.Page.HTML {
+		r.htmlPages++
+	}
+	if v.WaitingRoom.Detected {
+		r.roomHeld++
+		r.roomWait.Add(v.WaitingRoom.Duration)
+		r.roomMaxPosition = max(r.roomMaxPosition, v.WaitingRoom.Position)
+		if v.Error != nil || v.Cancelled {
+			r.roomDied++
+		}
+	}
+}
+
+// Ingest records a completed lemming's LifeLog. Satisfies swarm.LifeSink.
+func (r *Reporter) Ingest(ll swarm.LifeLog) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !ll.Streamed {
+		ll.TotalVisits, ll.FailedVisits, ll.CancelledVisits = 0, 0, 0
+		for i := range ll.Visits {
+			v := &ll.Visits[i]
+			r.recordVisitLocked(v, v.Timestamp.Add(v.Duration))
+			ll.TotalVisits++
+			switch {
+			case v.Cancelled:
+				ll.CancelledVisits++
+			case swarm.FailedVisit(v):
+				ll.FailedVisits++
+				if ll.FirstFailureAt.IsZero() {
+					ll.FirstFailureAt = v.Timestamp
+				}
+			}
+			if !v.Cancelled {
+				ll.SlowestVisit = max(ll.SlowestVisit, v.EffectiveLatency())
+			}
+			ll.LongestWait = max(ll.LongestWait, v.WaitingRoom.Duration)
+		}
+	}
+
+	r.sessions++
+	if ll.FailedVisits == 0 && ll.Error == nil {
+		r.flawless++
+	}
+	if ll.ExitReason != "" {
+		r.exitReasons[ll.ExitReason]++
+	}
+	r.notable.consider(&ll)
+}
+
+// CloseTrace flushes and closes the optional trace writer.
+func (r *Reporter) CloseTrace() {
+	r.mu.Lock()
+	tw := r.trace
+	r.mu.Unlock()
+	if tw != nil {
+		tw.Close()
+	}
+}
+
+// BuildFilename constructs the base report filename (without extension).
+func (r *Reporter) BuildFilename() string {
+	domain := discovery.DomainFromURL(r.cfg.Hit)
+	if r.cfg.ReportName != "" {
+		return r.cfg.ReportName
+	}
+	if r.cfg.UniqueReport {
+		return fmt.Sprintf("lemmings.%s.%s", time.Now().UTC().Format(reportTimestampFormat), domain)
+	}
+	return fmt.Sprintf("lemmings.%s.%s", time.Now().Format(reportDateFormat), domain)
+}
+
+// Render builds all report formats (HTML, SMTP-safe HTML, Markdown, JSON, and
+// standalone screenshot assets) without delivering them.
+func (r *Reporter) Render() (Rendered, error) {
+	r.mu.Lock()
+	data := r.buildReportDataLocked()
+	r.mu.Unlock()
+
+	return RenderData(data, r.BuildFilename(), discovery.DomainFromURL(r.cfg.Hit))
+}
+
+// Write renders the report and delivers it concurrently to every registered target.
+func (r *Reporter) Write(ctx context.Context) error {
+	r.CloseTrace()
+	if r.unsub != nil {
+		r.unsub()
+	}
+
+	rendered, err := r.Render()
+	if err != nil {
+		return err
+	}
+
+	if len(r.targets) == 0 {
+		return nil
+	}
+
+	type result struct {
+		name string
+		err  error
+	}
+	results := make(chan result, len(r.targets))
+	for _, target := range r.targets {
+		t := target
+		go func() {
+			results <- result{name: t.Name(), err: t.Deliver(ctx, rendered)}
+		}()
+	}
+
+	r.mu.Lock()
+	errHook := r.onErrorLog
+	r.mu.Unlock()
+
+	var errs []string
+	for range r.targets {
+		res := <-results
+		if res.err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", res.name, res.err))
+			if errHook != nil {
+				errHook(res.name, res.err)
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("report delivery errors:\n  %s", strings.Join(errs, "\n  "))
+	}
+	return nil
+}
+
+// Result returns the computed Data snapshot.
+func (r *Reporter) Result() Data {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buildReportDataLocked()
+}
+
+// Live returns the once-a-second aggregate snapshot for the dashboard & ticker.
+func (r *Reporter) Live(points, paths int) LiveStats {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	s := LiveStats{
+		Visits:    r.visits,
+		Failed:    r.failed,
+		Cancelled: r.cancelled,
+		P50:       r.latency.hist.Quantile(50),
+		P95:       r.latency.hist.Quantile(95),
+		P99:       r.latency.hist.Quantile(99),
+		TTFBP95:   r.ttfb.Quantile(95),
+		Sessions:  r.sessions,
+		Rescued:   r.flawless,
+		Room: RoomReport{
+			Held: r.roomHeld, DiedInLine: r.roomDied, MaxPosition: r.roomMaxPosition,
+			MeanWait: r.roomWait.Mean(), P95Wait: r.roomWait.Quantile(95), LongestWait: r.roomWait.max,
+		},
+	}
+	if completed := r.visits - r.cancelled; completed > 0 {
+		s.FailureRate = float64(r.failed) / float64(completed)
+	}
+	if r.sessions > 0 {
+		s.RescuedPercent = 100 * float64(r.flawless) / float64(r.sessions)
+	}
+	if points > 0 {
+		s.Timeline = r.timeline.Points(points)
+	}
+	if paths > 0 {
+		all := make([]*pathStats, 0, len(r.byPath))
+		for _, ps := range r.byPath {
+			all = append(all, ps)
+		}
+		sort.Slice(all, func(i, j int) bool {
+			if all[i].Hits != all[j].Hits {
+				return all[i].Hits > all[j].Hits
+			}
+			return all[i].URL < all[j].URL
+		})
+		for i, ps := range all[:min(paths, len(all))] {
+			s.Paths = append(s.Paths, PathReport{
+				URL: discovery.PathOf(ps.URL), Hits: ps.Hits, Failed: ps.failed,
+				XX2: ps.xx2, XX3: ps.xx3, XX4: ps.xx4, XX5: ps.xx5,
+				P50: ps.hist.Quantile(50), P95: ps.hist.Quantile(95), P99: ps.hist.Quantile(99),
+				HitShare: float64(ps.Hits) / float64(max(all[0].Hits, 1)),
+			})
+			if ps.URL == otherPath {
+				s.Paths[i].URL = otherPath
+			}
+		}
+		s.StatusCodes = countRows(r.statusCodes, strconv.Itoa)
+		causes := make(map[string]int64, len(r.errorKinds)+len(r.failedChecks))
+		for k, n := range r.errorKinds {
+			causes["error: "+k] += n
+		}
+		for k, n := range r.failedChecks {
+			causes["check: "+k] += n
+		}
+		s.Causes = countRows(causes, func(k string) string { return k })
+	}
+	return s
+}
+
+func (r *Reporter) buildReportDataLocked() Data {
+	end := r.endedAt
+	if end.IsZero() {
+		end = time.Now()
+	}
+	cfg := r.cfg
+	cfg.Hit = discovery.SafeURL(cfg.Hit)
+
+	data := Data{
+		Version:         r.cfg.Version,
+		GeneratedAt:     time.Now(),
+		Duration:        end.Sub(r.startedAt).Round(time.Millisecond),
+		Config:          cfg,
+		TotalLemmings:   r.cfg.Terrain * r.cfg.Pack,
+		LemmingsStarted: r.started,
+		LemmingsUnborn:  r.notStarted,
+		TotalVisits:     r.visits,
+		FailedVisits:    r.failed,
+		CancelledVisits: r.cancelled,
+		Sessions:        r.sessions,
+		Rescued:         r.flawless,
+		ChecksumChanges: r.checksumChanges,
+		HTMLPages:       r.htmlPages,
+		DroppedLogs:     r.dropped,
+		Timeline:        r.timeline.Points(0),
+		Notable:         r.notable.lives(),
+		TraceFile:       r.cfg.TraceFile,
+	}
+	if r.cfg.Journey != nil {
+		data.Journey = r.cfg.Journey.Name
+	}
+	if completed := r.visits - r.cancelled; completed > 0 {
+		data.FailureRate = float64(r.failed) / float64(completed)
+	}
+	if secs := data.Duration.Seconds(); secs > 0 {
+		data.VisitsPerSecond = float64(r.visits) / secs
+	}
+	if r.sessions > 0 {
+		data.RescuedPercent = 100 * float64(r.flawless) / float64(r.sessions)
+	}
+
+	var busiest int64
+	for _, ps := range r.byPath {
+		data.TotalBytes += ps.Bytes
+		data.TotalWaitingRoom += ps.waitingRoom
+		data.Total2xx += ps.xx2
+		data.Total3xx += ps.xx3
+		data.Total4xx += ps.xx4
+		data.Total5xx += ps.xx5
+		data.TotalErrors += ps.errors
+		busiest = max(busiest, ps.Hits)
+
+		data.Paths = append(data.Paths, PathReport{
+			URL:         ps.URL,
+			Hits:        ps.Hits,
+			Bytes:       FormatBytes(ps.Bytes),
+			XX2:         ps.xx2,
+			XX3:         ps.xx3,
+			XX4:         ps.xx4,
+			XX5:         ps.xx5,
+			WaitingRoom: ps.waitingRoom,
+			Errors:      ps.errors,
+			Failed:      ps.failed,
+			P50:         ps.Quantile(50),
+			P95:         ps.Quantile(95),
+			P99:         ps.Quantile(99),
+		})
+	}
+	sort.Slice(data.Paths, func(i, j int) bool {
+		if data.Paths[i].Hits != data.Paths[j].Hits {
+			return data.Paths[i].Hits > data.Paths[j].Hits
+		}
+		return data.Paths[i].URL < data.Paths[j].URL
+	})
+	for i := range data.Paths {
+		if busiest > 0 {
+			data.Paths[i].HitShare = float64(data.Paths[i].Hits) / float64(busiest)
+		}
+	}
+
+	if r.latency.hist.count > 0 {
+		data.Fastest = r.latency.hist.min
+		data.Slowest = r.latency.hist.max
+		data.Mean = r.latency.hist.Mean()
+		data.P50 = r.latency.Quantile(50)
+		data.P90 = r.latency.Quantile(90)
+		data.P95 = r.latency.Quantile(95)
+		data.P99 = r.latency.Quantile(99)
+	}
+	data.TTFBP50 = r.ttfb.Quantile(50)
+	data.TTFBP95 = r.ttfb.Quantile(95)
+	data.PercentileMethod = "exact (nearest rank)"
+	if !r.latency.IsExact() {
+		data.PercentileMethod = fmt.Sprintf("log histogram, within %.0f%% of the true value", (histogramGrowth-1)*100)
+	}
+
+	data.Room = RoomReport{
+		Held:        r.roomHeld,
+		DiedInLine:  r.roomDied,
+		MaxPosition: r.roomMaxPosition,
+		MeanWait:    r.roomWait.Mean(),
+		P95Wait:     r.roomWait.Quantile(95),
+		LongestWait: r.roomWait.max,
+	}
+
+	data.StatusCodes = countRows(r.statusCodes, func(code int) string {
+		if code == 0 {
+			return "no response"
+		}
+		return fmt.Sprint(code)
+	})
+	data.ErrorKinds = countRows(r.errorKinds, func(s string) string { return s })
+	data.FailedChecks = countRows(r.failedChecks, func(s string) string { return s })
+	data.ExitReasons = countRows(r.exitReasons, func(s string) string { return s })
+
+	if r.trace != nil {
+		data.TraceWritten = r.trace.written.Load()
+		data.TraceDropped = r.trace.dropped.Load()
+		data.TraceError = r.trace.Failure()
+	}
+
+	if r.forensics != nil {
+		arts, stats := r.forensics.SnapshotForReport()
+		data.Forensics = ForensicsReport{
+			Stats:     stats,
+			Artifacts: arts,
+		}
+	}
+
+	data.Gates, data.Verdict = r.evaluateGates(data)
+	return data
+}
+
+func (r *Reporter) evaluateGates(data Data) ([]GateResult, string) {
+	var gates []GateResult
+	if r.cfg.FailureGate {
+		gates = append(gates, GateResult{
+			Name:     "failure rate",
+			Limit:    fmt.Sprintf("≤ %.2f%%", r.cfg.MaxFailureRate*100),
+			Observed: fmt.Sprintf("%.2f%%", data.FailureRate*100),
+			Passed:   data.FailureRate <= r.cfg.MaxFailureRate,
+		})
+	}
+	if r.cfg.P95Budget > 0 {
+		gates = append(gates, GateResult{
+			Name:     "p95 latency",
+			Limit:    "≤ " + r.cfg.P95Budget.String(),
+			Observed: FormatMillis(data.P95),
+			Passed:   data.P95 <= r.cfg.P95Budget,
+		})
+	}
+	switch {
+	case len(gates) == 0:
+		return gates, "NO GATES"
+	case anyFailed(gates):
+		return gates, "FAILED"
+	}
+	return gates, "PASSED"
+}
+
+func anyFailed(gates []GateResult) bool {
+	for _, g := range gates {
+		if !g.Passed {
+			return true
+		}
+	}
+	return false
+}
+
+func countRows[K comparable](m map[K]int64, label func(K) string) []CountRow {
+	var total int64
+	rows := make([]CountRow, 0, len(m))
+	for k, n := range m {
+		total += n
+		rows = append(rows, CountRow{Label: label(k), Count: n})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Count != rows[j].Count {
+			return rows[i].Count > rows[j].Count
+		}
+		return rows[i].Label < rows[j].Label
+	})
+	for i := range rows {
+		if total > 0 {
+			rows[i].Share = float64(rows[i].Count) / float64(total)
+		}
+	}
+	return rows
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+
+type htmlTemplateModel struct {
+	Data
+	InlineImages map[string]htmltemplate.URL
+}
+
+// RenderData renders data into Markdown, self-contained HTML, SMTP-safe HTML,
+// JSON, and standalone screenshot assets.
+func RenderData(data Data, filename, domain string) (Rendered, error) {
+	if domain == "" {
+		domain = discovery.DomainFromURL(data.Config.Hit)
+	}
+
+	// Build standalone assets & populate relative image_path for Markdown/JSON.
+	var assets []ArtifactAsset
+	fullInline := make(map[string]htmltemplate.URL)
+	emailInline := make(map[string]htmltemplate.URL)
+	var fullBudget, emailBudget int
+
+	for i := range data.Forensics.Artifacts {
+		a := &data.Forensics.Artifacts[i]
+		if a.Screenshot == nil || len(a.Screenshot.Data) == 0 {
+			continue
+		}
+		ext := a.Screenshot.Extension()
+		assetName := a.ID + ext
+		a.Screenshot.RelativePath = filename + ".artifacts/" + assetName
+		assets = append(assets, ArtifactAsset{
+			Filename: assetName,
+			MIMEType: a.Screenshot.MIMEType,
+			Data:     a.Screenshot.Data,
+		})
+
+		if uri, ok := safeImageDataURI(a.Screenshot); ok {
+			size := len(a.Screenshot.Data)
+			if fullBudget+size <= maxHTMLInlineImageBytes {
+				fullInline[a.ID] = uri
+				fullBudget += size
+			}
+			if emailBudget+size <= maxEmailInlineImageBytes {
+				emailInline[a.ID] = uri
+				emailBudget += size
+			}
+		}
+	}
+
+	md, err := renderMarkdown(data)
+	if err != nil {
+		return Rendered{}, fmt.Errorf("render markdown: %w", err)
+	}
+	htmlFull, err := renderHTML(htmlTemplateModel{Data: data, InlineImages: fullInline})
+	if err != nil {
+		return Rendered{}, fmt.Errorf("render html: %w", err)
+	}
+	htmlEmail := htmlFull
+	if len(emailInline) != len(fullInline) {
+		htmlEmail, err = renderHTML(htmlTemplateModel{Data: data, InlineImages: emailInline})
+		if err != nil {
+			return Rendered{}, fmt.Errorf("render email html: %w", err)
+		}
+	}
+	js, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return Rendered{}, fmt.Errorf("render json: %w", err)
+	}
+	return Rendered{
+		Filename:     filename,
+		Domain:       domain,
+		Markdown:     md,
+		HTML:         htmlFull,
+		HTMLForEmail: htmlEmail,
+		JSON:         js,
+		Artifacts:    assets,
+	}, nil
+}
+
+func safeImageDataURI(sc *forensics.Screenshot) (htmltemplate.URL, bool) {
+	if sc == nil || len(sc.Data) == 0 {
+		return "", false
+	}
+	mimeType := strings.ToLower(sc.MIMEType)
+	if mimeType != "image/jpeg" && mimeType != "image/png" {
+		return "", false
+	}
+	encoded := base64.StdEncoding.EncodeToString(sc.Data)
+	return htmltemplate.URL("data:" + mimeType + ";base64," + encoded), true
+}
+
+var templateFuncs = map[string]any{
+	"formatInt": FormatInt,
+	"formatBytesInt": func(n any) string {
+		switch v := n.(type) {
+		case int64:
+			return FormatBytes(v)
+		case int:
+			return FormatBytes(int64(v))
+		default:
+			return "0 B"
+		}
+	},
+	"ms":          FormatMillis,
+	"pct":         func(f float64) string { return fmt.Sprintf("%.1f%%", f*100) },
+	"pct100":      func(f float64) string { return fmt.Sprintf("%.1f%%", f) },
+	"width":       func(f float64) string { return fmt.Sprintf("%.1f%%", math.Max(f*100, 0.5)) },
+	"float1":      func(f float64) string { return fmt.Sprintf("%.1f", f) },
+	"statusClass": StatusClass,
+	"atoi":        func(s string) int { n, _ := strconv.Atoi(s); return n },
+	"sparkline":   Sparkline,
+	"add":         func(a, b int) int { return a + b },
+	"round":       RoundDuration,
+	"lang":        func(s string) string { tag, _, _ := strings.Cut(s, ","); return tag },
+	"shortID":     func(id string) string { return discovery.Clip(id, 8) },
+	"rescueLine":  RescueLine,
+	"join":        strings.Join,
+	"upper":       strings.ToUpper,
+}
+
+var (
+	markdownTemplate = template.Must(template.New("report.md.tmpl").Funcs(templateFuncs).
+				ParseFS(reportTemplates, "templates/report.md.tmpl"))
+	htmlTemplate = htmltemplate.Must(htmltemplate.New("report.html.tmpl").
+			Funcs(templateFuncs).
+			Funcs(htmltemplate.FuncMap{"timelineSVG": TimelineSVG}).
+			ParseFS(reportTemplates, "templates/report.html.tmpl"))
+)
+
+func renderMarkdown(data Data) (string, error) {
+	var buf bytes.Buffer
+	if err := markdownTemplate.Execute(&buf, data); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+func renderHTML(model htmlTemplateModel) (string, error) {
+	var buf bytes.Buffer
+	if err := htmlTemplate.Execute(&buf, model); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
