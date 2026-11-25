@@ -59,6 +59,19 @@ func (t *S3Target) Name() string {
 
 // Deliver uploads .md, .html, .json, and any .artifacts/ screenshots to S3.
 func (t *S3Target) Deliver(ctx context.Context, r report.Rendered) error {
+	if err := validateSafeComponent(r.Filename); err != nil {
+		return fmt.Errorf("s3 target: invalid filename %q: %w", r.Filename, err)
+	}
+	domain := extractDomain(r.Domain, r.Filename)
+	if err := validateSafeComponent(domain); err != nil {
+		return fmt.Errorf("s3 target: invalid domain %q: %w", domain, err)
+	}
+	for _, a := range r.Artifacts {
+		if err := validateSafeComponent(a.Filename); err != nil {
+			return fmt.Errorf("s3 target: invalid artifact name %q: %w", a.Filename, err)
+		}
+	}
+
 	cfg, err := t.loadAWSConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("s3 target: load aws config: %w", err)

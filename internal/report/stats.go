@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/http"
 	"os"
 	"sort"
 	"sync"
@@ -12,13 +13,14 @@ import (
 	"time"
 
 	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
+	"github.com/andreimerlescu/lemmings/v2/internal/events"
 	"github.com/andreimerlescu/lemmings/v2/internal/swarm"
 )
 
 const (
 	histogramBase      = 10 * time.Microsecond
-	histogramGrowth    = 1.02
-	histogramBins      = 1024
+	histogramGrowth    = 1.005
+	histogramBins      = 4096
 	maxTimelineBuckets = 600
 	timelineStartWidth = time.Second
 	traceQueueSize     = 8192
@@ -26,9 +28,10 @@ const (
 
 var histogramLogGrowth = math.Log(histogramGrowth)
 
-// Histogram is a fixed-memory (4 KiB) log-bucketed latency histogram.
+// Histogram is a fixed-memory (32 KiB) log-bucketed latency histogram with
+// <= 0.5% relative error across 10µs..>2h and overflow-proof uint64 counts.
 type Histogram struct {
-	bins     [histogramBins]uint32
+	bins     [histogramBins]uint64
 	count    int64
 	sum      time.Duration
 	min, max time.Duration
@@ -39,11 +42,17 @@ func bucketFor(d time.Duration) int {
 		return 0
 	}
 	i := int(math.Ceil(math.Log(float64(d)/float64(histogramBase)) / histogramLogGrowth))
+	if i < 0 {
+		return 0
+	}
 	return min(i, histogramBins-1)
 }
 
 func bucketBound(i int) time.Duration {
-	return time.Duration(math.Ceil(float64(histogramBase) * math.Pow(histogramGrowth, float64(i))))
+	if i <= 0 {
+		return histogramBase
+	}
+	return time.Duration(math.Round(float64(histogramBase) * math.Pow(histogramGrowth, float64(i)-0.5)))
 }
 
 // Add records one latency sample.
@@ -76,15 +85,24 @@ func (h *Histogram) Merge(other *Histogram) {
 	}
 }
 
-// Quantile returns the p-th percentile (0..100) within 2% of exact value.
+// Quantile returns the p-th percentile (0..100) within 0.5% of the exact value.
 func (h *Histogram) Quantile(p float64) time.Duration {
 	if h.count == 0 {
 		return 0
 	}
-	rank := max(int64(math.Ceil(p/100*float64(h.count))), 1)
-	var seen int64
+	if p <= 0 {
+		return h.min
+	}
+	if p >= 100 {
+		return h.max
+	}
+	rank := uint64(math.Ceil(p / 100 * float64(h.count)))
+	if rank < 1 {
+		rank = 1
+	}
+	var seen uint64
 	for i, c := range h.bins {
-		seen += int64(c)
+		seen += c
 		if seen >= rank {
 			return min(max(bucketBound(i), h.min), h.max)
 		}
@@ -247,6 +265,8 @@ func statusIndex(code int) int {
 
 // VisitTrace is one JSONL record written to -trace-file (URLs redacted, cookie names only).
 type VisitTrace struct {
+	Kind          string              `json:"kind,omitempty"`
+	AssetClass    string              `json:"asset_class,omitempty"`
 	Lemming       string              `json:"lemming"`
 	LemmingNumber int64               `json:"lemming_number,omitempty"`
 	Sequence      int                 `json:"seq"`
@@ -265,6 +285,11 @@ type VisitTrace struct {
 	ErrorKind     string              `json:"error_kind,omitempty"`
 	FailedCheck   []string            `json:"failed_checks,omitempty"`
 	QueuedMS      float64             `json:"queued_ms,omitempty"`
+	QueuePolls    int                 `json:"queue_polls,omitempty"`
+	QueueAdmitted bool                `json:"queue_admitted,omitempty"`
+	ConcertAdmit  bool                `json:"concert_admit,omitempty"`
+	RoomTicket    bool                `json:"room_ticket,omitempty"`
+	Banned        bool                `json:"banned,omitempty"`
 	Hops          []swarm.ResponseHop `json:"hops,omitempty"`
 	Cookies       []string            `json:"cookie_names,omitempty"`
 	At            time.Time           `json:"at"`
@@ -272,6 +297,7 @@ type VisitTrace struct {
 
 func traceOf(v *swarm.Visit) VisitTrace {
 	t := VisitTrace{
+		Kind:          "page",
 		Lemming:       v.LemmingID,
 		LemmingNumber: v.LemmingNumber,
 		Sequence:      v.Sequence,
@@ -289,6 +315,11 @@ func traceOf(v *swarm.Visit) VisitTrace {
 		Cancelled:     v.Cancelled,
 		ErrorKind:     v.ErrorKind,
 		QueuedMS:      Millis(v.WaitingRoom.Duration),
+		QueuePolls:    max(v.QueuePolls, v.WaitingRoom.Polls),
+		QueueAdmitted: v.WaitingRoom.Admitted,
+		ConcertAdmit:  v.ConcertAdmit,
+		RoomTicket:    v.RoomTicket,
+		Banned:        v.Banned,
 		Hops:          v.Hops,
 		Cookies:       v.CookieNames,
 		At:            v.Timestamp,
@@ -299,6 +330,60 @@ func traceOf(v *swarm.Visit) VisitTrace {
 		}
 	}
 	return t
+}
+
+func traceOfAsset(a *swarm.AssetVisit, class string, admitPass bool) VisitTrace {
+	at := a.Timestamp
+	if at.IsZero() {
+		at = a.FinishedAt
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	return VisitTrace{
+		Kind:          "asset",
+		AssetClass:    class,
+		Lemming:       a.LemmingID,
+		LemmingNumber: a.LemmingNumber,
+		URL:           discovery.SafeURL(a.URL),
+		Referrer:      discovery.SafeURL(a.PageURL),
+		Status:        a.StatusCode,
+		Bytes:         a.BytesIn,
+		DurationMS:    Millis(a.Duration),
+		LatencyMS:     Millis(a.Duration),
+		Failed:        a.Failed,
+		ErrorKind:     a.ErrorKind,
+		ConcertAdmit:  admitPass,
+		Banned:        a.Denied403 || a.StatusCode == http.StatusForbidden,
+		At:            at,
+	}
+}
+
+func traceOfScout(e events.Event) VisitTrace {
+	at := e.OccurredAt
+	if at.IsZero() {
+		at = time.Now()
+	}
+	var errKind string
+	if e.Err != nil {
+		errKind = swarm.ErrorKind(e.Err)
+	}
+	return VisitTrace{
+		Kind:          "scout",
+		Lemming:       e.LemmingID,
+		LemmingNumber: e.LemmingNumber,
+		URL:           discovery.SafeURL(e.URL),
+		Status:        e.StatusCode,
+		Bytes:         e.BytesIn,
+		DurationMS:    Millis(e.Duration),
+		LatencyMS:     Millis(e.Duration),
+		Failed:        e.Failed,
+		Cancelled:     e.Cancelled,
+		ErrorKind:     errKind,
+		ConcertAdmit:  e.AdmitPass,
+		Banned:        e.Banned,
+		At:            at,
+	}
 }
 
 // TraceWriter streams visits asynchronously to a new 0600 JSONL file.
@@ -345,10 +430,15 @@ func (t *TraceWriter) run(f *os.File) {
 	}
 }
 
-// Record enqueues v non-blockingly, counting drops if the queue is full.
+// Record enqueues a page visit non-blockingly, counting drops if the queue is full.
 func (t *TraceWriter) Record(v *swarm.Visit) {
+	t.RecordTrace(traceOf(v))
+}
+
+// RecordTrace enqueues rec non-blockingly, counting drops if the queue is full.
+func (t *TraceWriter) RecordTrace(rec VisitTrace) {
 	select {
-	case t.queue <- traceOf(v):
+	case t.queue <- rec:
 	default:
 		t.dropped.Add(1)
 	}
