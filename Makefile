@@ -1,7 +1,9 @@
 BINARY     := lemmings
 BIN_DIR    := bin
 PLATFORMS  := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
-MODULE     := github.com/andreimerlescu/lemmings
+MODULE     := github.com/andreimerlescu/lemmings/v2
+CMD_PKG    := ./cmd/lemmings
+VERSION    := $(shell cat VERSION)
 GO         := go
 GOFLAGS    := -race
 BENCHTIME  ?= 5s
@@ -9,7 +11,7 @@ FUZZTIME   ?= 10s
 COVEROUT   := coverage.out
 DEMO_ADDR  ?= 127.0.0.1:8080
 GO_BUILD_FLAGS := -trimpath
-GO_LDFLAGS     := -s -w
+GO_LDFLAGS     := -s -w -X $(MODULE)/internal/version.Build=$(VERSION)
 
 .DEFAULT_GOAL := all
 
@@ -23,7 +25,12 @@ ext  = $(if $(filter windows,$(call os,$1)),.exe,)
 all: lint test build
 
 .PHONY: build
-build:  test-all summary $(PLATFORMS)
+build: $(PLATFORMS)
+
+.PHONY: build-local
+build-local:
+	@mkdir -p $(BIN_DIR)
+	$(GO) build $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" -o $(BIN_DIR)/$(BINARY) $(CMD_PKG)
 
 .PHONY: build-check
 build-check: vet fmt-check
@@ -31,11 +38,7 @@ build-check: vet fmt-check
 
 .PHONY: install
 install:
-	$(GO) install .
-
-.PHONY: summary
-summary:
-	summarize -s useExpanded,templates/lib,.git,.idea,summaries,lemmings -x useExpanded,jpg,LICENSE
+	$(GO) install $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" $(CMD_PKG)
 
 # ── Test ──────────────────────────────────────────────────────────────────────
 
@@ -49,16 +52,30 @@ test-short:
 
 .PHONY: test-e2e
 test-e2e:
-	$(GO) test -count=1 -run '^TestE2E' -v .
-
-FUZZ_TARGETS := FuzzDetectWaitingRoom FuzzSha512sum FuzzExtractSitemapLocs FuzzExtractHTMLLinks \
-                FuzzResolveURL FuzzHandleAuth FuzzDashboardHTML FuzzFormatInt FuzzFormatBytes
+	$(GO) test -count=1 -run '^TestE2E' -v $(CMD_PKG)
 
 .PHONY: test-fuzz
 test-fuzz:
-	@for t in $(FUZZ_TARGETS); do \
-		echo "── $$t"; \
-		$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^$$t$$" -fuzztime=$(FUZZTIME) . || exit 1; \
+	@echo "── discovery fuzz targets"
+	@for t in FuzzSHA512Hex FuzzExtractSitemapLocs FuzzExtractHTMLLinks FuzzResolveURL; do \
+		echo "   $$t"; \
+		$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^$$t$$" -fuzztime=$(FUZZTIME) ./internal/discovery || exit 1; \
+	done
+	@echo "── secrets fuzz targets"
+	@$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^FuzzScrubText$$" -fuzztime=$(FUZZTIME) ./internal/secrets
+	@echo "── journey fuzz targets"
+	@$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^FuzzExtractErrorBody$$" -fuzztime=$(FUZZTIME) ./internal/journey
+	@echo "── swarm fuzz targets"
+	@$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^FuzzDetectWaitingRoom$$" -fuzztime=$(FUZZTIME) ./internal/swarm
+	@echo "── report fuzz targets"
+	@for t in FuzzFormatInt FuzzFormatBytes; do \
+		echo "   $$t"; \
+		$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^$$t$$" -fuzztime=$(FUZZTIME) ./internal/report || exit 1; \
+	done
+	@echo "── dashboard fuzz targets"
+	@for t in FuzzHandleAuth FuzzDashboardHTML; do \
+		echo "   $$t"; \
+		$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^$$t$$" -fuzztime=$(FUZZTIME) ./internal/dashboard || exit 1; \
 	done
 
 .PHONY: test-bench
@@ -99,7 +116,7 @@ fmt-check:
 .PHONY: clean
 clean:
 	$(GO) clean ./...
-	rm -rf bin
+	rm -rf $(BIN_DIR)
 	rm -f $(COVEROUT)
 
 # ── Tidy ──────────────────────────────────────────────────────────────────────
@@ -109,18 +126,15 @@ tidy:
 	$(GO) mod tidy
 	$(GO) mod verify
 
-# ── Run ───────────────────────────────────────────────────────────────────────
+# ── Play ──────────────────────────────────────────────────────────────────────
 
-# demo starts Neon Arcade, the bundled target with healthy pages, slow and
-# flaky pages, soft errors and a waiting room.
 .PHONY: demo
 demo:
 	$(GO) run ./examples/demo -addr $(DEMO_ADDR)
 
-# run points a small swarm at the demo. Start `make demo` in another terminal.
 .PHONY: run
 run:
-	$(GO) run . \
+	$(GO) run $(CMD_PKG) \
 		-hit http://$(DEMO_ADDR)/ \
 		-terrain 6 \
 		-pack 12 \
@@ -129,10 +143,24 @@ run:
 		-ramp 10s \
 		-save-to bin/reports
 
-# run-journey walks the demo's checkout journey with CI gates.
+.PHONY: run-forensics
+run-forensics:
+	$(GO) run $(CMD_PKG) \
+		-hit http://$(DEMO_ADDR)/ \
+		-terrain 4 \
+		-pack 6 \
+		-limit 24 \
+		-until 30s \
+		-ramp 5s \
+		-journey examples/journeys/forensics-demo.json \
+		-scouts 1 \
+		-review \
+		-unique-report \
+		-save-to bin/reports
+
 .PHONY: run-journey
 run-journey:
-	$(GO) run . \
+	$(GO) run $(CMD_PKG) \
 		-hit http://$(DEMO_ADDR)/ \
 		-terrain 4 \
 		-pack 10 \
@@ -143,54 +171,38 @@ run-journey:
 		-p95-budget 750ms \
 		-save-to bin/reports
 
-
-build: $(PLATFORMS)
-
 $(PLATFORMS):
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 GOOS=$(call os,$@) GOARCH=$(call arch,$@) \
-		go build $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" \
-		-o $(BIN_DIR)/$(BINARY)-$(call os,$@)-$(call arch,$@)$(call ext,$@) .
+		$(GO) build $(GO_BUILD_FLAGS) -ldflags "$(GO_LDFLAGS)" \
+		-o $(BIN_DIR)/$(BINARY)-$(call os,$@)-$(call arch,$@)$(call ext,$@) $(CMD_PKG)
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
 .PHONY: help
 help:
 	@echo ""
-	@echo "  lemmings — available targets"
+	@echo "  lemmings $(VERSION) — available targets"
 	@echo ""
 	@echo "  Build"
-	@echo "    make all          lint + test + build"
-	@echo "    make build        compile bin/lemmings"
-	@echo "    make build-check  vet + fmt-check + build (pre-commit gate)"
-	@echo "    make install      go install to GOPATH/bin"
+	@echo "    make all            lint + test + cross-platform build"
+	@echo "    make build-local    compile bin/lemmings for current OS/arch"
+	@echo "    make build          compile cross-platform release binaries into bin/"
+	@echo "    make build-check    vet + fmt-check + build"
+	@echo "    make install        go install ./cmd/lemmings to GOPATH/bin"
 	@echo ""
 	@echo "  Test"
-	@echo "    make test         every test, race detector on, no cache"
-	@echo "    make test-short   skip the end-to-end tests"
-	@echo "    make test-e2e     only the end-to-end tests (builds the binary)"
-	@echo "    make test-fuzz    fuzz every target for FUZZTIME each"
-	@echo "    make test-bench   benchmarks"
-	@echo "    make test-all     unit + fuzz + bench"
-	@echo "    make test-cover   tests with an HTML coverage report"
-	@echo ""
-	@echo "  Lint"
-	@echo "    make lint         go vet + gofmt"
-	@echo "    make vet          go vet only"
-	@echo "    make fmt          gofmt -w (writes files)"
-	@echo "    make fmt-check    gofmt check only (exits 1 if files need formatting)"
-	@echo ""
-	@echo "  Maintenance"
-	@echo "    make clean        remove bin/ and coverage output"
-	@echo "    make tidy         go mod tidy + go mod verify"
+	@echo "    make test           every test, race detector on, no cache"
+	@echo "    make test-short     skip end-to-end tests"
+	@echo "    make test-e2e       end-to-end binary tests"
+	@echo "    make test-fuzz      fuzz every target for FUZZTIME each"
+	@echo "    make test-bench     benchmarks"
+	@echo "    make test-all       unit + fuzz + bench"
+	@echo "    make test-cover     tests with HTML coverage report"
 	@echo ""
 	@echo "  Play"
-	@echo "    make demo         start the Neon Arcade demo target on $(DEMO_ADDR)"
-	@echo "    make run          send 72 lemmings to the demo and open the dashboard"
-	@echo "    make run-journey  walk the demo's checkout journey with CI gates"
-	@echo ""
-	@echo "  Overrides"
-	@echo "    FUZZTIME=30s make test-fuzz"
-	@echo "    BENCHTIME=10s make test-bench"
-	@echo "    DEMO_ADDR=127.0.0.1:9000 make demo run"
+	@echo "    make demo           start Neon Arcade demo target on $(DEMO_ADDR)"
+	@echo "    make run            send 72 lemmings to Neon Arcade and open the portal"
+	@echo "    make run-forensics  run forensics journey with browser Scout & -review hold"
+	@echo "    make run-journey    walk the checkout journey with CI gates"
 	@echo ""

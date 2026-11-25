@@ -1,4 +1,4 @@
-module github.com/andreimerlescu/lemmings
+module github.com/andreimerlescu/lemmings/v2
 
 go 1.26.7
 

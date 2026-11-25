@@ -1,0 +1,153 @@
+# lemmings v{{.Version}} report
+
+**{{rescueLine .}}** {{if .Sessions}}You rescued **{{pct100 .RescuedPercent}}** — {{formatInt .Rescued}} of {{formatInt .Sessions}} lemmings finished without a single failed page.{{end}}
+
+**target:**    {{.Config.Hit}}
+**generated:** {{.GeneratedAt.Format "2006-01-02 15:04:05 MST"}}
+**duration:**  {{round .Duration}}
+**verdict:**   {{.Verdict}}{{if .Journey}}
+**journey:**   {{.Journey}}{{end}}
+
+{{if .Gates -}}
+## gates
+
+| gate | limit | observed | result |
+|------|-------|----------|--------|
+{{range .Gates -}}
+| {{.Name}} | {{.Limit}} | {{.Observed}} | {{if .Passed}}pass{{else}}**FAIL**{{end}} |
+{{end}}
+{{end -}}
+
+## traffic
+
+`{{sparkline .Timeline}}`
+
+| metric | value |
+|--------|-------|
+| total visits      | {{formatInt .TotalVisits}} |
+| visits per second | {{float1 .VisitsPerSecond}} |
+| failed visits     | {{formatInt .FailedVisits}} ({{pct .FailureRate}}) |
+| cancelled visits  | {{formatInt .CancelledVisits}} (lemming's life ended mid-visit) |
+| transport errors  | {{formatInt .TotalErrors}} |
+| total bytes       | {{.TotalBytes | formatBytesInt}} |
+| waiting room      | {{formatInt .TotalWaitingRoom}} lemmings held |
+| checksum changes  | {{formatInt .ChecksumChanges}} |
+| error artifacts   | {{formatInt .Forensics.Stats.Captured}} ({{formatInt .Forensics.Stats.WithScreenshots}} screenshots) |
+
+## configuration
+
+| parameter | value |
+|-----------|-------|
+| terrain   | {{formatInt .Config.Terrain}} groups |
+| pack      | {{formatInt .Config.Pack}} lemmings per terrain |
+| total     | {{formatInt .TotalLemmings}} lemmings ({{formatInt .LemmingsStarted}} started, {{formatInt .LemmingsUnborn}} never started) |
+| until     | {{.Config.Until}} per lemming |
+| ramp      | {{.Config.Ramp}} ({{.Config.RampShape}}) |
+| limit     | {{.Config.Limit}} |
+| think     | {{.Config.ThinkMin}}–{{.Config.ThinkMax}} between pages |
+| navigation | {{if .Journey}}journey{{else}}{{.Config.Navigation}}{{end}} |
+| scouts    | {{.Config.Scouts}} |
+| capture   | {{.Forensics.Stats.Mode}}{{if .Forensics.Stats.Browser}} ({{.Forensics.Stats.Browser}}){{end}} |
+
+## response codes
+
+| code | count |
+|------|-------|
+| 2xx  | {{formatInt .Total2xx}} |
+| 3xx  | {{formatInt .Total3xx}} |
+| 4xx  | {{formatInt .Total4xx}} |
+| 5xx  | {{formatInt .Total5xx}} |
+{{if .StatusCodes}}
+| exact status | count |
+|--------------|-------|
+{{range .StatusCodes -}}
+| {{.Label}} | {{formatInt .Count}} |
+{{end}}{{end}}
+{{- if or .ErrorKinds .FailedChecks}}
+## what went wrong
+{{if .ErrorKinds}}
+| error | count |
+|-------|-------|
+{{range .ErrorKinds -}}
+| {{.Label}} | {{formatInt .Count}} |
+{{end}}{{end}}{{if .FailedChecks}}
+| failed check | count |
+|--------------|-------|
+{{range .FailedChecks -}}
+| {{.Label}} | {{formatInt .Count}} |
+{{end}}{{end}}{{end}}
+{{- if .Forensics.Artifacts}}
+## error forensics & screenshots
+
+Captured **{{formatInt .Forensics.Stats.Captured}}** artifacts ({{formatInt .Forensics.Stats.WithScreenshots}} screenshots, {{formatInt .Forensics.Stats.Deduplicated}} deduplicated, {{formatInt .Forensics.Stats.DroppedQueue}} queue-dropped, {{formatInt .Forensics.Stats.DroppedCap}} cap-dropped).
+Triage: **{{formatInt .Forensics.Stats.Bug}}** bug · **{{formatInt .Forensics.Stats.Flaky}}** flaky · **{{formatInt .Forensics.Stats.Expected}}** expected · **{{formatInt .Forensics.Stats.Ignored}}** ignored · **{{formatInt .Forensics.Stats.Unreviewed}}** unreviewed.
+{{range .Forensics.Artifacts}}
+### Artifact #{{.Sequence}}: `{{.Path}}` ({{if .StatusCode}}HTTP {{.StatusCode}}{{else}}transport error{{end}} · {{.TriggerReason}}) — `[{{upper (printf "%s" .ReviewStatus)}}]`
+
+- **Lemming:** #{{.Session.LemmingNumber}} {{.Session.LemmingName}} (`{{shortID .Session.LemmingID}}`), terrain {{.Session.Terrain}}, pack {{.Session.Pack}}, {{.Session.Persona}}, {{lang .Session.Language}}, visit #{{.Session.VisitSequence}}
+- **Cookie Jar:** {{.Session.CookieJar.Health}} ({{.Session.CookieJar.ActiveCookies}} active, {{.Session.CookieJar.ExpiredCookies}} expired){{if .Session.RecentTrail}}
+- **Trail:** `{{join .Session.RecentTrail " -> "}}`{{end}}
+- **Extracted Error ({{.ErrorBody.Format}}):** {{.ErrorBody.Summary}}{{if .ErrorBody.ErrorCode}} (`{{.ErrorBody.ErrorCode}}`){{end}}{{if .ErrorBody.RequestID}} · request `{{.ErrorBody.RequestID}}`{{end}}{{if .ReviewNote}}
+- **Admin Triage Note:** {{.ReviewNote}}{{end}}{{if and .Screenshot .Screenshot.RelativePath}}
+
+![Artifact #{{.Sequence}} screenshot]({{.Screenshot.RelativePath}})
+{{end}}{{if .Console}}
+**JS Console ({{len .Console}} entries):**
+{{range .Console}}- **[{{upper .Level}}]** `{{.Text}}`{{if .SourceURL}} ({{.SourceURL}}{{if .Line}}:{{.Line}}{{end}}){{end}}
+{{end}}{{end}}{{if .ErrorBody.BodyExcerpt}}
+```text
+{{.ErrorBody.BodyExcerpt}}
+```
+{{end}}{{end}}{{end}}
+## timing
+
+Percentiles over completed visits; {{.PercentileMethod}}.
+
+| percentile | duration |
+|------------|----------|
+| fastest    | {{.Fastest}} |
+| p50        | {{.P50}} |
+| p90        | {{.P90}} |
+| p95        | {{.P95}} |
+| p99        | {{.P99}} |
+| slowest    | {{.Slowest}} |
+| ttfb p95   | {{.TTFBP95}} |
+{{if .Room.Held}}
+## waiting room
+
+| metric | value |
+|--------|-------|
+| lemmings held    | {{formatInt .Room.Held}} |
+| died in line     | {{formatInt .Room.DiedInLine}} |
+| deepest position | {{.Room.MaxPosition}} |
+| mean wait        | {{round .Room.MeanWait}} |
+| p95 wait         | {{round .Room.P95Wait}} |
+{{end}}
+{{- if .Notable}}
+## notable lemmings
+{{range .Notable}}
+### {{.Title}}: #{{.Number}} {{.Name}}
+
+{{.Why}}. {{.Persona}}, {{lang .Language}}, terrain {{.Terrain}} pack {{.Pack}}; lived {{round .Lifespan}} and visited {{formatInt .Visits}} pages ({{formatInt .Failed}} failed); left because: {{.ExitReason}}.
+
+| # | path | status | time | note |
+|---|------|--------|------|------|
+{{range .Steps -}}
+| {{.Seq}} | {{.Path}} | {{if .Status}}{{.Status}}{{else}}—{{end}} | {{float1 .Millis}} ms | {{.Why}} |
+{{end}}{{end}}{{end}}
+## per-path breakdown
+
+| path | hits | bytes | p50 | p95 | p99 | 2xx | 3xx | 4xx | 5xx | failed |
+|------|------|-------|-----|-----|-----|-----|-----|-----|-----|--------|
+{{range .Paths -}}
+| {{.URL}} | {{formatInt .Hits}} | {{.Bytes}} | {{.P50}} | {{.P95}} | {{.P99}} | {{formatInt .XX2}} | {{formatInt .XX3}} | {{formatInt .XX4}} | {{formatInt .XX5}} | {{formatInt .Failed}} |
+{{end}}
+{{- if or .DroppedLogs .TraceDropped .TraceError}}
+## evidence gaps
+
+{{if .DroppedLogs}}- {{formatInt .DroppedLogs}} lemming life records were dropped under collector pressure; visit totals are still exact.
+{{end}}{{if .TraceDropped}}- {{formatInt .TraceDropped}} visits were not written to the trace file.
+{{end}}{{if .TraceError}}- trace file error: {{.TraceError}}
+{{end}}{{end}}
+---
+generated by lemmings v{{.Version}}
