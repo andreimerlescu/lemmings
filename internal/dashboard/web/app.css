@@ -272,6 +272,7 @@ a { color: var(--cyan); }
   box-shadow: 0 30px 90px -25px rgba(0, 0, 0, .6);
 }
 .modal-head {
+  flex: 0 0 auto;
   display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 18px;
   border-bottom: 1px solid var(--line); background: var(--panel-2); flex-wrap: wrap;
 }
@@ -279,6 +280,7 @@ a { color: var(--cyan); }
 .modal-title-group h2 { margin: 0; font-size: 16px; color: var(--text); letter-spacing: 0; text-transform: none; font-family: ui-monospace, Menlo, monospace; }
 .modal-nav { display: flex; gap: 6px; }
 .triage-bar {
+  flex: 0 0 auto;
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 18px;
   border-bottom: 1px solid var(--line); background: var(--panel);
 }
@@ -291,17 +293,22 @@ a { color: var(--cyan); }
 .triage-note-input:focus { outline: none; border-color: var(--cyan); }
 .triage-feedback { font-size: 12px; color: var(--green); min-width: 70px; }
 .modal-tabs {
-  display: flex; gap: 4px; padding: 8px 18px 0; border-bottom: 1px solid var(--line); background: var(--panel-2);
-  overflow-x: auto;
+  flex: 0 0 auto;
+  display: flex; align-items: flex-end; gap: 4px; padding: 10px 18px 0; border-bottom: 1px solid var(--line); background: var(--panel-2);
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
 }
 .tab-btn {
+  flex: 0 0 auto;
   border: 1px solid transparent; border-bottom: none; background: transparent; color: var(--muted);
-  padding: 8px 14px; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
-  cursor: pointer; border-radius: 8px 8px 0 0; white-space: nowrap;
+  padding: 9px 14px; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  line-height: 1.25; cursor: pointer; border-radius: 8px 8px 0 0; white-space: nowrap;
 }
 .tab-btn:hover { color: var(--text); }
-.tab-btn.active { background: var(--panel); color: var(--cyan); border-color: var(--line); }
-.modal-body { padding: 18px; overflow-y: auto; flex: 1; min-height: 320px; }
+.tab-btn.active {
+  background: var(--panel); color: var(--cyan); border-color: var(--line);
+  box-shadow: inset 0 2px 0 var(--cyan);
+}
+.modal-body { padding: 18px; overflow-y: auto; flex: 1 1 auto; min-height: 0; scrollbar-width: thin; }
 .modal-shot-wrap { text-align: center; }
 .modal-shot-wrap img {
   max-width: 100%; max-height: 62vh; border-radius: 8px; border: 1px solid var(--line-strong);
@@ -310,8 +317,10 @@ a { color: var(--cyan); }
 .modal-shot-wrap img.zoomed { max-height: none; cursor: zoom-out; }
 .modal-shot-bar { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 12px; color: var(--muted); flex-wrap: wrap; gap: 8px; }
 .kv-table { width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 13px; }
-.kv-table th { text-align: left; width: 180px; color: var(--muted); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-.kv-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.kv-table th { text-align: left; color: var(--muted); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.kv-table th:only-of-type { width: 180px; }
+.kv-table td { padding: 7px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; vertical-align: top; }
+.kv-table tr:last-child th, .kv-table tr:last-child td { border-bottom: none; }
 .code-block {
   background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px;
   font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere;
@@ -319,7 +328,7 @@ a { color: var(--cyan); }
 }
 .panel-subhead { font-size: 11px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: var(--pink); margin: 14px 0 8px; }
 .console-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
-.console-item { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; font-size: 12.5px; }
+.console-item { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; font-size: 12.5px; overflow-wrap: anywhere; }
 .console-item.lvl-error, .console-item.lvl-exception { border-color: color-mix(in srgb, var(--red) 60%, var(--line)); }
 .console-item.lvl-warning, .console-item.lvl-network { border-color: color-mix(in srgb, var(--yellow) 60%, var(--line)); }
 .console-lvl { font-family: ui-monospace, Menlo, monospace; font-size: 11px; font-weight: 800; text-transform: uppercase; margin-right: 8px; }

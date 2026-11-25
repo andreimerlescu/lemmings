@@ -841,6 +841,7 @@
         this.selectedTriage = this.activeDetail.review_status || 'unreviewed';
         this.renderModalHeader();
         this.syncTriageUI();
+        $('modal-body').scrollTop = 0;
         this.renderTab();
       } catch (e) {
         $('modal-body').replaceChildren(el('p', 'muted', 'Failed to load artifact details.'));
@@ -905,6 +906,7 @@
         b.classList.toggle('active', active);
         b.setAttribute('aria-selected', String(active));
       });
+      $('modal-body').scrollTop = 0;
       this.renderTab();
     },
 
