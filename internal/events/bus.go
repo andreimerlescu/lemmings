@@ -23,9 +23,15 @@ const (
 	VisitComplete Kind = "visit.complete"
 	VisitError    Kind = "visit.error"
 
+	// Asset lifecycle. AssetComplete is a same-origin subresource fetch that
+	// succeeded; AssetError is an asset fetch that failed or was denied.
+	AssetComplete Kind = "asset.complete"
+	AssetError    Kind = "asset.error"
+
 	// Waiting room lifecycle.
 	WaitingRoomQueued Kind = "waiting_room.queued"
 	WaitingRoom       Kind = "waiting_room.entered"
+	QueuePoll         Kind = "waiting_room.poll"
 
 	// Terrain lifecycle.
 	TerrainOnline Kind = "terrain.online"
@@ -47,6 +53,7 @@ const (
 	ArtifactReviewed Kind = "artifact.reviewed"
 	ArtifactDropped  Kind = "artifact.dropped"
 	ScoutStarted     Kind = "scout.started"
+	ScoutVisit       Kind = "scout.visit"
 	ScoutDone        Kind = "scout.done"
 )
 
@@ -75,9 +82,13 @@ type Event struct {
 	Duration   time.Duration `json:"duration_ns,omitempty"`
 	Failed     bool          `json:"failed,omitempty"`
 	Cancelled  bool          `json:"cancelled,omitempty"`
+	AssetClass string        `json:"asset_class,omitempty"`
+	Banned     bool          `json:"banned,omitempty"`
+	AdmitPass  bool          `json:"admit_pass,omitempty"`
 
-	// Waiting room queue position.
-	Position int `json:"position,omitempty"`
+	// Waiting room queue position and polling count.
+	Position   int `json:"position,omitempty"`
+	QueuePolls int `json:"queue_polls,omitempty"`
 
 	// Forensics summary fields.
 	ArtifactID    string `json:"artifact_id,omitempty"`
