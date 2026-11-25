@@ -121,6 +121,35 @@ type browserInstance struct {
 	closeOnce sync.Once
 }
 
+// localBrowserArgs returns the hardened Chromium command-line flags for an
+// isolated headless instance. --use-mock-keychain and --password-store=basic
+// prevent macOS SecurityAgent ("Keychain Not Found") and Linux GNOME Keyring /
+// KWallet GUI prompts when HOME points to an ephemeral temp directory.
+func localBrowserArgs(userDataDir string) []string {
+	return []string{
+		"--headless=new",
+		"--remote-debugging-port=0",
+		"--remote-debugging-address=127.0.0.1",
+		"--remote-allow-origins=http://127.0.0.1",
+		"--user-data-dir=" + userDataDir,
+		"--use-mock-keychain",
+		"--password-store=basic",
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--disable-extensions",
+		"--disable-background-networking",
+		"--disable-component-update",
+		"--disable-sync",
+		"--disable-default-apps",
+		"--disable-translate",
+		"--disable-gpu",
+		"--mute-audio",
+		"--hide-scrollbars",
+		"--window-size=1280,800",
+		"about:blank",
+	}
+}
+
 func launchLocalBrowser(ctx context.Context, binPath string) (*browserInstance, error) {
 	tmpDir, err := os.MkdirTemp("", "lemmings-cdp-*")
 	if err != nil {
@@ -138,26 +167,7 @@ func launchLocalBrowser(ctx context.Context, binPath string) (*browserInstance, 
 	}
 
 	procCtx, cancel := context.WithCancel(context.Background())
-	args := []string{
-		"--headless=new",
-		"--remote-debugging-port=0",
-		"--remote-debugging-address=127.0.0.1",
-		"--remote-allow-origins=http://127.0.0.1",
-		"--user-data-dir=" + userDataDir,
-		"--no-first-run",
-		"--no-default-browser-check",
-		"--disable-extensions",
-		"--disable-background-networking",
-		"--disable-component-update",
-		"--disable-sync",
-		"--disable-default-apps",
-		"--disable-translate",
-		"--disable-gpu",
-		"--mute-audio",
-		"--hide-scrollbars",
-		"--window-size=1280,800",
-		"about:blank",
-	}
+	args := localBrowserArgs(userDataDir)
 
 	cmd := exec.CommandContext(procCtx, binPath, args...)
 	cmd.Env = minimalBrowserEnv(tmpDir)

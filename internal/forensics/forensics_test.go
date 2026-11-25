@@ -149,6 +149,29 @@ func TestMinimalBrowserEnv_ExcludesHostSecrets(t *testing.T) {
 	}
 }
 
+func TestLocalBrowserArgs_DisablesOSKeychainPrompts(t *testing.T) {
+	args := localBrowserArgs("/tmp/fake-chrome-profile/profile")
+	has := func(want string) bool {
+		for _, a := range args {
+			if a == want {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range []string{
+		"--headless=new",
+		"--use-mock-keychain",
+		"--password-store=basic",
+		"--user-data-dir=/tmp/fake-chrome-profile/profile",
+		"--remote-debugging-address=127.0.0.1",
+	} {
+		if !has(want) {
+			t.Errorf("localBrowserArgs missing required flag %q (got %v)", want, args)
+		}
+	}
+}
+
 func TestCoordinator_NonBlockingAndDrain(t *testing.T) {
 	bus := events.NewBus()
 	defer bus.Close()
