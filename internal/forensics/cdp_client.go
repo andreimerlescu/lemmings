@@ -2,12 +2,16 @@ package forensics
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
 	"golang.org/x/net/websocket"
 )
 
@@ -72,30 +76,63 @@ func dialCDP(ctx context.Context, wsURL string) (*cdpConn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cdp config: %w", err)
 	}
-	type dialRes struct {
-		ws  *websocket.Conn
-		err error
+	if cfg.Location == nil || (cfg.Location.Scheme != "ws" && cfg.Location.Scheme != "wss") {
+		return nil, fmt.Errorf("cdp dial: unsupported websocket url %q", discovery.SafeURL(wsURL))
 	}
-	ch := make(chan dialRes, 1)
-	go func() {
-		ws, err := websocket.DialConfig(cfg)
-		ch <- dialRes{ws: ws, err: err}
-	}()
-	var ws *websocket.Conn
-	select {
-	case <-ctx.Done():
-		go func() {
-			if r := <-ch; r.ws != nil {
-				_ = r.ws.Close()
-			}
-		}()
-		return nil, ctx.Err()
-	case r := <-ch:
-		if r.err != nil {
-			return nil, fmt.Errorf("cdp dial: %w", r.err)
+	host := cfg.Location.Hostname()
+	if host == "" {
+		return nil, fmt.Errorf("cdp dial: missing host in %q", discovery.SafeURL(wsURL))
+	}
+	port := cfg.Location.Port()
+	if port == "" {
+		if cfg.Location.Scheme == "wss" {
+			port = "443"
+		} else {
+			port = "80"
 		}
-		ws = r.ws
 	}
+
+	safeDial := discovery.SafeDialContext(&net.Dialer{Timeout: 10 * time.Second})
+	rawConn, err := safeDial(ctx, "tcp", net.JoinHostPort(host, port))
+	if err != nil {
+		return nil, fmt.Errorf("cdp dial: %w", err)
+	}
+
+	var netConn net.Conn = rawConn
+	if cfg.Location.Scheme == "wss" {
+		tlsCfg := discovery.MinTLSConfig()
+		tlsCfg.ServerName = host
+		tlsConn := tls.Client(rawConn, tlsCfg)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			_ = rawConn.Close()
+			return nil, fmt.Errorf("cdp tls handshake: %w", err)
+		}
+		cfg.TlsConfig = tlsCfg
+		netConn = tlsConn
+	}
+
+	if dl, ok := ctx.Deadline(); ok {
+		_ = netConn.SetDeadline(dl)
+	}
+	stopCancel := context.AfterFunc(ctx, func() {
+		_ = netConn.SetDeadline(time.Now())
+	})
+	ws, err := websocket.NewClient(cfg, netConn)
+	if !stopCancel() {
+		if ws != nil {
+			_ = ws.Close()
+		} else {
+			_ = netConn.Close()
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+	if err != nil {
+		_ = netConn.Close()
+		return nil, fmt.Errorf("cdp handshake: %w", err)
+	}
+	_ = netConn.SetDeadline(time.Time{})
 	ws.MaxPayloadBytes = cdpMaxFrameBytes
 
 	c := &cdpConn{

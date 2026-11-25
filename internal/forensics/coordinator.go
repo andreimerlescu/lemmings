@@ -52,7 +52,12 @@ func NewCoordinator(
 	}
 	store.SetRuntime(capturer.Mode(), capturer.BrowserInfo())
 
-	workCtx, cancel := context.WithCancel(parent)
+	if parent == nil {
+		parent = context.Background()
+	}
+	// Detach parent cancellation so SIGINT/SIGTERM does not immediately abort
+	// in-flight or queued captures before DrainAndClose(drainCtx) drains them.
+	workCtx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	c := &Coordinator{
 		store:    store,
 		capturer: capturer,
@@ -122,6 +127,9 @@ func (c *Coordinator) emitDrop(req CaptureRequest, reason string) {
 func (c *Coordinator) worker() {
 	defer c.wg.Done()
 	for req := range c.jobs {
+		if c.workCtx.Err() != nil {
+			continue
+		}
 		c.inFlight.Add(1)
 		art, err := c.capturer.Capture(c.workCtx, req)
 		c.inFlight.Add(-1)
@@ -159,6 +167,9 @@ func (c *Coordinator) worker() {
 func (c *Coordinator) DrainAndClose(drainCtx context.Context) error {
 	var closeErr error
 	c.stopOnce.Do(func() {
+		if drainCtx == nil {
+			drainCtx = context.Background()
+		}
 		c.mu.Lock()
 		c.closed = true
 		close(c.jobs)

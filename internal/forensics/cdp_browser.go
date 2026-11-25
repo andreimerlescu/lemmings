@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
 )
 
 var devtoolsListeningRe = regexp.MustCompile(`DevTools listening on (ws://\S+)`)
@@ -245,32 +249,65 @@ func launchLocalBrowser(ctx context.Context, binPath string) (*browserInstance, 
 	}, nil
 }
 
-func connectRemoteBrowser(ctx context.Context, rawURL string) (*browserInstance, error) {
+func connectRemoteBrowser(ctx context.Context, rawURL string, allowRemote bool) (*browserInstance, error) {
 	wsURL := strings.TrimSpace(rawURL)
-	if strings.HasPrefix(wsURL, "http://") || strings.HasPrefix(wsURL, "https://") {
+	parsed, err := url.Parse(wsURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != "ws" && parsed.Scheme != "wss") {
+		return nil, fmt.Errorf("cdp-url must start with ws://, wss://, http://, or https://")
+	}
+	if !allowRemote && !discovery.IsLoopbackURL(wsURL) {
+		return nil, fmt.Errorf("remote cdp-url %q requires -allow-remote-cdp (loopback only by default)", discovery.SafeURL(wsURL))
+	}
+
+	if parsed.Scheme == "http" || parsed.Scheme == "https" {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(wsURL, "/")+"/json/version", nil)
 		if err != nil {
 			return nil, fmt.Errorf("build cdp version request: %w", err)
 		}
-		client := &http.Client{Timeout: 5 * time.Second}
+		tr := &http.Transport{
+			DialContext:     discovery.SafeDialContext(&net.Dialer{Timeout: 10 * time.Second}),
+			TLSClientConfig: discovery.MinTLSConfig(),
+		}
+		defer tr.CloseIdleConnections()
+		client := &http.Client{
+			Timeout:   5 * time.Second,
+			Transport: tr,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 5 {
+					return errors.New("stopped after 5 redirects")
+				}
+				if !allowRemote && !discovery.IsLoopbackURL(req.URL.String()) {
+					return fmt.Errorf("remote cdp redirect to %q requires -allow-remote-cdp (loopback only by default)", discovery.SafeURL(req.URL.String()))
+				}
+				return nil
+			},
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("query remote cdp /json/version: %w", err)
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("remote cdp /json/version returned HTTP %d", resp.StatusCode)
+		}
 		var meta struct {
 			WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 		}
 		if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&meta); err != nil {
 			return nil, fmt.Errorf("decode remote cdp /json/version: %w", err)
 		}
-		if meta.WebSocketDebuggerURL == "" {
+		if strings.TrimSpace(meta.WebSocketDebuggerURL) == "" {
 			return nil, errors.New("remote cdp /json/version missing webSocketDebuggerUrl")
 		}
-		wsURL = meta.WebSocketDebuggerURL
+		wsURL = strings.TrimSpace(meta.WebSocketDebuggerURL)
 	}
-	if !strings.HasPrefix(wsURL, "ws://") && !strings.HasPrefix(wsURL, "wss://") {
-		return nil, fmt.Errorf("cdp-url must start with ws://, wss://, http://, or https://")
+
+	wsParsed, err := url.Parse(wsURL)
+	if err != nil || (wsParsed.Scheme != "ws" && wsParsed.Scheme != "wss") {
+		return nil, fmt.Errorf("cdp-url must resolve to a ws:// or wss:// endpoint")
+	}
+	if !allowRemote && !discovery.IsLoopbackURL(wsURL) {
+		return nil, fmt.Errorf("remote cdp webSocketDebuggerUrl %q requires -allow-remote-cdp (loopback only by default)", discovery.SafeURL(wsURL))
 	}
 
 	conn, err := dialCDP(ctx, wsURL)
