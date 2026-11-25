@@ -68,7 +68,7 @@ const (
 )
 
 var (
-	waitingRoomPollInterval = 3 * time.Second
+	waitingRoomPollInterval = 2 * time.Second
 	waitingRoom429Backoff   = 3 * time.Second
 	waitingRoomMaxBackoff   = 10 * time.Second
 
