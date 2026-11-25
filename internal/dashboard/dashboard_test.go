@@ -239,8 +239,8 @@ func TestDashboard_CSPAllowsExactlyTheInlineAssets(t *testing.T) {
 		if strings.Contains(csp, "unsafe-inline") || strings.Contains(csp, "unsafe-eval") {
 			t.Errorf("%s CSP must not contain unsafe-inline/unsafe-eval: %s", name, csp)
 		}
-		if strings.Contains(htmlDoc, "innerHTML") {
-			t.Errorf("%s HTML/JS must never use innerHTML", name)
+		if strings.Contains(htmlDoc, "innerHTML") || strings.Contains(htmlDoc, "outerHTML") || strings.Contains(htmlDoc, "document.write") {
+			t.Errorf("%s HTML/JS must never use innerHTML/outerHTML/document.write", name)
 		}
 		if regexp.MustCompile(`\sstyle=`).MatchString(htmlDoc) {
 			t.Errorf("%s HTML must not contain inline style= attributes", name)
@@ -516,6 +516,184 @@ func TestDashboard_SSEAndLemmingAPI(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for SSE artifact event")
+	}
+}
+
+func TestDashboard_AuthLimiterPerIPGlobalCeilingAndMapCap(t *testing.T) {
+	t.Run("PerIPIsolationAndIgnoreXFF", func(t *testing.T) {
+		d, _, _, rawToken := newTestDash(t, false)
+		h := d.Handler()
+
+		postAuth := func(remoteAddr, xff, tok string) int {
+			req := httptest.NewRequest(http.MethodPost, "http://localhost:4000/auth", strings.NewReader("token="+tok))
+			req.Host = "localhost:4000"
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.RemoteAddr = remoteAddr
+			if xff != "" {
+				req.Header.Set("X-Forwarded-For", xff)
+			}
+			rw := httptest.NewRecorder()
+			h.ServeHTTP(rw, req)
+			return rw.Code
+		}
+
+		// Exhaust IP A's 15/min budget using rotating ephemeral ports & spoofed XFF.
+		for i := range maxAuthFailuresPerIPPerMin {
+			code := postAuth(fmt.Sprintf("127.0.0.1:%d", 40000+i), fmt.Sprintf("203.0.113.%d", i+1), "wrong")
+			if code != http.StatusUnauthorized {
+				t.Fatalf("attempt %d from IP A: status = %d, want 401", i+1, code)
+			}
+		}
+		// 16th attempt from IP A (even with fresh spoofed XFF) must be 429.
+		if code := postAuth("127.0.0.1:49999", "198.51.100.77", rawToken); code != http.StatusTooManyRequests {
+			t.Fatalf("IP A after %d failures: status = %d, want 429", maxAuthFailuresPerIPPerMin, code)
+		}
+		// IP B (distinct RemoteAddr) must remain unaffected.
+		if code := postAuth("[::1]:51000", "127.0.0.1", rawToken); code != http.StatusSeeOther {
+			t.Fatalf("IP B must not be blocked by IP A failures: status = %d, want 303", code)
+		}
+	})
+
+	t.Run("Global60PerMinCeiling", func(t *testing.T) {
+		d, _, _, rawToken := newTestDash(t, false)
+		h := d.Handler()
+
+		// Spread 60 failures across 5 distinct IPs (12 each, all under per-IP cap 15).
+		for ipIdx := range 5 {
+			for j := range 12 {
+				req := httptest.NewRequest(http.MethodPost, "http://localhost:4000/auth", strings.NewReader("token=bad"))
+				req.Host = "localhost:4000"
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				req.RemoteAddr = fmt.Sprintf("127.0.0.%d:%d", ipIdx+10, 50000+j)
+				rw := httptest.NewRecorder()
+				h.ServeHTTP(rw, req)
+				if rw.Code != http.StatusUnauthorized {
+					t.Fatalf("ip %d attempt %d: status = %d, want 401", ipIdx, j+1, rw.Code)
+				}
+			}
+		}
+
+		// A brand-new 6th IP with 0 prior failures must hit the 60/min global ceiling.
+		req := httptest.NewRequest(http.MethodPost, "http://localhost:4000/auth", strings.NewReader("token="+rawToken))
+		req.Host = "localhost:4000"
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = "127.0.0.99:55555"
+		rw := httptest.NewRecorder()
+		h.ServeHTTP(rw, req)
+		if rw.Code != http.StatusTooManyRequests {
+			t.Fatalf("6th IP after 60 global failures: status = %d, want 429", rw.Code)
+		}
+		if rw.Header().Get("Retry-After") != "60" {
+			t.Errorf("Retry-After = %q, want 60", rw.Header().Get("Retry-After"))
+		}
+	})
+
+	t.Run("Bounded1024IPMapCapAndExpiredEviction", func(t *testing.T) {
+		var lim authLimiter
+		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+		// Fill 1024 active IPs at distinct instants.
+		for i := range maxAuthTrackedIPs {
+			ip := fmt.Sprintf("10.0.%d.%d", i/256, i%256)
+			lim.recordFailure(ip, base.Add(time.Duration(i)*time.Millisecond))
+		}
+		if got := len(lim.byIP); got != maxAuthTrackedIPs {
+			t.Fatalf("tracked IPs = %d, want %d", got, maxAuthTrackedIPs)
+		}
+
+		// Adding 200 more IPs within the window must never exceed maxAuthTrackedIPs (1024).
+		for i := range 200 {
+			ip := fmt.Sprintf("10.1.%d.%d", i/256, i%256)
+			lim.recordFailure(ip, base.Add(2*time.Second+time.Duration(i)*time.Millisecond))
+			if len(lim.byIP) > maxAuthTrackedIPs {
+				t.Fatalf("tracked IPs exceeded cap: %d > %d", len(lim.byIP), maxAuthTrackedIPs)
+			}
+		}
+		// Oldest entry 10.0.0.0 should have been evicted.
+		if _, exists := lim.byIP["10.0.0.0"]; exists {
+			t.Error("expected oldest IP 10.0.0.0 to be evicted once cap was reached")
+		}
+
+		// After >1 minute, expired entries are purged cleanly on the next record.
+		later := base.Add(2 * time.Minute)
+		lim.recordFailure("10.9.9.9", later)
+		if got := len(lim.byIP); got != 1 {
+			t.Fatalf("expected expired IPs purged leaving 1 active IP, got %d", got)
+		}
+		if !lim.allow("10.9.9.9", later) {
+			t.Error("expected single failure after window reset to still be allowed")
+		}
+	})
+}
+
+func TestDashboard_LiveMetricsJSONIncludesConcertAndAssets(t *testing.T) {
+	d, bus, _, rawToken := newTestDash(t, false)
+	d.cfg.Assets = true
+	d.cfg.AssetsPerPage = 8
+
+	// Populate both Swarm.Metrics and Reporter (via EventBus) to confirm full wiring.
+	rep := d.stats.(*report.Reporter)
+	rep.Attach(bus)
+
+	d.metrics.LemmingsStarted.Store(14)
+	d.metrics.LemmingsCompleted.Store(10)
+	d.metrics.LemmingsAlive.Store(4)
+	d.metrics.AssetRequests.Store(22)
+	d.metrics.AssetFailed.Store(3)
+	d.metrics.AssetDenied403.Store(2)
+	d.metrics.AssetBytes.Store(48120)
+	d.metrics.QueuePolls.Store(19)
+	d.metrics.Bans429.Store(4)
+	d.metrics.Bans403.Store(1)
+	d.metrics.ScoutVisits.Store(7)
+	d.metrics.ScoutFailures.Store(2)
+
+	h := d.Handler()
+	cookie := authCookieFor(t, h, rawToken)
+
+	req := httptest.NewRequest(http.MethodGet, "http://localhost:4000/metrics", nil)
+	req.Host = "localhost:4000"
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /metrics status = %d", w.Code)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode /metrics: %v", err)
+	}
+	want := map[string]float64{
+		"lemmings_started": 14,
+		"asset_requests":   22,
+		"asset_failed":     3,
+		"asset_denied_403": 2,
+		"asset_bytes":      48120,
+		"queue_polls":      19,
+		"bans_429":         4,
+		"bans_403":         1,
+		"scout_visits":     7,
+		"scout_failures":   2,
+	}
+	for k, wantVal := range want {
+		got, ok := raw[k].(float64)
+		if !ok || got != wantVal {
+			t.Errorf("/metrics[%q] = %v (present=%v), want %v", k, raw[k], ok, wantVal)
+		}
+	}
+
+	// Verify /api/state embeds both the expanded metricsSnapshot and LiveStats.
+	req = httptest.NewRequest(http.MethodGet, "http://localhost:4000/api/state", nil)
+	req.Host = "localhost:4000"
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/state status = %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `"lemmings_started":14`) || !strings.Contains(w.Body.String(), `"asset_denied_403":2`) {
+		t.Errorf("/api/state missing new metricsSnapshot fields: %s", w.Body.String())
 	}
 }
 

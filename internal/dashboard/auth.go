@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	sessionCookieName     = "lemmings_session"
-	maxAuthFailuresPerMin = 15
+	sessionCookieName           = "lemmings_session"
+	maxAuthFailuresPerIPPerMin  = 15
+	maxAuthFailuresGlobalPerMin = 60
+	maxAuthTrackedIPs           = 1024
 )
 
 // GenerateToken produces a cryptographically random 256-bit (64-char hex) token.
@@ -37,31 +39,121 @@ func sha512Hex(s string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// authLimiter bounds failed login attempts per sliding 1-minute window (SEC-05).
-type authLimiter struct {
-	mu       sync.Mutex
-	failures []time.Time
+// remoteIP extracts the client IP strictly from r.RemoteAddr using
+// net.SplitHostPort (falling back to the raw value). It never trusts
+// X-Forwarded-For or other spoofable proxy headers.
+func remoteIP(r *http.Request) string {
+	addr := strings.TrimSpace(r.RemoteAddr)
+	if addr == "" {
+		return "unknown"
+	}
+	if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
+		return host
+	}
+	return strings.Trim(addr, "[]")
 }
 
-func (a *authLimiter) allow(now time.Time) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	cutoff := now.Add(-time.Minute)
+// authLimiter bounds failed login attempts per remote IP (15/min, capped at
+// 1024 tracked IPs) and globally (60/min) over a sliding 1-minute window (SEC-05).
+type authLimiter struct {
+	mu     sync.Mutex
+	global []time.Time
+	byIP   map[string][]time.Time
+}
+
+func pruneTimestamps(ts []time.Time, cutoff time.Time) []time.Time {
 	n := 0
-	for _, ts := range a.failures {
-		if ts.After(cutoff) {
-			a.failures[n] = ts
+	for _, t := range ts {
+		if t.After(cutoff) {
+			ts[n] = t
 			n++
 		}
 	}
-	a.failures = a.failures[:n]
-	return len(a.failures) < maxAuthFailuresPerMin
+	return ts[:n]
 }
 
-func (a *authLimiter) recordFailure(now time.Time) {
+func (a *authLimiter) allow(ip string, now time.Time) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.failures = append(a.failures, now)
+	cutoff := now.Add(-time.Minute)
+	a.global = pruneTimestamps(a.global, cutoff)
+	if len(a.global) >= maxAuthFailuresGlobalPerMin {
+		return false
+	}
+	if a.byIP == nil {
+		return true
+	}
+	hits, ok := a.byIP[ip]
+	if !ok {
+		return true
+	}
+	hits = pruneTimestamps(hits, cutoff)
+	if len(hits) == 0 {
+		delete(a.byIP, ip)
+		return true
+	}
+	a.byIP[ip] = hits
+	return len(hits) < maxAuthFailuresPerIPPerMin
+}
+
+func (a *authLimiter) recordFailure(ip string, now time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cutoff := now.Add(-time.Minute)
+
+	a.global = pruneTimestamps(a.global, cutoff)
+	a.global = append(a.global, now)
+	if len(a.global) > maxAuthFailuresGlobalPerMin {
+		a.global = a.global[len(a.global)-maxAuthFailuresGlobalPerMin:]
+	}
+
+	if a.byIP == nil {
+		a.byIP = make(map[string][]time.Time)
+	}
+	if hits, ok := a.byIP[ip]; ok {
+		hits = pruneTimestamps(hits, cutoff)
+		hits = append(hits, now)
+		if len(hits) > maxAuthFailuresPerIPPerMin {
+			hits = hits[len(hits)-maxAuthFailuresPerIPPerMin:]
+		}
+		a.byIP[ip] = hits
+		return
+	}
+
+	if len(a.byIP) >= maxAuthTrackedIPs {
+		a.evictLocked(cutoff)
+	}
+	a.byIP[ip] = []time.Time{now}
+}
+
+func (a *authLimiter) evictLocked(cutoff time.Time) {
+	// First drop expired entries so stale IPs never evict active offenders.
+	for k, hits := range a.byIP {
+		pruned := pruneTimestamps(hits, cutoff)
+		if len(pruned) == 0 {
+			delete(a.byIP, k)
+		} else {
+			a.byIP[k] = pruned
+		}
+	}
+	// If still at capacity, evict the least-recently-failed IP deterministically.
+	for len(a.byIP) >= maxAuthTrackedIPs {
+		var oldestKey string
+		var oldestTime time.Time
+		first := true
+		for k, hits := range a.byIP {
+			last := hits[len(hits)-1]
+			if first || last.Before(oldestTime) || (last.Equal(oldestTime) && k < oldestKey) {
+				oldestKey = k
+				oldestTime = last
+				first = false
+			}
+		}
+		if first {
+			return
+		}
+		delete(a.byIP, oldestKey)
+	}
 }
 
 func (d *Dashboard) issueSessionCookie(w http.ResponseWriter) error {
@@ -109,8 +201,9 @@ func (d *Dashboard) handleAuth(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	ip := remoteIP(r)
 	now := time.Now()
-	if !d.authLimit.allow(now) {
+	if !d.authLimit.allow(ip, now) {
 		w.Header().Set("Retry-After", "60")
 		http.Error(w, "too many authentication attempts", http.StatusTooManyRequests)
 		return
@@ -130,7 +223,7 @@ func (d *Dashboard) handleAuth(w http.ResponseWriter, r *http.Request) {
 
 	submitted := sha512Hex(raw)
 	if subtle.ConstantTimeCompare([]byte(submitted), []byte(d.tokenHash)) != 1 {
-		d.authLimit.recordFailure(now)
+		d.authLimit.recordFailure(ip, now)
 		d.bus.Emit(events.Event{Kind: events.DashboardAuth, Err: fmt.Errorf("invalid token")})
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return

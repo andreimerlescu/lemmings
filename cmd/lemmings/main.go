@@ -68,6 +68,8 @@ const (
 	argMaxPages, aliasMaxPages               = "max-pages", "mpg"
 	argNavigation, aliasNavigation           = "navigation", "nav"
 	argStrictChecksum, aliasStrictChecksum   = "strict-checksum", "sc"
+	argAssets                                = "assets"
+	argAssetsPerPage                         = "assets-per-page"
 	argJourney, aliasJourney                 = "journey", "j"
 	argTraceFile, aliasTraceFile             = "trace-file", "tf"
 	argMaxFailureRate, aliasMaxFailureRate   = "max-failure-rate", "mfr"
@@ -82,6 +84,7 @@ const (
 	argCaptureFormat, aliasCaptureFormat     = "capture-format", "cf"
 	argChromeBin                             = "chrome-bin"
 	argCDPURL                                = "cdp-url"
+	argAllowRemoteCDP                        = "allow-remote-cdp"
 	argScouts                                = "scouts"
 	argRevealSessionCookies                  = "reveal-session-cookies"
 	argReview                                = "review"
@@ -349,10 +352,11 @@ func initCapturer(ctx context.Context, cfg swarm.Config) (forensics.Capturer, st
 	defer cancel()
 
 	cdp, err := forensics.NewCDPCapturer(capCtx, forensics.CDPOptions{
-		ChromeBin: cfg.ChromeBin,
-		CDPURL:    cfg.CDPURL,
-		Format:    cfg.CaptureFormat,
-		Timeout:   cfg.CaptureTimeout,
+		ChromeBin:      cfg.ChromeBin,
+		CDPURL:         cfg.CDPURL,
+		AllowRemoteCDP: cfg.AllowRemoteCDP,
+		Format:         cfg.CaptureFormat,
+		Timeout:        cfg.CaptureTimeout,
 	})
 	if err == nil {
 		return cdp, cdp.BrowserInfo(), nil
@@ -488,6 +492,11 @@ func loadConfig() (swarm.Config, bool, error) {
 	figs.NewBool(argStrictChecksum, false, "Fail a visit when its body differs from the body seen at index time").
 		WithAlias(argStrictChecksum, aliasStrictChecksum)
 
+	figs.NewBool(argAssets, false, "Fetch up to -assets-per-page uncached same-origin static assets per HTML page")
+
+	figs.NewInt(argAssetsPerPage, swarm.DefaultAssetsPerPage, "Maximum uncached same-origin static assets fetched per HTML page when -assets is enabled (1..64)").
+		WithValidator(argAssetsPerPage, figtree.AssureIntInRange(0, 64))
+
 	figs.NewString(argTraceFile, "", "Write every visit to this new JSONL file (mode 0600, never overwrites)").
 		WithAlias(argTraceFile, aliasTraceFile)
 
@@ -555,6 +564,8 @@ func loadConfig() (swarm.Config, bool, error) {
 	figs.NewString(argChromeBin, "", "Explicit path to local Chrome/Chromium executable (overrides auto-detection)")
 
 	figs.NewString(argCDPURL, "", "Remote Chrome DevTools Protocol ws:// or http:// endpoint instead of local Chrome")
+
+	figs.NewBool(argAllowRemoteCDP, false, "Allow non-loopback -cdp-url endpoints (cloud metadata and link-local IPs remain blocked)")
 
 	figs.NewInt(argScouts, 0, "Real-browser Scout lemmings running alongside HTTP swarm to catch JS/render errors (0..8)").
 		WithValidator(argScouts, figtree.AssureIntInRange(0, 8))
@@ -638,6 +649,8 @@ func loadConfig() (swarm.Config, bool, error) {
 		MaxPages:             *figs.Int(argMaxPages),
 		Navigation:           *figs.String(argNavigation),
 		StrictChecksum:       *figs.Bool(argStrictChecksum),
+		Assets:               *figs.Bool(argAssets),
+		AssetsPerPage:        *figs.Int(argAssetsPerPage),
 		JourneyFile:          *figs.String(argJourney),
 		TraceFile:            *figs.String(argTraceFile),
 		CaptureEnabled:       *figs.Bool(argCapture),
@@ -648,6 +661,7 @@ func loadConfig() (swarm.Config, bool, error) {
 		CaptureFormat:        *figs.String(argCaptureFormat),
 		ChromeBin:            *figs.String(argChromeBin),
 		CDPURL:               *figs.String(argCDPURL),
+		AllowRemoteCDP:       *figs.Bool(argAllowRemoteCDP),
 		Scouts:               *figs.Int(argScouts),
 		RevealSessionCookies: *figs.Bool(argRevealSessionCookies),
 		ReviewMode:           *figs.Bool(argReview),
@@ -655,6 +669,9 @@ func loadConfig() (swarm.Config, bool, error) {
 		FailureGate:          failureRate >= 0,
 		MaxFailureRate:       max(failureRate, 0),
 		P95Budget:            *figs.Duration(argP95Budget),
+	}
+	if cfg.Assets && (cfg.AssetsPerPage < 1 || cfg.AssetsPerPage > 64) {
+		return swarm.Config{}, false, fmt.Errorf("-assets-per-page must be 1..64 when -assets is enabled, got %d", cfg.AssetsPerPage)
 	}
 	return cfg, false, nil
 }

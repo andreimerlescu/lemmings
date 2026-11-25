@@ -171,6 +171,9 @@ func (u *UI) PrintBootSummary(cfg swarm.Config, browserStatus string) {
 	if cfg.MaxPages > 0 {
 		u.printf("%s%d per lemming\n", u.key("max pages:"), cfg.MaxPages)
 	}
+	if cfg.Assets {
+		u.printf("%senabled (up to %d uncached per page)\n", u.key("assets:"), cfg.AssetsPerPage)
+	}
 	u.printf("%s%v (depth: %d)\n", u.key("crawl:"), cfg.Crawl, cfg.CrawlDepth)
 
 	// Forensics & Scouts summary.
@@ -181,6 +184,9 @@ func (u *UI) PrintBootSummary(cfg swarm.Config, browserStatus string) {
 			cfg.CaptureMax, cfg.CapturePerError, cfg.CaptureWorkers, cfg.CaptureFormat)
 	} else {
 		u.printf("%s%s\n", u.key("forensics:"), u.paint(toneMuted, browserStatus))
+	}
+	if cfg.AllowRemoteCDP {
+		u.printf("%s%s\n", u.key("remote cdp:"), u.paint(toneYellow, "enabled (-allow-remote-cdp)"))
 	}
 	if cfg.Scouts > 0 {
 		u.printf("%s%d real-browser scouts\n", u.key("scouts:"), cfg.Scouts)
@@ -231,6 +237,9 @@ func (u *UI) PrintBootSummary(cfg swarm.Config, browserStatus string) {
 	}
 	if cfg.RevealSessionCookies {
 		warn("  ⚠  -reveal-session-cookies is ON: raw session cookie values will be\n              visible inside the authenticated localhost portal (never written to reports).")
+	}
+	if cfg.AllowRemoteCDP {
+		warn("  ⚠  -allow-remote-cdp is ON: non-loopback -cdp-url endpoints are permitted\n              (link-local, multicast, unspecified, and cloud-metadata IPs remain blocked).")
 	}
 	if warned {
 		u.println()
@@ -385,6 +394,18 @@ func (u *UI) tickerLine(startedAt time.Time, m *swarm.Metrics, visits int64, rat
 	if wr := m.TotalWaitingRoom.Load(); wr > 0 {
 		line += " | " + u.paint(toneOrange, "room held: "+report.FormatInt(wr))
 	}
+	if polls := m.QueuePolls.Load(); polls > 0 {
+		line += " | " + u.paint(toneOrange, "polls: "+report.FormatInt(polls))
+	}
+	if assets := m.AssetRequests.Load(); assets > 0 {
+		line += " | " + u.paint(toneCyan, "assets: "+report.FormatInt(assets))
+		if d403 := m.AssetDenied403.Load(); d403 > 0 {
+			line += " " + u.paint(toneRed, "(403: "+report.FormatInt(d403)+")")
+		}
+	}
+	if bans := m.Bans429.Load() + m.Bans403.Load(); bans > 0 {
+		line += " | " + u.paint(toneRed, "bans: "+report.FormatInt(bans))
+	}
 	if overflow := m.OverflowLogs.Load(); overflow > 0 {
 		line += fmt.Sprintf(" | overflow: %s", report.FormatInt(overflow))
 	}
@@ -418,13 +439,27 @@ func (u *UI) PrintFinalSummary(cfg swarm.Config, startedAt time.Time, m *swarm.M
 	u.println(u.rule())
 	u.printf("  lemmings v%s — final summary\n", cfg.Version)
 	u.println(u.rule())
+	started := d.LemmingsStarted
+	if started == 0 && m != nil {
+		started = m.LemmingsStarted.Load()
+	}
+	completed := d.LemmingsCompleted
+	if completed == 0 && m != nil {
+		completed = m.LemmingsCompleted.Load()
+	}
+	unborn := d.LemmingsUnborn
+	if unborn == 0 && m != nil {
+		unborn = m.LemmingsFailed.Load()
+	}
+
 	u.printf("%s%s\n", u.key("target:"), discovery.SafeURL(cfg.Hit))
 	u.printf("%s%s\n", u.key("total lemmings:"), report.FormatInt(cfg.Terrain*cfg.Pack))
-	u.printf("%s%s\n", u.key("completed:"), report.FormatInt(m.LemmingsCompleted.Load()))
-	u.printf("%s%s\n", u.key("failed:"), report.FormatInt(m.LemmingsFailed.Load()))
+	u.printf("%s%s\n", u.key("started:"), report.FormatInt(started))
+	u.printf("%s%s\n", u.key("completed:"), report.FormatInt(completed))
+	u.printf("%s%s\n", u.key("unborn:"), report.FormatInt(unborn))
 	u.println()
-	u.printf("%s%s  %s\n", u.key("total visits:"), report.FormatInt(d.TotalVisits), u.paint(toneCyan, report.Sparkline(d.Timeline)))
-	u.printf("%s%s\n", u.key("total bytes:"), report.FormatBytes(d.TotalBytes))
+	u.printf("%s%s  %s\n", u.key("page visits:"), report.FormatInt(d.TotalVisits), u.paint(toneCyan, report.Sparkline(d.Timeline)))
+	u.printf("%s%s\n", u.key("page bytes:"), report.FormatBytes(d.TotalBytes))
 	u.printf("%s%s (%.2f%%)\n", u.key("failed visits:"), report.FormatInt(d.FailedVisits), d.FailureRate*100)
 	if d.CancelledVisits > 0 {
 		u.printf("%s%s (life ended mid-visit)\n", u.key("cancelled:"), report.FormatInt(d.CancelledVisits))
@@ -435,8 +470,70 @@ func (u *UI) PrintFinalSummary(cfg swarm.Config, startedAt time.Time, m *swarm.M
 	u.printf("%s%s\n", u.key("4xx:"), u.paint(toneYellow, report.FormatInt(d.Total4xx)))
 	u.printf("%s%s\n", u.key("5xx:"), u.paint(toneRed, report.FormatInt(d.Total5xx)))
 	u.println()
-	u.printf("%sp50 %s · p95 %s · p99 %s\n", u.key("latency:"), report.FormatMillis(d.P50), report.FormatMillis(d.P95), report.FormatMillis(d.P99))
-	u.printf("%s%s lemmings held\n", u.key("waiting room:"), report.FormatInt(d.Room.Held))
+	u.printf("%sp50 %s · p95 %s · p99 %s\n", u.key("page latency:"), report.FormatMillis(d.P50), report.FormatMillis(d.P95), report.FormatMillis(d.P99))
+
+	if d.Assets.Requests > 0 || cfg.Assets {
+		u.println()
+		u.printf("%s%s requests · %s failed · %s denied (403) · %s\n",
+			u.key("assets:"),
+			report.FormatInt(d.Assets.Requests),
+			report.FormatInt(d.Assets.Failed),
+			report.FormatInt(d.Assets.Denied403),
+			report.FormatBytes(d.Assets.Bytes),
+		)
+		if d.Assets.Requests > 0 {
+			u.printf("%sp50 %s · p95 %s · p99 %s\n",
+				u.key("asset latency:"),
+				report.FormatMillis(d.Assets.P50),
+				report.FormatMillis(d.Assets.P95),
+				report.FormatMillis(d.Assets.P99),
+			)
+		}
+	}
+
+	rm := d.Room
+	if rm.Held > 0 || rm.Admitted > 0 || rm.Expired > 0 || rm.Denied > 0 || rm.Rejected503 > 0 || rm.TotalPolls > 0 {
+		u.println()
+		u.printf("%s%s held · %s admitted · %s expired · %s denied · %s 503-rejected · %s polls\n",
+			u.key("waiting room:"),
+			report.FormatInt(rm.Held),
+			report.FormatInt(rm.Admitted),
+			report.FormatInt(rm.Expired),
+			report.FormatInt(rm.Denied),
+			report.FormatInt(rm.Rejected503),
+			report.FormatInt(rm.TotalPolls),
+		)
+		if rm.Held > 0 {
+			u.printf("%sp95 %s · max %s · max pos #%s · %s died in line\n",
+				u.key("room wait:"),
+				report.FormatMillis(rm.P95Wait),
+				report.FormatMillis(rm.LongestWait),
+				report.FormatInt(int64(rm.MaxPosition)),
+				report.FormatInt(rm.DiedInLine),
+			)
+		}
+	} else {
+		u.printf("%s0 held\n", u.key("waiting room:"))
+	}
+
+	cc := d.Concert
+	if cc.AdmitPasses > 0 || cc.RoomTickets > 0 || cc.Bans429 > 0 || cc.Bans403 > 0 {
+		u.printf("%s%s admit passes · %s room tickets · %s bans (429) · %s bans (403)\n",
+			u.key("concert:"),
+			report.FormatInt(cc.AdmitPasses),
+			report.FormatInt(cc.RoomTickets),
+			report.FormatInt(cc.Bans429),
+			report.FormatInt(cc.Bans403),
+		)
+	}
+
+	if cfg.Scouts > 0 || d.Scouts.Visits > 0 || d.Scouts.Failures > 0 {
+		u.printf("%s%s visits · %s failures\n",
+			u.key("browser scouts:"),
+			report.FormatInt(d.Scouts.Visits),
+			report.FormatInt(d.Scouts.Failures),
+		)
+	}
 
 	fs := d.Forensics.Stats
 	if fs.Captured > 0 || fs.Deduplicated > 0 || fs.DroppedCap > 0 || fs.DroppedQueue > 0 {
@@ -459,14 +556,26 @@ func (u *UI) PrintFinalSummary(cfg swarm.Config, startedAt time.Time, m *swarm.M
 	}
 	u.println()
 
-	if overflow, dropped := m.OverflowLogs.Load(), m.DroppedLogs.Load(); overflow > 0 || dropped > 0 {
-		u.println("  channel pressure:")
-		u.printf("    overflow logs:  %s\n", report.FormatInt(overflow))
-		u.printf("    dropped logs:   %s\n", report.FormatInt(dropped))
-		if dropped > 0 {
-			u.println()
-			u.println(u.paint(toneYellow, "  ⚠  life records were dropped because the collector fell behind."))
-			u.println(u.paint(toneYellow, "     visit totals are still exact; only per-lemming detail was lost."))
+	droppedLogs := d.DroppedLogs
+	var overflowLogs int64
+	if m != nil {
+		droppedLogs = max(droppedLogs, m.DroppedLogs.Load())
+		overflowLogs = m.OverflowLogs.Load()
+	}
+	if overflowLogs > 0 {
+		u.printf("%s%s overflow logs\n", u.key("channel pressure:"), report.FormatInt(overflowLogs))
+		u.println()
+	}
+	if droppedLogs > 0 || d.TraceDropped > 0 || fs.DroppedQueue > 0 {
+		u.println(u.paint(toneRed, u.bold("  ⚠  DATA DROPPED — telemetry loss occurred during this run:")))
+		if droppedLogs > 0 {
+			u.println(u.paint(toneYellow, fmt.Sprintf("     • %s life records dropped (collector fell behind; aggregate visit totals remain exact)", report.FormatInt(droppedLogs))))
+		}
+		if d.TraceDropped > 0 {
+			u.println(u.paint(toneYellow, fmt.Sprintf("     • %s JSONL trace entries dropped (trace writer fell behind)", report.FormatInt(d.TraceDropped))))
+		}
+		if fs.DroppedQueue > 0 {
+			u.println(u.paint(toneYellow, fmt.Sprintf("     • %s forensic error captures dropped (capture queue saturated)", report.FormatInt(fs.DroppedQueue))))
 		}
 		u.println()
 	}

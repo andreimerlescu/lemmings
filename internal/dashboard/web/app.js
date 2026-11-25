@@ -18,6 +18,14 @@
     return (ms / 1000).toFixed(1) + ' s';
   }
   const fmtNs = (ns) => fmtMs((ns || 0) / 1e6);
+  function fmtBytes(n) {
+    n = Math.max(0, Number(n) || 0);
+    if (n < 1024) return Math.round(n) + ' B';
+    const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+    let u = -1;
+    do { n /= 1024; u++; } while (n >= 1024 && u < units.length - 1);
+    return (n < 10 ? n.toFixed(1) : Math.round(n)) + ' ' + units[u];
+  }
   function fmtClock(sec) {
     sec = Math.max(0, Math.round(sec || 0));
     const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
@@ -1242,8 +1250,9 @@
     setText('elapsed', fmtClock(m.elapsed_secs));
     setText('eta', CFG.eta ? 'of ~' + fmtClock(CFG.eta) : '');
     setText('alive', fmtInt(m.alive));
-    setText('alive-sub', CFG.total ? fmtInt(m.completed) + ' of ' + fmtInt(CFG.total) + ' lived' : '');
+    setText('alive-sub', CFG.total ? fmtInt(m.lemmings_started || m.completed) + ' of ' + fmtInt(CFG.total) + ' started' : '');
     setText('completed', fmtInt(m.completed));
+    setText('started', fmtInt(m.lemmings_started));
     setText('failed', fmtInt(m.failed));
     setText('visits', fmtInt(m.total_visits));
     setText('bytes', m.total_bytes);
@@ -1253,12 +1262,54 @@
     document.title = (m.alive ? fmtInt(m.alive) + ' alive · ' : '') + 'lemmings — ' + host;
     setText('scene-count', scene.slots.size + ' on the terrain' + (m.alive > scene.slots.size ? ' of ' + fmtInt(m.alive) + ' alive' : ''));
 
+    const assetReqs = m.asset_requests || 0;
+    const assetFail = m.asset_failed || 0;
+    const asset403 = m.asset_denied_403 || 0;
+    const assetBytes = m.asset_bytes || 0;
+    if (assetReqs > 0 || CFG.assets) {
+      setText('assets-count', fmtInt(assetReqs));
+      const abits = [fmtBytes(assetBytes)];
+      if (live && live.assets && live.assets.p95_ns > 0) abits.push('p95 ' + fmtNs(live.assets.p95_ns));
+      if (asset403 > 0) abits.push(fmtInt(asset403) + ' 403');
+      if (assetFail > 0) abits.push(fmtInt(assetFail) + ' fail');
+      setText('assets-sub', abits.join(' · '));
+      $('assets-kpi').className = 'kpi ' + (asset403 > 0 ? 'red' : assetFail > 0 ? 'yellow' : assetReqs > 0 ? 'cyan' : '');
+    } else {
+      setText('assets-count', '—');
+      setText('assets-sub', 'off (-assets)');
+      $('assets-kpi').className = 'kpi';
+    }
+
+    const bans429 = m.bans_429 || 0;
+    const bans403 = m.bans_403 || 0;
+    const bansTotal = bans429 + bans403;
+    const admitPasses = (live && live.concert && live.concert.admit_passes) || 0;
+    setText('bans-count', fmtInt(bansTotal));
+    const bbits = [fmtInt(bans429) + ' 429', fmtInt(bans403) + ' 403'];
+    if (admitPasses > 0) bbits.push(fmtInt(admitPasses) + ' passes');
+    setText('bans-sub', bbits.join(' · '));
+    $('bans-kpi').className = 'kpi ' + (bansTotal > 0 ? 'red' : admitPasses > 0 ? 'green' : '');
+
+    const scoutVisits = m.scout_visits || 0;
+    const scoutFail = m.scout_failures || 0;
+    const scoutsAlive = m.scouts_alive || 0;
+    if (CFG.scouts > 0 || scoutVisits > 0 || scoutsAlive > 0) {
+      setText('scouts-count', fmtInt(scoutVisits));
+      setText('scouts-sub', fmtInt(scoutsAlive) + ' alive · ' + fmtInt(scoutFail) + ' fail');
+      $('scouts-kpi').className = 'kpi ' + (scoutFail > 0 ? 'yellow' : 'cyan');
+    } else {
+      setText('scouts-count', '0');
+      setText('scouts-sub', 'off (-scouts)');
+      $('scouts-kpi').className = 'kpi';
+    }
+
     const prev = state.lastVisits;
     state.lastVisits = m.total_visits;
     if (prev !== undefined) setText('rate', fmtInt(m.total_visits - prev) + ' / s');
 
     if (s.forensics) forensicsUI.applyStats(s.forensics);
 
+    const polls = m.queue_polls || 0;
     if (live) {
       const rate = live.failure_rate * 100;
       setText('failrate', rate.toFixed(rate < 10 ? 2 : 1) + '%');
@@ -1268,13 +1319,34 @@
       setText('p50', 'p50 ' + fmtNs(live.p50_ns) + ' · p99 ' + fmtNs(live.p99_ns));
       setText('rescued', live.sessions ? live.rescued_percent.toFixed(1) + '%' : '—');
       setText('rescued-sub', live.sessions ? fmtInt(live.rescued) + ' of ' + fmtInt(live.sessions) + ' flawless' : 'flawless lives');
-      setText('wr-sub', live.room.held ? 'p95 wait ' + fmtNs(live.room.p95_wait_ns) + (live.room.died_in_line ? ' · ' + fmtInt(live.room.died_in_line) + ' gave up' : '') : 'never queued');
+      const rm = live.room || {};
+      const totalPolls = Math.max(polls, rm.total_polls || 0);
+      if (rm.held || totalPolls) {
+        const wbits = [];
+        if (rm.admitted) wbits.push(fmtInt(rm.admitted) + ' admitted');
+        if (totalPolls) wbits.push(fmtInt(totalPolls) + ' polls');
+        if (rm.p95_wait_ns) wbits.push('p95 ' + fmtNs(rm.p95_wait_ns));
+        if (rm.died_in_line) wbits.push(fmtInt(rm.died_in_line) + ' gave up');
+        if (rm.expired) wbits.push(fmtInt(rm.expired) + ' exp');
+        if (rm.denied) wbits.push(fmtInt(rm.denied) + ' denied');
+        setText('wr-sub', wbits.join(' · ') || 'queued');
+      } else {
+        setText('wr-sub', 'never queued');
+      }
       charts.update(live);
       renderPaths(live.paths || []);
       renderCauses(live.causes || []);
+    } else if (polls > 0) {
+      setText('wr-sub', fmtInt(polls) + ' polls');
     }
     renderTerrains(s.terrains || []);
-    if (m.dropped_logs > 0) showBanner('⚠ ' + fmtInt(m.dropped_logs) + ' life records were dropped because the collector fell behind. Visit totals remain exact.', false);
+    const droppedQueue = (s.forensics && s.forensics.dropped_queue) || 0;
+    if (m.dropped_logs > 0 || droppedQueue > 0) {
+      const dbits = [];
+      if (m.dropped_logs > 0) dbits.push(fmtInt(m.dropped_logs) + ' life records');
+      if (droppedQueue > 0) dbits.push(fmtInt(droppedQueue) + ' forensic captures');
+      showBanner('⚠ DATA DROPPED: ' + dbits.join(' and ') + ' were dropped under backpressure. Aggregate visit totals remain exact.', false);
+    }
   }
 
   function renderPaths(paths) {
@@ -1512,7 +1584,9 @@
 
   setText('plan', fmtInt(CFG.terrain) + ' × ' + fmtInt(CFG.pack) + ' lemmings · ' +
     (CFG.journey ? 'journey “' + CFG.journey + '”' : CFG.navigation + ' navigation') + ' · ramp ' +
-    (CFG.ramp_shape || 'linear') + (CFG.scouts ? ' · ' + CFG.scouts + ' browser scouts' : ''));
+    (CFG.ramp_shape || 'linear') +
+    (CFG.assets ? ' · assets (' + (CFG.assets_per_page || 8) + '/page)' : '') +
+    (CFG.scouts ? ' · ' + CFG.scouts + ' browser scouts' : ''));
 
   readPalette();
   syncToggles();
