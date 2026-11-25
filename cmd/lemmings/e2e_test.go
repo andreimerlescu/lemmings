@@ -436,3 +436,155 @@ func TestE2E_DashboardAndInterrupt(t *testing.T) {
 		t.Fatalf("expected interrupted run to still deliver visits, got %+v", d)
 	}
 }
+
+func TestE2E_ConcertWaitingRoomAndAssetsTier(t *testing.T) {
+	bin := e2eBinary(t)
+
+	var mu sync.Mutex
+	ticketSeq := 0
+	admittedTickets := make(map[string]bool)
+
+	serveConcertPage := func(w http.ResponseWriter, r *http.Request, title, body string) {
+		if c, err := r.Cookie("concert_admit"); err == nil && strings.HasPrefix(c.Value, "pass-") {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprintf(w, `<!doctype html><html><head><title>%s</title><link rel="stylesheet" href="/assets/app.css"></head><body><img src="/assets/logo.svg" alt="logo"><nav><a href="/">Home</a><a href="/about">About</a></nav><main>%s</main></body></html>`, title, body)
+			return
+		}
+
+		// If the visitor has an admitted room_ticket, mint concert_admit and serve origin page.
+		if tc, err := r.Cookie("room_ticket"); err == nil && tc.Value != "" {
+			mu.Lock()
+			isAdmitted := admittedTickets[tc.Value]
+			mu.Unlock()
+			if isAdmitted {
+				http.SetCookie(w, &http.Cookie{Name: "concert_admit", Value: "pass-" + tc.Value, Path: "/", HttpOnly: true})
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				fmt.Fprintf(w, `<!doctype html><html><head><title>%s</title><link rel="stylesheet" href="/assets/app.css"></head><body><img src="/assets/logo.svg" alt="logo"><nav><a href="/">Home</a><a href="/about">About</a></nav><main>%s</main></body></html>`, title, body)
+				return
+			}
+		}
+
+		// Issue a room_ticket and render Concert waiting.html.
+		mu.Lock()
+		ticketSeq++
+		ticket := fmt.Sprintf("tk-%d", ticketSeq)
+		mu.Unlock()
+		http.SetCookie(w, &http.Cookie{Name: "room_ticket", Value: ticket, Path: "/", HttpOnly: true})
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Retry-After", "1")
+		fmt.Fprint(w, `<!doctype html><html><head><title>Waiting Room</title><script src="/_concert/waiting.js" defer></script></head><body class="queue-page"><h1>Please wait</h1><p>Position: <b id="position">2</b></p></body></html>`)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {
+		serveConcertPage(w, r, "Concert Origin", "Admitted home content")
+	})
+	mux.HandleFunc("/about", func(w http.ResponseWriter, r *http.Request) {
+		serveConcertPage(w, r, "Concert About", "Admitted about content")
+	})
+	mux.HandleFunc("/queue/status", func(w http.ResponseWriter, r *http.Request) {
+		tc, err := r.Cookie("room_ticket")
+		if err != nil || tc.Value == "" {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"ready":false,"waiting":false,"cookies_required":true}`)
+			return
+		}
+		mu.Lock()
+		admittedTickets[tc.Value] = true
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ready":true,"waiting":false,"position":0}`)
+	})
+	mux.HandleFunc("/assets/app.css", func(w http.ResponseWriter, r *http.Request) {
+		c, err := r.Cookie("concert_admit")
+		if err != nil || !strings.HasPrefix(c.Value, "pass-") {
+			http.Error(w, "concert pass required", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		fmt.Fprint(w, `body{color:#f7f1ff;background:#1d1727}`)
+	})
+	mux.HandleFunc("/assets/logo.svg", func(w http.ResponseWriter, r *http.Request) {
+		c, err := r.Cookie("concert_admit")
+		if err != nil || !strings.HasPrefix(c.Value, "pass-") {
+			http.Error(w, "concert pass required", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "image/svg+xml")
+		fmt.Fprint(w, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#ff7edb"/></svg>`)
+	})
+	mux.HandleFunc("/sitemap.xml", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `<urlset><url><loc>http://%[1]s/</loc></url><url><loc>http://%[1]s/about</loc></url></urlset>`, r.Host)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// Confirm the mock Concert asset gate rejects unauthenticated requests with 403.
+	unauthResp, err := http.Get(srv.URL + "/assets/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = unauthResp.Body.Close()
+	if unauthResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("unauthenticated /assets/app.css status = %d, want 403", unauthResp.StatusCode)
+	}
+
+	dir := t.TempDir()
+	args := []string{
+		"-hit", srv.URL + "/",
+		"-terrain", "2", "-pack", "2", "-limit", "4",
+		"-until", "10s", "-ramp", "100ms",
+		"-think-min", "10ms", "-think-max", "30ms",
+		"-max-pages", "2",
+		"-assets", "-assets-per-page", "8",
+		"-tty=false", "-capture=false",
+		"-save-to", dir,
+		"-dashboard-port", fmt.Sprint(freePort(t)),
+	}
+	code, out := exitCode(t, exec.Command(bin, args...))
+	if code != exitOK {
+		t.Fatalf("Concert E2E exit %d, want 0:\n%s", code, out)
+	}
+
+	d, _ := readReport(t, dir)
+	if d.Room.Held <= 0 || d.Room.Admitted <= 0 || d.Room.TotalPolls <= 0 {
+		t.Fatalf("expected Concert waiting room admission telemetry, got %+v\n%s", d.Room, out)
+	}
+	if d.Assets.Requests <= 0 || d.Assets.Denied403 != 0 || d.Assets.Failed != 0 {
+		t.Fatalf("expected admitted asset fetches with zero 403s, got %+v\n%s", d.Assets, out)
+	}
+	if d.Concert.AdmitPasses <= 0 || d.Concert.RoomTickets <= 0 {
+		t.Fatalf("expected Concert passes and room tickets recorded, got %+v\n%s", d.Concert, out)
+	}
+	if !strings.Contains(out, "assets:") || !strings.Contains(out, "concert:") {
+		t.Errorf("expected CLI final summary to render assets and concert sections:\n%s", out)
+	}
+}
+
+func TestE2E_NonLoopbackCDPRejectedFailClosed(t *testing.T) {
+	bin := e2eBinary(t)
+	site := e2eSite(t)
+
+	code, out := exitCode(t, exec.Command(bin,
+		"-hit", site.URL+"/",
+		"-cdp-url", "http://198.51.100.10:9222",
+		"-dry-run",
+		"-tty=false",
+	))
+	if code != exitError {
+		t.Fatalf("non-loopback -cdp-url without -allow-remote-cdp exited %d, want %d:\n%s", code, exitError, out)
+	}
+	if !strings.Contains(out, "-allow-remote-cdp") {
+		t.Fatalf("expected fail-closed error mentioning -allow-remote-cdp:\n%s", out)
+	}
+
+	// Also verify -assets-per-page 0 is rejected when -assets is enabled.
+	code, out = exitCode(t, exec.Command(bin,
+		"-hit", site.URL+"/",
+		"-assets", "-assets-per-page", "0",
+		"-dry-run", "-capture=false", "-tty=false",
+	))
+	if code != exitError || !strings.Contains(out, "-assets-per-page") {
+		t.Fatalf("-assets with -assets-per-page 0 exited %d, want %d:\n%s", code, exitError, out)
+	}
+}

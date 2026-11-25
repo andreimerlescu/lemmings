@@ -84,6 +84,7 @@ type sseEvent struct {
 
 type metricsSnapshot struct {
 	Alive             int64  `json:"alive"`
+	LemmingsStarted   int64  `json:"lemmings_started"`
 	Completed         int64  `json:"completed"`
 	Failed            int64  `json:"failed"`
 	FailedVisits      int64  `json:"failed_visits"`
@@ -92,6 +93,13 @@ type metricsSnapshot struct {
 	TotalVisits       int64  `json:"total_visits"`
 	TotalBytes        string `json:"total_bytes"`
 	WaitingRoom       int64  `json:"waiting_room"`
+	QueuePolls        int64  `json:"queue_polls"`
+	AssetRequests     int64  `json:"asset_requests"`
+	AssetFailed       int64  `json:"asset_failed"`
+	AssetDenied403    int64  `json:"asset_denied_403"`
+	AssetBytes        int64  `json:"asset_bytes"`
+	Bans429           int64  `json:"bans_429"`
+	Bans403           int64  `json:"bans_403"`
 	Xx2               int64  `json:"XX2"`
 	Xx3               int64  `json:"XX3"`
 	Xx4               int64  `json:"XX4"`
@@ -100,6 +108,8 @@ type metricsSnapshot struct {
 	DroppedLogs       int64  `json:"dropped_logs"`
 	ArtifactsCaptured int64  `json:"artifacts_captured"`
 	ScoutsAlive       int64  `json:"scouts_alive"`
+	ScoutVisits       int64  `json:"scout_visits"`
+	ScoutFailures     int64  `json:"scout_failures"`
 	ElapsedSecs       int64  `json:"elapsed_secs"`
 }
 
@@ -352,7 +362,12 @@ func (d *Dashboard) handleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Dashboard) handleMetrics(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, d.snapshot(int64(d.elapsed().Seconds())))
+	var live *report.LiveStats
+	if d.stats != nil {
+		l := d.stats.Live(0, 0)
+		live = &l
+	}
+	writeJSON(w, d.snapshot(int64(d.elapsed().Seconds()), live))
 }
 
 func (d *Dashboard) handleReplay(w http.ResponseWriter, _ *http.Request) {
@@ -581,8 +596,14 @@ func (d *Dashboard) broadcastMetrics(ctx context.Context) {
 }
 
 func (d *Dashboard) stats1s() dashboardStats {
+	var livePtr *report.LiveStats
+	if d.stats != nil {
+		live := d.stats.Live(liveTimelinePoints, livePaths)
+		livePtr = &live
+	}
 	s := dashboardStats{
-		Metrics:  d.snapshot(int64(d.elapsed().Seconds())),
+		Metrics:  d.snapshot(int64(d.elapsed().Seconds()), livePtr),
+		Live:     livePtr,
 		Terrains: d.obs.terrainTiles(),
 	}
 	d.obs.mu.Lock()
@@ -591,10 +612,6 @@ func (d *Dashboard) stats1s() dashboardStats {
 	if s.Phase == "ramping" && d.metrics.TerrainsOnline.Load() >= d.cfg.Terrain {
 		s.Phase = "running"
 	}
-	if d.stats != nil {
-		live := d.stats.Live(liveTimelinePoints, livePaths)
-		s.Live = &live
-	}
 	if d.forensics != nil {
 		fs := d.forensics.Stats()
 		s.Forensics = &fs
@@ -602,9 +619,10 @@ func (d *Dashboard) stats1s() dashboardStats {
 	return s
 }
 
-func (d *Dashboard) snapshot(elapsedSecs int64) metricsSnapshot {
-	return metricsSnapshot{
+func (d *Dashboard) snapshot(elapsedSecs int64, live *report.LiveStats) metricsSnapshot {
+	snap := metricsSnapshot{
 		Alive:             d.metrics.LemmingsAlive.Load(),
+		LemmingsStarted:   d.metrics.LemmingsStarted.Load(),
 		Completed:         d.metrics.LemmingsCompleted.Load(),
 		Failed:            d.metrics.LemmingsFailed.Load(),
 		FailedVisits:      d.metrics.FailedVisits.Load(),
@@ -613,6 +631,13 @@ func (d *Dashboard) snapshot(elapsedSecs int64) metricsSnapshot {
 		TotalVisits:       d.metrics.TotalVisits.Load(),
 		TotalBytes:        report.FormatBytes(d.metrics.TotalBytes.Load()),
 		WaitingRoom:       d.metrics.TotalWaitingRoom.Load(),
+		QueuePolls:        d.metrics.QueuePolls.Load(),
+		AssetRequests:     d.metrics.AssetRequests.Load(),
+		AssetFailed:       d.metrics.AssetFailed.Load(),
+		AssetDenied403:    d.metrics.AssetDenied403.Load(),
+		AssetBytes:        d.metrics.AssetBytes.Load(),
+		Bans429:           d.metrics.Bans429.Load(),
+		Bans403:           d.metrics.Bans403.Load(),
 		Xx2:               d.metrics.Total2xx.Load(),
 		Xx3:               d.metrics.Total3xx.Load(),
 		Xx4:               d.metrics.Total4xx.Load(),
@@ -621,8 +646,22 @@ func (d *Dashboard) snapshot(elapsedSecs int64) metricsSnapshot {
 		DroppedLogs:       d.metrics.DroppedLogs.Load(),
 		ArtifactsCaptured: d.metrics.ArtifactsCaptured.Load(),
 		ScoutsAlive:       d.metrics.ScoutsAlive.Load(),
+		ScoutVisits:       d.metrics.ScoutVisits.Load(),
+		ScoutFailures:     d.metrics.ScoutFailures.Load(),
 		ElapsedSecs:       elapsedSecs,
 	}
+	if live != nil {
+		snap.AssetRequests = max(snap.AssetRequests, live.Assets.Requests)
+		snap.AssetFailed = max(snap.AssetFailed, live.Assets.Failed)
+		snap.AssetDenied403 = max(snap.AssetDenied403, live.Assets.Denied403)
+		snap.AssetBytes = max(snap.AssetBytes, live.Assets.Bytes)
+		snap.QueuePolls = max(snap.QueuePolls, live.Room.TotalPolls)
+		snap.Bans429 = max(snap.Bans429, live.Concert.Bans429)
+		snap.Bans403 = max(snap.Bans403, live.Concert.Bans403)
+		snap.ScoutVisits = max(snap.ScoutVisits, live.Scouts.Visits)
+		snap.ScoutFailures = max(snap.ScoutFailures, live.Scouts.Failures)
+	}
+	return snap
 }
 
 // ── Client Registry ──────────────────────────────────────────────────────────
@@ -750,6 +789,8 @@ type dashboardConfig struct {
 	FailGate      float64 `json:"fail_gate"`
 	P95Gate       float64 `json:"p95_gate"`
 	Scouts        int     `json:"scouts"`
+	Assets        bool    `json:"assets"`
+	AssetsPerPage int     `json:"assets_per_page"`
 	ReviewMode    bool    `json:"review_mode"`
 	RevealCookies bool    `json:"reveal_cookies"`
 }
@@ -765,6 +806,7 @@ func DashboardHTML(cfg swarm.Config) string {
 		ThinkMin: cfg.ThinkMin.Seconds(), ThinkMax: cfg.ThinkMax.Seconds(),
 		Navigation: cfg.Navigation, Stage: StageSize, FailGate: -1,
 		P95Gate: cfg.P95Budget.Seconds(), Scouts: cfg.Scouts,
+		Assets: cfg.Assets, AssetsPerPage: cfg.AssetsPerPage,
 		ReviewMode: cfg.ReviewMode, RevealCookies: cfg.RevealSessionCookies,
 	}
 	if cfg.Journey != nil {

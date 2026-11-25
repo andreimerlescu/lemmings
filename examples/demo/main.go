@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -215,6 +216,16 @@ window.arcadeCabinet.insertCoin();
 		http.SetCookie(w, &http.Cookie{Name: "player", Value: "", Path: "/", MaxAge: -1})
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
+	mux.HandleFunc("GET /assets/arcade.css", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		fmt.Fprint(w, arcadeCSS)
+	})
+	mux.HandleFunc("GET /assets/logo.svg", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		fmt.Fprint(w, arcadeLogoSVG)
+	})
 	mux.HandleFunc("GET /sitemap.xml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 		base := "http://" + r.Host
@@ -235,9 +246,12 @@ window.arcadeCabinet.insertCoin();
 
 func (a *arcade) session(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, err := r.Cookie("player"); err != nil {
-			n := a.visitors.Add(1)
-			http.SetCookie(w, &http.Cookie{Name: "player", Value: "p" + strconv.FormatInt(n, 36), Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		// Keep /assets/* stateless and exempt from session minting, chaos, and waiting room.
+		if !strings.HasPrefix(r.URL.Path, "/assets/") {
+			if _, err := r.Cookie("player"); err != nil {
+				n := a.visitors.Add(1)
+				http.SetCookie(w, &http.Cookie{Name: "player", Value: "p" + strconv.FormatInt(n, 36), Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -270,15 +284,30 @@ func (a *arcade) page(w http.ResponseWriter, _ *http.Request, title, body string
 }
 
 const pageHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>%s · Neon Arcade</title><style>
+<title>%s · Neon Arcade</title><link rel="stylesheet" href="/assets/arcade.css"><style>
 body{margin:0;min-height:100vh;font:17px/1.6 system-ui,sans-serif;color:#f7f1ff;background:linear-gradient(#171520,#2a1747 60%%,#4b1d52)}
-nav{display:flex;gap:18px;padding:18px 28px;border-bottom:1px solid #ff7edb44}nav a{color:#36f9f6;text-decoration:none}
+nav{display:flex;align-items:center;gap:18px;padding:18px 28px;border-bottom:1px solid #ff7edb44}nav a{color:#36f9f6;text-decoration:none}
 main{max-width:860px;margin:0 auto;padding:36px 28px}h1{font-style:italic;letter-spacing:.06em;color:#ff7edb;text-shadow:0 0 8px #f92aad}
 a{color:#fede5d}.lead{color:#b893ce}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
 .tile{display:block;padding:16px;border:1px solid #36f9f666;border-radius:12px;text-decoration:none;color:#f7f1ff}.tile b{display:block;color:#36f9f6}
 .errbox{padding:20px 24px;border:1px solid #fe4450aa;border-radius:12px;background:#3a1426cc}
-</style></head><body><nav><a href="/">Neon Arcade</a><a href="/games">Games</a><a href="/scores">Leaderboard</a><a href="/tokens">Tokens</a><a href="/checkout">Checkout</a><a href="/arcade-glitch">Diagnostics</a><a href="/about">About</a></nav>
+</style></head><body><nav><img class="arcade-logo" src="/assets/logo.svg" alt="Neon Arcade" width="24" height="24"><a href="/">Neon Arcade</a><a href="/games">Games</a><a href="/scores">Leaderboard</a><a href="/tokens">Tokens</a><a href="/checkout">Checkout</a><a href="/arcade-glitch">Diagnostics</a><a href="/about">About</a></nav>
 <main>%s</main></body></html>`
+
+const arcadeCSS = `/* Neon Arcade Synthwave static stylesheet */
+.arcade-logo{display:inline-block;vertical-align:middle;filter:drop-shadow(0 0 6px #ff7edb)}
+.tile{transition:transform .15s ease,border-color .15s ease;background:rgba(29,23,39,.55)}
+.tile:hover{transform:translateY(-2px);border-color:#ff7edb}
+nav a:hover{color:#fede5d}
+`
+
+const arcadeLogoSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="Neon Arcade">
+<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fede5d"/><stop offset="55%" stop-color="#ff8b39"/><stop offset="100%" stop-color="#f92aad"/></linearGradient></defs>
+<circle cx="12" cy="12" r="10" fill="url(#g)"/>
+<rect x="2" y="13" width="20" height="1.5" fill="#171520"/>
+<rect x="2" y="16" width="20" height="1.5" fill="#171520"/>
+<rect x="2" y="19" width="20" height="2" fill="#171520"/>
+</svg>`
 
 const queueHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Waiting room · Neon Arcade</title>
 <style>body{font:18px system-ui;background:#241b2f;color:#f7f1ff;display:grid;place-items:center;min-height:100vh;margin:0}b{color:#ff8b39;font-size:48px}</style></head>
