@@ -14,7 +14,7 @@ Most load testers blast stateless HTTP requests and hand you a table of response
 
 **Lemmings acts like a real crowd of visitors — and hands you the receipts when one hits trouble:**
 
-- **Stateful visitors, not raw loops.** Every lemming has a sequential number (`#1..N`), browser persona, `Accept-Language`, isolated cookie jar (`InspectingJar`), dedicated connection pool, human think time, `Referer` trail, and waiting-room awareness.
+- **Stateful visitors, not raw loops.** Every lemming has a sequential number (`#1..N`), browser persona, `Accept-Language`, RFC 6265 bounded cookie jar (`InspectingJar`), dedicated connection pool, human think time, `Referer` trail, optional same-origin static asset loading (`-assets`), and native **Concert** waiting-room protocol support.
 - **Automatic 4-part Error Forensics.** Whenever a lemming hits a `4xx`/`5xx`, transport error, failed journey assertion, or JS error, Lemmings automatically captures:
   1. **Session state, cookie jar status & lemming `#number`** (cookie metadata + HMAC fingerprint; raw values redacted in reports)
   2. **JavaScript console output** (errors, uncaught exceptions, warnings, failed subresources)
@@ -55,7 +55,7 @@ Open the one-click `http://localhost:4000/#token=...` link printed in your termi
 ### Install Globally
 
 ```bash
-go install github.com/andreimerlescu/lemmings/cmd/lemmings@latest
+go install github.com/andreimerlescu/lemmings/v2/cmd/lemmings@latest
 lemmings -version
 ```
 
@@ -93,11 +93,24 @@ lemmings compare \
 ```
 
 ### Remote Chromium Sidecar (Docker / CI)
-Point Lemmings at a remote Chrome DevTools endpoint with zero local browser install:
+Point Lemmings at a local loopback Chrome DevTools endpoint with zero local browser install (non-loopback endpoints fail closed unless you explicitly opt in with `-allow-remote-cdp`):
 
 ```bash
 lemmings -hit https://staging.example.com/ -cdp-url http://127.0.0.1:9222 -scouts 2
 ```
+
+### Concert Waiting Room & Static Asset Tier
+Exercise origins fronted by [Concert](https://github.com/andreimerlescu/concert) (HTML `waiting.html`, legacy `/queue/status`, or `-api-json` HTTP `429` JSON queues) with opt-in same-origin asset loading (`-assets`) carrying each admitted visitor's `concert_admit` pass:
+
+```bash
+lemmings \
+  -hit http://127.0.0.1:8081/ \
+  -terrain 4 -pack 5 -limit 15 -until 30s -ramp 3s \
+  -assets -assets-per-page 8 \
+  -observe -save-to ./reports
+```
+
+Page latency (`-p95-budget`), asset fetches (`AssetReport`), waiting-room admission/polls (`RoomReport`), and Concert passes/bans (`ConcertReport`) are tracked and reported separately so queue wait and static assets never distort page SLOs.
 
 If no Chrome/Chromium is available and `-cdp-url` is not set, Lemmings falls back cleanly to **HTTP-only forensics** (still capturing session state, cookie jar status, lemming `#number`, and parsed error bodies).
 
@@ -107,12 +120,12 @@ If no Chrome/Chromium is available and `-cdp-url` is not set, Lemmings falls bac
 
 | Capability | Highlights |
 | --- | --- |
-| **Pure-Go CDP Forensics** | Auto-detects Chrome/Chromium/Brave/Edge or connects to `-cdp-url`; ephemeral incognito context per capture; scrubbed browser environment; desktop & mobile viewports; deduplicated & capped (`-capture-max`, `-capture-per-error`). |
-| **Admin Portal & `-review`** | Loopback-only (`127.0.0.1`), hash-based strict CSP, HMAC-SHA256 session cookies, CSRF protection, live SSE Error Forensics Gallery, 4-panel Inspector Modal, triage verdicts persisted into reports. |
-| **Journeys & Checks** | Ordered GET funnels with status, MIME, title, substring (`contains` / `not_contains`), blank-page vs. SPA detection, and simple DOM selectors (`tag`, `#id`, `.class`). |
-| **Ramp Shapes** | `-ramp-shape linear`, `fibonacci` (gentle warm-up surging to peak), or `step` (4 discrete plateaus to expose capacity cliffs). |
-| **Delivery Targets** | Confined local filesystem (`os.OpenRoot`), Amazon S3 (`s3://`), and hardened TLS 1.2+ SMTP (`mailto:` with `-smtp-pass-file` / `-smtp-pass-stdin` / env). |
-| **Observability** | Isolated Prometheus `/metrics` exporter (`-observe`) with 17 metrics, 999-URL cardinality cap, and Host-header DNS-rebinding guard. |
+| **Pure-Go CDP Forensics** | Auto-detects Chrome/Chromium/Brave/Edge or connects to `-cdp-url` (loopback-only by default; `-allow-remote-cdp` opt-in); ephemeral incognito context per capture; scrubbed browser environment; screenshot grace budget; desktop & mobile viewports; deduplicated & capped (`-capture-max`, `-capture-per-error`). |
+| **Concert Protocol & `-assets`** | Native Concert `waiting.html`, legacy `/queue/status`, and `-api-json` `429` JSON queue admission; separated page vs. same-origin asset tier (`-assets`, `-assets-per-page 1..64`) with per-lemming cache and `concert_admit` pass tracking. |
+| **Admin Portal & `-review`** | Loopback-only (`127.0.0.1`), hash-based strict CSP, HMAC-SHA256 session cookies, per-IP (`15/min`, `1024`-IP cap) + global (`60/min`) auth limiter, CSRF protection, live SSE Error Forensics Gallery, 4-panel Inspector Modal, triage verdicts persisted into reports. |
+| **High-Precision Stats & Journeys** | Ordered GET funnels with status/MIME/title/text/selector checks; `<= 0.5%` relative-error 4096-bin `uint64` histogram (`exactGlobalSamples = 8192`, `exactPathSamples = 1024`); `schema_version: "2.0"` JSON reports; truncated-body detection. |
+| **Hardened Network & Delivery** | Dial-time `SafeDialContext` (blocks cloud metadata/link-local/unspecified/multicast) and explicit TLS 1.2+ across all clients; atomic `os.OpenRoot` local writes; validated S3 keys; TLS 1.2+ SMTP (`-smtp-pass-file` / `-smtp-pass-stdin` / env); Markdown cell & fence escaping. |
+| **Observability & Supply Chain** | Isolated Prometheus `/metrics` exporter (`-observe`) with **22 metrics**, 999-URL cardinality cap, and Host-header DNS-rebinding guard; `make vulncheck`, `make sbom` (CycloneDX 1.5), and `make checksums`. |
 
 ---
 
@@ -123,12 +136,12 @@ Full end-user guides live in [`docs/`](docs/):
 - **[Getting Started](docs/getting-started.md)** — installation, 60-second Neon Arcade walkthrough, mental model, and exit codes.
 - **[Error Forensics & Screenshots](docs/error-forensics-and-screenshots.md)** — all 4 error artifacts, pure-Go CDP engine, real-browser Scouts, redaction, and hybrid report packaging.
 - **[Admin Portal & Triage Guide](docs/dashboard-guide.md)** — live gallery, 4-panel inspector modal, triage tags, `-review` hold mode, shortcuts, and API reference.
-- **[Journeys, Navigation & Page Checks](docs/journeys-and-checks.md)** — writing journey JSON files, soft-error detection, blank-page checks, and waiting rooms.
-- **[Reports, Delivery & CI Gates](docs/reports-and-ci-gates.md)** — HTML/Markdown/JSON formats, S3 & SMTP delivery, `lemmings compare`, and GitHub Actions / GitLab CI templates.
+- **[Journeys, Navigation & Page Checks](docs/journeys-and-checks.md)** — writing journey JSON files, soft-error detection, blank-page checks, static asset tier (`-assets`), and Concert waiting rooms.
+- **[Reports, Delivery & CI Gates](docs/reports-and-ci-gates.md)** — HTML/Markdown/JSON (`schema_version: "2.0"`) formats, atomic local/S3/SMTP delivery, `lemmings compare`, and GitHub Actions / GitLab CI templates.
 - **[CLI Reference](docs/cli-reference.md)** — every flag, alias, default, validation range, and environment variable.
-- **[Prometheus Observability](docs/prometheus-observability.md)** — all 17 metrics, cardinality protection, and PromQL queries.
-- **[Architecture](docs/architecture.md)** — DDD bounded contexts (`cmd/lemmings` + 12 `internal/*` packages), package DAG, and backpressure pipeline.
-- **[Security Posture & Audit Report](docs/security.md)** — threat model, integrated security audit (`SEC-01`–`SEC-10`), secret handling, and Chromium sandboxing.
+- **[Prometheus Observability](docs/prometheus-observability.md)** — all 22 metrics, cardinality protection, and PromQL queries.
+- **[Architecture](docs/architecture.md)** — DDD bounded contexts (`cmd/lemmings` + 12 `internal/*` packages), package DAG, exact bounds, and backpressure pipeline.
+- **[Security Posture & Audit Report](docs/security.md)** — threat model, dial-time SSRF guard, RFC 6265 cookie isolation, integrated security audit (`SEC-01`–`SEC-10`), and Chromium sandboxing.
 
 ---
 
@@ -136,8 +149,10 @@ Full end-user guides live in [`docs/`](docs/):
 
 ```bash
 make test         # race-enabled unit, integration, CDP, and E2E tests
-make test-fuzz    # fuzz all 11 security & parser targets
+make test-fuzz    # fuzz all 12 security & parser targets (incl. FuzzExtractAssets)
 make build-check  # go vet + gofmt check + go build ./...
+make vulncheck    # run govulncheck ./... across module dependencies
+make build-local sbom checksums  # build bin/lemmings, bin/sbom.cdx.json, bin/SHA256SUMS
 ```
 
 See [CHANGELOG.md](CHANGELOG.md) for the full v2.0.0 release notes.

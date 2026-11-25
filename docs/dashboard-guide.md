@@ -25,7 +25,8 @@ At startup, Lemmings generates a cryptographically random 256-bit boot token and
 
 ## Live Stage & Telemetry Panels
 
-- **KPI Strip:** Live `alive`, `rescued %`, `completed` / `never started`, `visits` + requests/sec, `failed visits`, and `p95`/`p50` latency.
+- **KPI Strip:** Live `alive` (`started` of planned total), `rescued %`, `completed` (`started` / `unborn`), `visits` + requests/sec, `failed visits`, `p95`/`p50`/`p99` page latency, `assets` (requests, bytes, p95, `403` denials when `-assets` is active), `waiting room` (held, admitted, queue polls, p95 wait, expired/denied), `bans / passes` (`429`/`403` bans and Concert `concert_admit` passes), `scouts` (visits, live scouts, failures), `error artifacts`, and `transferred` bytes.
+- **Data Integrity Banner:** Automatically alerts in the header whenever `dropped_logs > 0` or `forensics.dropped_queue > 0` under backpressure.
 - **Animated Lemmings Stage:** Up to 160 active visitors drop from the entrance hatch onto the synthwave terrain and visually react to every page (`2xx` hop, `3xx` bounce, `4xx`/check stumble, `5xx` knockback, transport glitch, waiting room queue badge, exit hatch).
 - **Follow a Lemming:** Click any lemming on the stage (or press `f`) to open the **Lemming Inspector**, showing its sequential `#Number`, name, browser persona, language, every visited path, status, TTFB, redirect hops, queue wait, and direct links to any captured error artifact.
 - **Live Charts & Terrain Map:** Real-time traffic/failure/alive/latency curves, per-terrain ramp grid, busiest paths table, and a rate-limited **Happenings** event feed.
@@ -94,9 +95,9 @@ When the swarm finishes:
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
 | `/` | `GET` | Login page (unauthenticated) or Admin Portal HTML (authenticated). |
-| `/auth` | `POST` | Validates boot token (`application/x-www-form-urlencoded`), sets HMAC session cookie, rate-limited (`429` after 15 failures/min). |
+| `/auth` | `POST` | Validates boot token (`application/x-www-form-urlencoded`), sets HMAC session cookie, rate-limited (`429` after 15 failures/min per remote IP from `r.RemoteAddr` ignoring `X-Forwarded-For`, capped at 1024 tracked IPs, plus a 60/min global ceiling). |
 | `/events` | `GET` | Server-Sent Events stream (`frame`, `metrics`, `artifact`, `artifact_review`). |
-| `/metrics` | `GET` | Live JSON counter snapshot. |
+| `/metrics` | `GET` | Live JSON counter snapshot (`alive`, `lemmings_started`, `completed`, `failed`, `total_visits`, `asset_requests`, `asset_failed`, `asset_denied_403`, `asset_bytes`, `waiting_room`, `queue_polls`, `bans_429`, `bans_403`, `scout_visits`, `scout_failures`, status classes, drop counters). |
 | `/replay` | `GET` | Recent ring-buffer event history for cold-join browser tabs. |
 | `/api/state` | `GET` | Complete stage snapshot, feed, metrics, and forensics stats. |
 | `/api/lemming?id=...` | `GET` | Full visit-by-visit life log for one lemming. |

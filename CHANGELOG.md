@@ -46,21 +46,64 @@ and embeds everything cleanly into final reports.
   completes so the admin can review and tag screenshots before clicking
   **Finalize & Write Report** (or pressing Ctrl-C).
 
-### Architecture, Reports & Developer Experience
+### Concert Waiting Room Protocol & Opt-In Asset Tier
 
+- **Native Concert protocol support.** Detects Concert `waiting.html`
+  (`/_concert/waiting.js` + `#position` / `.queue-page`), legacy HTML
+  (`/queue/status` + `#position`), and Concert `-api-json` HTTP `429` JSON
+  queues (same-origin `status_url` + `retry_after_seconds`); polls
+  `GET /queue/status` with `room_ticket` cookie and `Accept: application/json`,
+  handles `ready`, `position`, `waiting: false` (expired), `cookies_required`,
+  poll `429` backoff, `403` ban termination, and transient network backoff;
+  reloads once upon admission to mint `concert_admit` and separates origin
+  service latency from queue wait duration; never follows `/_concert/*` links
+  as origin pages.
+- **Opt-in static asset tier (`-assets`, `-assets-per-page 1..64`).** Pure-stdlib
+  HTML and CSS same-origin asset extractor (`journey.ExtractAssets`,
+  `journey.ExtractCSSAssets`, `FuzzExtractAssets`) honoring `<base href>`,
+  per-lemming 2048-entry cache, and `concert_admit` pass enforcement — reported
+  in `AssetReport` strictly separate from page visits and `-p95-budget`.
+- **Neon Arcade static assets.** Added `/assets/arcade.css` and
+  `/assets/logo.svg` static endpoints in `examples/demo/main.go` exempt from
+  demo chaos and waiting rooms.
+
+### Architecture, Precision, Reports & Supply Chain
+
+- **Go v2 Module Path (`github.com/andreimerlescu/lemmings/v2`).** Aligned
+  `go.mod`, internal imports, `Makefile`, and `go install` documentation with
+  Go Semantic Import Versioning (`go install github.com/andreimerlescu/lemmings/v2/cmd/lemmings@latest`).
 - **DDD Package Refactor.** Flat root `package main` refactored into
   `cmd/lemmings/main.go` and 12 cohesive `internal/*` packages (`version`,
   `secrets`, `events`, `discovery`, `journey`, `forensics`, `swarm`, `report`,
   `delivery`, `dashboard`, `metrics`, `cli`).
+- **High-Precision Histograms & Report Schema `"2.0"`.** Tightened latency
+  histograms to `<= 0.5%` relative error across 4096 `uint64` bins
+  (`histogramGrowth = 1.005`), raised exact sample buffers to
+  `exactGlobalSamples = 8192` and `exactPathSamples = 1024`, added
+  `schema_version: "2.0"`, separated Page vs. Asset telemetry, enriched
+  `RoomReport`, `ConcertReport`, `ScoutReport`, distinct
+  Started/Completed/Unborn counts, prominent `DATA DROPPED` warnings across CLI,
+  dashboard, HTML, and Markdown reports, truncated-body detection
+  (`ErrTruncatedBody`), and excluded cancelled visits from HTTP status classes.
+- **22 Prometheus Metrics (`-observe`).** Added `lemmings_assets_total`,
+  `lemmings_asset_duration_seconds`, `lemmings_queue_polls_total`,
+  `lemmings_bans_total`, and `lemmings_scout_visits_total` alongside existing
+  metrics, excluding cancelled visits from `lemmings_visits_total{status_class}`.
 - **Hybrid Forensics Reports & Naming.** Self-contained HTML embeds bounded
   base64 screenshots (12 MiB cap for local/S3, 2 MiB cap for email); Local and
   S3 targets also write `.artifacts/<id>.<ext>` files for Markdown relative
-  image links and lean JSON. Added `-unique-report` and `-report-name`.
+  image links and lean JSON. Added `-unique-report`, `-report-name`, and
+  Markdown table cell (`mdCell`) & adaptive code-fence (`mdFence`) escaping.
 - **Regression Comparison (`lemmings compare`).** Compare baseline vs candidate
-  JSON reports with `-max-failure-delta`, `-max-p95-delta`, `-max-rescued-drop`,
-  new/resolved error fingerprints, and CI exit code `2` on regression.
+  JSON reports (including `AssetP95DeltaMS` and `QueueHeldDelta`) with
+  `-max-failure-delta`, `-max-p95-delta`, `-max-rescued-drop`, new/resolved
+  error fingerprints, and CI exit code `2` on regression.
 - **Ramp Shapes & Dry Run.** Added `-ramp-shape` (`linear`, `fibonacci`, `step`)
   and `-dry-run` pre-flight validation.
+- **Build Supply Chain.** Added zero-dependency deterministic CycloneDX 1.5 SBOM
+  generator (`scripts/generate-sbom.py`), `make vulncheck`, `make sbom`, and
+  `make checksums` (`bin/SHA256SUMS`), plus `go mod verify`, `govulncheck`, JS
+  syntax checks, and SBOM validation in `.github/workflows/go.yml`.
 - **Documentation Suite.** Complete end-user and security documentation under
   `docs/` and refreshed `README.md`.
 
@@ -70,18 +113,37 @@ and embeds everything cleanly into final reports.
   credentials never appear in process `argv` (`ps aux`). Use
   `-smtp-pass-file` (requires `0600` permissions), `-smtp-pass-stdin`,
   `LEMMINGS_SMTP_PASS_FILE`, or `LEMMINGS_SMTP_PASS`.
+- **Dial-Time SSRF Guard & TLS 1.2+ Everywhere.** Added `discovery.SafeDialContext`
+  and `discovery.MinTLSConfig()` across discovery, swarm HTTP transport, and
+  remote CDP (`http`/`https`/`ws`/`wss`), blocking `169.254.0.0/16`, `fe80::/10`
+  (including zoned addresses), `fd00:ec2::254`, `0.0.0.0`/`::`, multicast, and
+  IPv4-mapped IPv6 equivalents before dialing validated literal IPs.
+- **Fail-Closed Loopback CDP (`-allow-remote-cdp`).** `-cdp-url` is restricted
+  to loopback endpoints by default; non-loopback endpoints require explicitly
+  passing `-allow-remote-cdp` (metadata/link-local IPs remain blocked).
+- **RFC 6265 Bounded Cookie Jar & CDP Cookie/Origin Guards.** Enforced RFC 6265
+  domain/public-suffix scoping and a `256`-entry cap on `InspectingJar`,
+  deterministic `(domain, path, name)` replay, domain validation before CDP
+  `Network.setCookies`, and Scout off-origin redirect capture blocking.
+- **Ctrl-C Drain & CDP Grace Budget.** Detached coordinator `workCtx` via
+  `context.WithoutCancel` so post-Ctrl-C drain completes queued captures, and
+  reserved `min(2s, timeout/4)` screenshot/DOM grace budget for slow pages.
 - Introduced redacting `secrets.Secret` value type and `secrets.ScrubText`
   across error excerpts, JS console logs, and reports.
 - Hardened `MailTarget` against SMTP header CRLF injection (`SEC-02`) and
   fail-closed TLS (`MinVersion: tls.VersionTLS12`, `-smtp-require-tls`, `SEC-03`).
 - Added loopback `Host`-header guard to Prometheus `/metrics` (`SEC-04`).
 - Replaced raw dashboard token cookies with HMAC-SHA256 signed random session
-  cookies, added per-IP auth rate limiting (`429`), and added
-  `http.NewCrossOriginProtection()` CSRF checks on all state-changing routes (`SEC-05`).
-- Confined `LocalTarget` writes via Go's `os.OpenRoot` (`SEC-06`) and trace
-  files to `0600`.
-- Bounded sitemap indexing concurrency to a fixed worker pool (`SEC-07`) and
-  joined every dashboard/metrics/CDP goroutine cleanly on shutdown (`SEC-08`).
+  cookies, added per-remote-IP (`15/min`, `1024`-IP bounded cap, ignoring
+  `X-Forwarded-For`) plus global (`60/min`) auth rate limiting (`429`), and
+  added `http.NewCrossOriginProtection()` CSRF checks on all state-changing
+  routes (`SEC-05`).
+- Confined `LocalTarget` writes via atomic temp-file + `Sync` + `Rename` inside
+  Go's `os.OpenRoot`, enforced `validateSafeComponent` in both `LocalTarget` and
+  `S3Target` (`SEC-06`), and restricted trace files to `0600`.
+- Bounded sitemap indexing concurrency to a fixed worker pool
+  (`indexConcurrency = 8`, `SEC-07`) and joined every dashboard/metrics/CDP
+  goroutine cleanly on shutdown (`SEC-08`).
 - Scrubbed spawned headless Chromium child environment to a minimal allowlist
   so ambient host tokens never reach the browser process (`SEC-09`).
 

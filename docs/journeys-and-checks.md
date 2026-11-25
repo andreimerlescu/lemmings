@@ -12,7 +12,7 @@ Lemmings supports three visitor navigation strategies and automatically verifies
 | **Pool Sampling** | `-navigation random` | Each lemming picks URLs uniformly from the indexed `URLPool` (sitemap / robots.txt / crawl). Ideal for broad coverage across deep archives. |
 | **Ordered Journeys** | `-journey file.json` | Every lemming walks an exact multi-step funnel in order, validating step-specific assertions on every page and carrying its own cookies across steps. |
 
-> **Safe Link Filtering:** In `links` mode, Lemmings automatically refuses to click destructive or non-page links: paths containing `/logout`, `/log-out`, `/signout`, `/sign-out`, `/delete`, `/remove`, `/destroy`, `/unsubscribe`, or binary/archive download extensions (`.zip`, `.pdf`, `.dmg`, `.exe`, `.tar`, etc.), and never leaves the `-hit` origin.
+> **Safe Link Filtering:** In `links` mode, Lemmings automatically refuses to click destructive, internal, or non-page links: paths containing `/logout`, `/log-out`, `/signout`, `/sign-out`, `/delete`, `/remove`, `/destroy`, `/unsubscribe`, Concert internal paths (`/_concert/*`), or binary/archive download extensions (`.zip`, `.pdf`, `.dmg`, `.exe`, `.tar`, etc.), and never leaves the `-hit` origin.
 
 ---
 
@@ -22,7 +22,7 @@ Even without a `-journey` file, every HTML visit automatically checks:
 
 1. **HTTP Status:** `2xx` (or redirected to a `2xx` on the same origin) succeeds; `4xx`/`5xx` fails and triggers error forensics capture.
 2. **Not-Blank Check:** An HTML response with zero visible text *and* zero `<script>`, `<img>`, `<svg>`, `<canvas>`, `<video>`, `<audio>`, or `<iframe>` elements fails the `not-blank` check (SPA shells with `<script>` tags are **not** falsely flagged).
-3. **Body Size Bound:** Responses exceeding `-max-body-bytes` (default `2 MiB`) fail cleanly without unbounded memory growth.
+3. **Body Size & Truncation Integrity:** Responses exceeding `-max-body-bytes` (default `2 MiB`) fail cleanly without unbounded memory growth, and uncompressed responses whose bytes read fall short of `Content-Length` fail with `ErrTruncatedBody` (`error_kind: "truncated"`).
 4. **Optional Checksum Drift (`-strict-checksum`):** Compares each page's SHA-512 hash against the baseline captured at index time. By default, drift is recorded as informational; with `-strict-checksum`, drift fails the visit.
 
 ---
@@ -100,8 +100,30 @@ Lemmings includes two ready-to-run journeys against Neon Arcade (`make demo`):
 
 ---
 
-## Think Time, Rate Limits & Waiting Rooms
+## Same-Origin Static Asset Tier (`-assets`)
+
+Real browsers don't just fetch HTML — they fetch stylesheets, scripts, images, and fonts, often behind edge asset gating (such as Concert's `-assets "/assets/*"` requiring an admitted `concert_admit` pass cookie).
+
+Enable opt-in asset fetching with `-assets` (and tune the per-page budget with `-assets-per-page`, default `8`, range `1..64`):
+
+```bash
+lemmings -hit http://127.0.0.1:8081/ \
+  -terrain 4 -pack 5 -until 30s -ramp 3s \
+  -assets -assets-per-page 8
+```
+
+- **Pure-Stdlib HTML & CSS Extraction:** After every successful HTML visit, `journey.ExtractAssets` extracts same-origin `<link rel="stylesheet|icon|shortcut icon|apple-touch-icon|preload|modulepreload|manifest">`, `<script src>`, `<img src|data-src|srcset>`, `<source src|srcset>`, `<video src|poster>`, `<audio src>`, `<embed src>`, `<object data>`, `<iframe src>`, and inline `<style>`/`style=""` `url(...)`/`@import` references while honoring `<base href>` and excluding `/_concert/*`. For fetched CSS responses, `journey.ExtractCSSAssets` also discovers referenced fonts and images within the per-page budget.
+- **Per-Lemming Browser Cache:** Each lemming caches fetched asset URLs in a bounded 2,048-entry map so repeat page views do not re-download already-cached assets.
+- **Cookie Jar Forwarding & Strict Separation:** Assets are fetched through the lemming's `http.Client` (automatically sending `concert_admit` and session cookies) and recorded as `AssetVisit` telemetry (`AssetReport` by class: `style`, `script`, `image`, `font`, `audio`, `video`, `data`, `other`), tracking `403` denials (`denied_403`) and asset latency separately from page visits and `-p95-budget`.
+
+---
+
+## Think Time, Rate Limits & Concert Waiting Rooms
 
 - **Human Think Time (`-think-min`, `-think-max`):** Defaults to `300ms – 1200ms` randomized per page pause. Set both to `0` (`-think-min 0 -think-max 0`) for maximum saturation testing.
-- **`Retry-After` Respect:** On HTTP `429` or `503`, lemmings honor numeric or HTTP-date `Retry-After` headers (bounded by the lemming's remaining lifespan) and back off on consecutive errors.
-- **Waiting Room Awareness:** When a page displays a virtual queue polling `/queue/status` with `#position`, Lemmings automatically tracks queue position live on the stage, polls until admitted (or lifespan expiry), and reports **queue wait time separately** from HTTP latency so queues never distort your p95/p99 page latency numbers.
+- **`Retry-After` & Ban Tracking:** On HTTP `429` or `503`, lemmings honor numeric or HTTP-date `Retry-After` headers (bounded by the lemming's remaining lifespan) and back off on consecutive errors. Non-queue `429` and `403` ban responses are tracked separately in `ConcertReport` (`bans_429`, `bans_403`) and Prometheus (`lemmings_bans_total`).
+- **Native Concert Waiting Room Protocol:** Lemmings detects and follows three waiting-room formats automatically:
+  1. **Concert HTML (`waiting.html`):** matches `/_concert/waiting.js` + `id="position"` (or `class="queue-page"` + `id="position"`), reads initial queue position, and polls `GET /queue/status`.
+  2. **Legacy HTML (Neon Arcade / `room`):** matches `/queue/status` + `id="position"` and polls `GET /queue/status`.
+  3. **Concert `-api-json` HTTP `429` JSON:** parses `{"queued": true, "status_url": "...", "retry_after_seconds": N}` (enforcing same-origin `status_url`) and respects `retry_after_seconds`.
+- **Queue Polling & Admission Lifecycle:** While queued, each lemming polls `GET <origin><statusURL>` with its `room_ticket` cookie and `Accept: application/json`, emitting `events.QueuePoll` per poll (separate from page visits). It handles `ready: true`, position updates, `waiting: false` (ticket expired -> `Room.Expired`), `cookies_required`, poll `429` (`3s + jitter` backoff), `403` ban termination (`Room.Denied` + `Bans403`), and network errors (exponential backoff up to `10s`). Once `ready: true`, the lemming reloads the target URL once to receive the admitted origin page and `concert_admit` cookie — reporting **queue wait time (`RoomReport`) strictly separate from origin page latency (`P50`/`P95`/`P99`)**.
