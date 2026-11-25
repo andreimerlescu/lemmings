@@ -1,6 +1,7 @@
 package events
 
 import (
+	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -116,6 +117,100 @@ func TestBus_SubscriberMayUnsubscribeItself(t *testing.T) {
 	bus.Emit(Event{Kind: LemmingBorn})
 	if calls.Load() != 1 {
 		t.Errorf("self-unsubscribing handler called %d times, want 1", calls.Load())
+	}
+}
+
+func TestBus_ConcertAssetQueueAndScoutEvents(t *testing.T) {
+	if AssetComplete != "asset.complete" {
+		t.Errorf("AssetComplete = %q, want asset.complete", AssetComplete)
+	}
+	if AssetError != "asset.error" {
+		t.Errorf("AssetError = %q, want asset.error", AssetError)
+	}
+	if QueuePoll != "waiting_room.poll" {
+		t.Errorf("QueuePoll = %q, want waiting_room.poll", QueuePoll)
+	}
+	if ScoutVisit != "scout.visit" {
+		t.Errorf("ScoutVisit = %q, want scout.visit", ScoutVisit)
+	}
+
+	bus := NewBus()
+	defer bus.Close()
+	log := NewLog(16)
+	bus.Subscribe(log.AsSubscriber())
+
+	var assetCount, pollCount, scoutCount atomic.Int64
+	bus.Subscribe(Filter(func(e Event) {
+		assetCount.Add(1)
+	}, AssetComplete, AssetError))
+	bus.Subscribe(Filter(func(e Event) {
+		pollCount.Add(1)
+	}, QueuePoll))
+	bus.Subscribe(Filter(func(e Event) {
+		scoutCount.Add(1)
+	}, ScoutVisit))
+
+	bus.Emit(Event{
+		Kind:       AssetComplete,
+		URL:        "https://example.com/assets/arcade.css",
+		StatusCode: 200,
+		AssetClass: "style",
+		AdmitPass:  true,
+		Payload:    "ephemeral",
+	})
+	bus.Emit(Event{
+		Kind:       AssetError,
+		URL:        "https://example.com/assets/logo.svg",
+		StatusCode: 403,
+		AssetClass: "image",
+		Failed:     true,
+		Banned:     true,
+	})
+	bus.Emit(Event{
+		Kind:       QueuePoll,
+		URL:        "https://example.com/queue/status",
+		StatusCode: 200,
+		Position:   4,
+		QueuePolls: 3,
+	})
+	bus.Emit(Event{
+		Kind:       ScoutVisit,
+		URL:        "https://example.com/games",
+		StatusCode: 200,
+	})
+
+	if assetCount.Load() != 2 || pollCount.Load() != 1 || scoutCount.Load() != 1 {
+		t.Fatalf("filtered counts asset=%d poll=%d scout=%d, want 2, 1, 1",
+			assetCount.Load(), pollCount.Load(), scoutCount.Load())
+	}
+
+	snap := log.Snapshot()
+	if len(snap) != 4 {
+		t.Fatalf("expected 4 logged events, got %d", len(snap))
+	}
+	if snap[0].AssetClass != "style" || !snap[0].AdmitPass || snap[0].Payload != nil {
+		t.Errorf("snap[0] mismatch: %+v", snap[0])
+	}
+	if snap[1].AssetClass != "image" || !snap[1].Banned {
+		t.Errorf("snap[1] mismatch: %+v", snap[1])
+	}
+	if snap[2].QueuePolls != 3 || snap[2].Position != 4 {
+		t.Errorf("snap[2] mismatch: %+v", snap[2])
+	}
+	if snap[3].Kind != ScoutVisit || snap[3].StatusCode != 200 {
+		t.Errorf("snap[3] mismatch: %+v", snap[3])
+	}
+
+	raw, err := json.Marshal(snap[0])
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var decoded Event
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if decoded.Kind != AssetComplete || decoded.AssetClass != "style" || !decoded.AdmitPass {
+		t.Errorf("JSON round-trip mismatch: %+v", decoded)
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 const (
 	indexTimeout      = 10 * time.Second
 	indexBudget       = 10 * time.Minute
-	indexConcurrency  = 5
+	indexConcurrency  = 8
 	indexMaxRedirects = 10
 	indexMaxURLs      = 10_000
 	indexMaxBodyBytes = 4 << 20
@@ -51,10 +51,10 @@ func (o BuildOptions) progress(format string, args ...any) {
 }
 
 func newIndexClient(hit string) *http.Client {
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	tr := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
+		DialContext:           SafeDialContext(&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}),
+		TLSClientConfig:       MinTLSConfig(),
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          indexConcurrency * 2,
 		MaxIdleConnsPerHost:   indexConcurrency,
