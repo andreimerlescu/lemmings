@@ -16,7 +16,7 @@ Lemmings unleashes a crowd of stateful simulated visitors onto an HTTP(S) websit
 ### Install with Go
 
 ```bash
-go install github.com/andreimerlescu/lemmings/cmd/lemmings@latest
+go install github.com/andreimerlescu/lemmings/v2/cmd/lemmings@latest
 lemmings -version
 ```
 
@@ -29,17 +29,19 @@ make build-local
 ./bin/lemmings -version
 ```
 
-Cross-compile release binaries for Linux, macOS, and Windows:
+Cross-compile release binaries for Linux, macOS, and Windows and verify supply-chain artifacts:
 
 ```bash
 make build
+make sbom checksums     # emits bin/sbom.cdx.json (CycloneDX 1.5) and bin/SHA256SUMS
+make vulncheck          # runs govulncheck ./... across module dependencies
 ```
 
 ---
 
 ## 60-Second Quickstart (Neon Arcade Demo)
 
-Lemmings ships with **Neon Arcade** (`examples/demo`), a loopback-only demo website containing healthy pages, a slow flaky leaderboard (`503` + `Retry-After`), a soft error page (`200 OK` with an error banner), a structured JSON `500` API endpoint (`/api/tokens`), a client-side JS crash page (`/arcade-glitch`), a blank page, and a waiting room.
+Lemmings ships with **Neon Arcade** (`examples/demo`), a loopback-only demo website containing healthy pages, static assets (`/assets/arcade.css` and `/assets/logo.svg` exempt from chaos/queues for `-assets` and Concert testing), a slow flaky leaderboard (`503` + `Retry-After`), a soft error page (`200 OK` with an error banner), a structured JSON `500` API endpoint (`/api/tokens`), a client-side JS crash page (`/arcade-glitch`), a blank page, and a waiting room.
 
 ### 1. Start the demo target
 

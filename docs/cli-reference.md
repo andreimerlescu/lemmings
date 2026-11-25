@@ -36,6 +36,8 @@ lemmings compare [flags] <baseline.json> <candidate.json>
 | `-request-timeout` | `-rt` | `10s` | `> 0` | Per-request timeout including redirects and body read. |
 | `-max-body-bytes` | `-mbb` | `2097152` *(2 MiB)* | `1..67108864` *(64 MiB)* | Maximum decoded response body read per visit. |
 | `-strict-checksum` | `-sc` | `false` | `bool` | Fail visits whose body SHA-512 differs from the baseline recorded at index time. |
+| `-assets` | — | `false` | `bool` | Fetch up to `-assets-per-page` uncached same-origin static assets (CSS, JS, images, fonts, media) per HTML page visit using the lemming's cookie jar (e.g. `concert_admit`). Tracked separately from page visits and `-p95-budget`. |
+| `-assets-per-page` | — | `8` | `1..64` *(when `-assets` enabled)* | Maximum uncached same-origin static assets fetched per HTML page visit (including CSS sub-assets). |
 
 ---
 
@@ -50,7 +52,8 @@ lemmings compare [flags] <baseline.json> <candidate.json>
 | `-capture-timeout` | `-ct` | `8s` | `> 0` | Per-capture deadline inside Chromium. |
 | `-capture-format` | `-cf` | `jpeg` | `jpeg`, `png` | Screenshot image format. |
 | `-chrome-bin` | — | `""` | executable path | Explicit path to Chrome/Chromium binary (overrides auto-detection; fails closed if unusable). |
-| `-cdp-url` | — | `""` | `ws://`, `wss://`, `http://`, `https://` | Connect to remote Chrome DevTools Protocol endpoint instead of launching local Chrome. |
+| `-cdp-url` | — | `""` | `ws://`, `wss://`, `http://`, `https://` | Connect to a Chrome DevTools Protocol endpoint instead of launching local Chrome. Restricted to loopback hosts (`localhost`, `127.0.0.1`, `::1`) unless `-allow-remote-cdp` is set. |
+| `-allow-remote-cdp` | — | `false` | `bool` | Allow non-loopback `-cdp-url` endpoints. Cloud-metadata, link-local, unspecified, and multicast IPs remain unconditionally blocked by `SafeDialContext`. |
 | `-scouts` | — | `0` | `0..8` | Real-browser Scout lemmings running alongside the HTTP swarm to detect pure JS/render errors on HTTP `200 OK` pages. |
 | `-dashboard-port` | `-dp` | `4000` | `1024..65535` | Loopback (`127.0.0.1`) port for the live Admin Portal. |
 | `-review` | — | `false` | `bool` | Keep the Admin Portal open after the swarm finishes until **Finalize & Write Report** is clicked or Ctrl-C is pressed. |
@@ -67,7 +70,7 @@ lemmings compare [flags] <baseline.json> <candidate.json>
 | `-report-name` | `-rn` | `""` | `[a-zA-Z0-9._-]+` | Custom base filename slug (no `..` or slashes). |
 | `-trace-file` | `-tf` | `""` | new file path | Stream every visit to a new `0600` JSONL file (refuses to overwrite existing files). |
 | `-max-failure-rate` | `-mfr` | `-1` | `-1` or `0..1` | CI gate: exit `2` if failure share exceeds this value (negative disables). |
-| `-p95-budget` | `-p95` | `0` | `>= 0` | CI gate: exit `2` if global p95 visit latency exceeds this duration (`0` disables). |
+| `-p95-budget` | `-p95` | `0` | `>= 0` | CI gate: exit `2` if global p95 **page** visit latency exceeds this duration (`0` disables; excludes waiting-room wait and `-assets` fetches). |
 | `-smtp-host` | `-sh` | `""` | hostname | SMTP server hostname (overrides `LEMMINGS_SMTP_HOST`). |
 | `-smtp-port` | `-sp` | `0` | `0..65535` | SMTP server port (`465`=implicit TLS, otherwise STARTTLS; overrides `LEMMINGS_SMTP_PORT`). |
 | `-smtp-user` | `-su` | `""` | string | SMTP username (overrides `LEMMINGS_SMTP_USER`). |

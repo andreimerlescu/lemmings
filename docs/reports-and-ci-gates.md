@@ -12,9 +12,9 @@ For every target directory or S3 prefix, Lemmings writes:
 
 | File | Description |
 | --- | --- |
-| `<name>.html` | Self-contained Synthwave '84 dark/light interactive report with inline SVG traffic/latency charts, notable lemmings, and inline base64 screenshots (capped at `12 MiB` for Local/S3; `2 MiB` for SMTP email). |
-| `<name>.md` | GitHub-friendly Markdown report with ASCII sparklines, tables, extracted error details, JS console summaries, and relative image links (`./<name>.artifacts/<id>.jpg`) so screenshots render directly in PRs and repositories. |
-| `<name>.json` | Machine-readable report for CI pipelines, archival, and `lemmings compare`. Contains exact counters, percentiles, gates, and forensics metadata (`image_path`, `sha256`, triage verdicts, console entries, extracted errors) with **zero base64 blobs** and **zero secrets or raw cookie values**. |
+| `<name>.html` | Self-contained Synthwave '84 dark/light interactive report with inline SVG traffic/latency charts, separated Page vs. Asset class tables, enriched Waiting Room / Concert pass & ban metrics, Browser Scout totals, notable lemmings, prominent `DATA DROPPED` integrity warnings when backpressure drops occur, and inline base64 screenshots (capped at `12 MiB` for Local/S3; `2 MiB` for SMTP email). |
+| `<name>.md` | GitHub-friendly Markdown report with ASCII sparklines, `mdCell`-escaped tables, adaptive `mdFence`-escaped error body excerpts, extracted error details, JS console summaries, and relative image links (`./<name>.artifacts/<id>.jpg`) so screenshots render directly in PRs and repositories. |
+| `<name>.json` | Machine-readable report (`schema_version: "2.0"`) for CI pipelines, archival, and `lemmings compare`. Contains exact counters (`lemmings_started`, `lemmings_completed`, `lemmings_not_started`), high-precision percentiles (`exactGlobalSamples = 8192`, `exactPathSamples = 1024`, then `<= 0.5%` 4096-bin `uint64` histogram), `assets`, `waiting_room`, `concert`, `scouts`, gates, and forensics metadata (`image_path`, `sha256`, triage verdicts, console entries, extracted errors) with **zero base64 blobs** and **zero secrets or raw cookie values**. |
 | `<name>.artifacts/<id>.jpg` | Standalone compressed screenshot images written beside Local and S3 reports. |
 
 ### Report Naming
@@ -26,9 +26,11 @@ By default, reports are named `lemmings.YYYY.MM.DD.<domain>` under `<save-to>/le
 
 ### Streaming Per-Visit Trace (`-trace-file`)
 
-Pass `-trace-file /path/to/visits.jsonl` to stream every individual visit as newline-delimited JSON while the swarm runs:
+Pass `-trace-file /path/to/visits.jsonl` to stream every individual visit (pages, `-assets` fetches, and browser Scout navigations) as newline-delimited JSON while the swarm runs:
 - Created with `O_CREATE|O_EXCL` and permissions **`0600`** — Lemmings never overwrites an existing trace file.
+- Records `kind` (`"page"`, `"asset"`, `"scout"`), `asset_class`, `queue_polls`, `queue_admitted`, `concert_admit`, `room_ticket`, and `banned` alongside status, latency, and check failure metadata.
 - Every URL in the trace is passed through `discovery.SafeURL` (stripping credentials, query strings, and fragments).
+- Any dropped trace entries (`trace_dropped > 0`) trigger a prominent `DATA DROPPED` integrity warning in the CLI summary and reports.
 
 ---
 
@@ -37,10 +39,10 @@ Pass `-trace-file /path/to/visits.jsonl` to stream every individual visit as new
 Specify one or more comma-separated destinations via `-save-to` (and/or `LEMMINGS_SAVE_TO`):
 
 ### 1. Local Filesystem (`./reports`, `/var/reports`, `file:///tmp/reports`)
-Writes `.md`, `.html`, `.json`, and `<name>.artifacts/` inside `<path>/lemmings/<domain>/` using Go's `os.OpenRoot` confinement (`0750` dirs, `0640` files) so path traversal or symlink escapes are impossible.
+Writes `.md`, `.html`, `.json`, and `<name>.artifacts/` inside `<path>/lemmings/<domain>/` using atomic temp-file + `Sync` + `Close` + `Rename` writes confined inside Go's `os.OpenRoot` (`0750` dirs, `0640` files) with strict `validateSafeComponent` checks so partial writes, path traversal, or symlink escapes are impossible.
 
 ### 2. Amazon S3 (`s3://bucket/prefix`)
-Uploads `.md`, `.html`, `.json`, and all `<name>.artifacts/<id>.<ext>` objects using the standard AWS SDK v2 credential chain (`AWS_PROFILE`, IAM role, `AWS_REGION` / `AWS_DEFAULT_REGION`).
+Validates `Domain`, `Filename`, and every artifact filename with `validateSafeComponent` before uploading `.md`, `.html`, `.json`, and all `<name>.artifacts/<id>.<ext>` objects using the standard AWS SDK v2 credential chain (`AWS_PROFILE`, IAM role, `AWS_REGION` / `AWS_DEFAULT_REGION`).
 
 ```bash
 AWS_REGION=us-east-1 lemmings -hit https://staging.example.com/ \
@@ -87,7 +89,7 @@ lemmings -hit https://staging.example.com/ \
 | Gate Flag | Default | Condition to Pass |
 | --- | --- | --- |
 | `-max-failure-rate` (`-mfr`) | `-1` *(disabled)* | Observed `failed_visits / (total_visits - cancelled_visits) <= value` (`0..1`). |
-| `-p95-budget` (`-p95`) | `0` *(disabled)* | Observed global `p95` visit latency `<= duration`. |
+| `-p95-budget` (`-p95`) | `0` *(disabled)* | Observed global `p95` **page** visit latency `<= duration` (excludes waiting-room wait and `-assets` fetches). |
 
 ---
 
@@ -114,7 +116,7 @@ lemmings compare \
 | `-tty` / `-color` | `true` | Control terminal formatting and colors. |
 
 Output includes:
-- Overall deltas for `rescued %`, `failure rate`, `p50`, `p95`, and `p99`.
+- Overall deltas for `rescued %`, `failure rate`, `p50`, `p95`, `p99`, `asset_p95_delta_ms`, and `queue_held_delta` (backward-compatible with older JSON reports).
 - **New error signatures (`+`)** and **Resolved error signatures (`-`)** diffed by forensic `Fingerprint`.
 - Top 10 paths sorted by p95 latency regression.
 
@@ -142,7 +144,7 @@ jobs:
         with:
           go-version: '1.26.x'
       - name: Install Lemmings
-        run: go install github.com/andreimerlescu/lemmings/cmd/lemmings@latest
+        run: go install github.com/andreimerlescu/lemmings/v2/cmd/lemmings@latest
       - name: Run swarm with live CDP forensics
         run: |
           lemmings \
@@ -169,7 +171,7 @@ jobs:
 load-test:
   image: golang:1.26
   script:
-    - go install github.com/andreimerlescu/lemmings/cmd/lemmings@latest
+    - go install github.com/andreimerlescu/lemmings/v2/cmd/lemmings@latest
     - lemmings -hit "$STAGING_URL" -terrain 5 -pack 10 -until 30s -ramp 5s
         -max-failure-rate 0.02 -p95-budget 750ms -tty=false
         -report-name candidate -save-to ./reports

@@ -22,7 +22,9 @@ Captured via Chrome DevTools Protocol (`Runtime.consoleAPICalled`, `Runtime.exce
 
 ### 3. Visual Screenshot
 - Rendered inside a freshly created **ephemeral incognito Chromium `BrowserContext`** sized to the lemming's viewport (`1280×800` desktop or `390×844` mobile based on User-Agent).
-- Before navigating, Lemmings injects the failing lemming's cookies, User-Agent, `Accept-Language`, and `Referer` so the screenshot reflects what *that exact visitor session* saw.
+- Before navigating, Lemmings validates each cookie's RFC 6265 domain scope against the target host (`cookieDomainAllowed`) and injects the failing lemming's cookies, User-Agent, `Accept-Language`, and `Referer` so the screenshot reflects what *that exact visitor session* saw.
+- Reserves a screenshot/DOM grace budget (`min(2s, timeout/4)`) inside `-capture-timeout` so pages that delay or omit `Page.loadEventFired` still yield a rendered screenshot instead of failing with a timeout.
+- On `SIGINT`/`SIGTERM`, `Coordinator` detaches its worker context via `context.WithoutCancel` so already-queued and in-flight captures finish cleanly within the 15-second drain window before exiting.
 - Encoded as compressed JPEG (`-capture-format jpeg`, default, ~20–60 KB per image) or lossless PNG (`-capture-format png`), capped at `2 MiB` per screenshot, with SHA-256 digest verification.
 - The ephemeral `BrowserContext` is disposed immediately after capture so cookies never leak between lemmings.
 
@@ -43,7 +45,7 @@ Lemmings speaks the Chrome DevTools Protocol directly in pure Go using `golang.o
 
 ### Browser Resolution Order
 
-1. **`-cdp-url <ws:// or http://>`** — connects to an existing remote or sidecar Chromium instance (for example, a Docker container running `chromedp/headless-shell` in CI). Supports either a direct `ws://.../devtools/browser/...` URL or an HTTP base URL (`http://127.0.0.1:9222`), from which Lemmings queries `/json/version`. If `-cdp-url` is explicitly set and unreachable, Lemmings fails closed.
+1. **`-cdp-url <ws:// or http://>`** — connects to an existing Chromium instance (for example, a local Docker sidecar running `chromedp/headless-shell` in CI). Supports either a direct `ws://`/`wss://.../devtools/browser/...` URL or an `http://`/`https://` base URL (`http://127.0.0.1:9222`), from which Lemmings queries `/json/version`. **Fail-closed security default:** `-cdp-url` (including any redirects and the returned `webSocketDebuggerUrl`) is restricted to loopback hosts (`localhost`, `127.0.0.1`, `::1`) unless you explicitly pass `-allow-remote-cdp`. Even with `-allow-remote-cdp`, all HTTP and WebSocket dials pass through `discovery.SafeDialContext` and `discovery.MinTLSConfig()` (TLS 1.2+), unconditionally blocking cloud-metadata, link-local, unspecified, and multicast IPs. If `-cdp-url` is explicitly set and unreachable or rejected, Lemmings fails closed.
 2. **`-chrome-bin <path>`** (or `LEMMINGS_CHROME_BIN`) — launches the specified executable locally with hardened headless flags and a strictly scrubbed environment. Fails closed if unusable.
 3. **Auto-detection (default when `-capture=true`)** — probes standard install locations for Google Chrome, Chromium, Brave, and Edge on macOS, Linux, and Windows.
 4. **Graceful HTTP-only fallback** — if `-capture=false` or no local browser is found (and `-scouts 0`), Lemmings runs cleanly in `http-only` mode: you still get Session State, Cookie Jar Status, Lemming `#Number`, and Parsed Error Body artifacts without screenshots or JS console output.
@@ -64,8 +66,10 @@ lemmings -hit https://staging.example.com/ \
 
 Each Scout:
 - Gets its own sequential lemming number (`#N`) and isolated incognito Chromium context.
-- Walks the configured `-journey` or samples the indexed URL pool.
-- Automatically captures a full 4-part artifact (tagged `cdp-scout`) whenever a page emits a **`console.error`**, throws an **uncaught JS exception**, fails a **subresource load**, returns **HTTP ≥ 400**, or fails a **journey check** — even on HTTP `200 OK` pages.
+- Walks the configured `-journey` (once per Scout) or cycles through the indexed URL pool until `-until` expires.
+- Drains stale CDP events before every navigation, captures real document HTTP status and `Content-Type` headers (so JSON `200 OK` steps validate accurately), and blocks off-origin redirects (other than `chrome-error://`) from DOM extraction, cookie capture, and screenshots.
+- Emits `events.ScoutVisit` on every completed navigation so Scout visits and failures are tracked in CLI summaries, the Admin Portal, JSON/HTML/Markdown reports, trace JSONL (`kind: "scout"`), and Prometheus (`lemmings_scout_visits_total`).
+- Automatically captures a full 4-part artifact (tagged `cdp-scout`) whenever a page emits a **`console.error`**, throws an **uncaught JS exception**, fails a **subresource load**, hits a navigation transport error (`nav-error`), returns **HTTP ≥ 400**, or fails a **journey check** — even on HTTP `200 OK` pages.
 
 ---
 

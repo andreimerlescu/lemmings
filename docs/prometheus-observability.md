@@ -14,7 +14,7 @@ lemmings -hit https://staging.example.com/ \
 
 ---
 
-## Metric Catalog (17 Metrics)
+## Metric Catalog (22 Metrics)
 
 ### Swarm & Lifecycle
 
@@ -31,15 +31,24 @@ lemmings -hit https://staging.example.com/ \
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
-| `lemmings_visits_total` | Counter | `status_class` | Completed page visits grouped by `2xx`, `3xx`, `4xx`, `5xx`, or `unknown`. |
-| `lemmings_failed_visits_total` | Counter | — | Visits failing HTTP status, transport, blank-page, or journey checks. |
-| `lemmings_cancelled_visits_total` | Counter | — | Visits interrupted because a lemming's lifespan or the run ended. |
-| `lemmings_visit_duration_seconds` | Histogram | `url` *(omitted when `-metrics-url-label none`)* | End-to-end visit latency distribution in seconds. |
-| `lemmings_bytes_total` | Counter | — | Total decoded response bytes transferred. |
+| `lemmings_visits_total` | Counter | `status_class` | Completed non-cancelled page visits grouped by `2xx`, `3xx`, `4xx`, `5xx`, or `000` (cancelled mid-visit reads are excluded and counted exclusively in `lemmings_cancelled_visits_total`). |
+| `lemmings_failed_visits_total` | Counter | — | Page visits failing HTTP status, transport, truncation, blank-page, or journey checks. |
+| `lemmings_cancelled_visits_total` | Counter | — | Page visits interrupted because a lemming's lifespan or the run ended. |
+| `lemmings_visit_duration_seconds` | Histogram | `url` *(omitted when `-metrics-url-label none`)* | End-to-end page visit latency distribution in seconds (excludes waiting-room wait and asset fetches). |
+| `lemmings_bytes_total` | Counter | — | Total decoded page response bytes transferred. |
 | `lemmings_waiting_room_total` | Counter | — | Total waiting room stays detected. |
-| `lemmings_waiting_room_duration_seconds` | Histogram | — | Time spent waiting in virtual queues (tracked separately from HTTP latency). |
+| `lemmings_waiting_room_duration_seconds` | Histogram | — | Time spent waiting in virtual queues (tracked separately from HTTP page latency). |
+| `lemmings_queue_polls_total` | Counter | — | Total waiting room `/queue/status` poll requests sent. |
+| `lemmings_bans_total` | Counter | `status` | Non-queue ban or rate-limit responses observed by HTTP status (`429`, `403`). |
 
-### Error Forensics & Browser Scouts *(New in v2.0)*
+### Static Asset Tier (`-assets`)
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `lemmings_assets_total` | Counter | `class`, `status_class` | Same-origin static asset fetches by bounded class (`style`, `script`, `image`, `font`, `audio`, `video`, `data`, `other`) and status class (`2xx`, `3xx`, `4xx`, `5xx`, `000`). |
+| `lemmings_asset_duration_seconds` | Histogram | — | Same-origin static asset fetch latency distribution in seconds. |
+
+### Error Forensics & Browser Scouts
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
@@ -47,6 +56,7 @@ lemmings -hit https://staging.example.com/ \
 | `lemmings_artifacts_dropped_total` | Counter | `reason` | Error captures skipped or dropped (`deduped`, `queue_full`, `cap_reached`). |
 | `lemmings_js_console_errors_total` | Counter | — | Total JavaScript console errors and uncaught exceptions captured across Chromium replays and Scouts. |
 | `lemmings_scouts_alive` | Gauge | — | Real-browser Scout lemmings currently running. |
+| `lemmings_scout_visits_total` | Counter | `outcome` | Real-browser Scout page navigations by outcome (`ok`, `failed`). |
 
 ---
 
@@ -74,4 +84,11 @@ histogram_quantile(0.95, sum by (le, url) (rate(lemmings_visit_duration_seconds_
 
 # Frontend JS error rate observed by Chromium captures & Scouts
 rate(lemmings_js_console_errors_total[30s])
+
+# Static asset throughput by class & status (when -assets is enabled)
+sum by (class, status_class) (rate(lemmings_assets_total[15s]))
+
+# Concert queue poll rate & ban rate
+rate(lemmings_queue_polls_total[15s])
+sum by (status) (rate(lemmings_bans_total[30s]))
 ```

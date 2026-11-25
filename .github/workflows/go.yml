@@ -36,10 +36,21 @@ jobs:
           if [ -n "$unformatted" ]; then echo "needs gofmt:"; echo "$unformatted"; exit 1; fi
       - name: go vet
         run: go vet ./...
+      - name: go mod verify
+        run: go mod verify
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
       - name: Build lemmings and the demo target
         run: go build ./...
       - name: Dashboard JavaScript parses
         run: node --check internal/dashboard/web/app.js && node --check internal/dashboard/web/theme.js
+      - name: SBOM script validates and emits CycloneDX 1.5
+        run: |
+          python3 -m py_compile scripts/generate-sbom.py
+          python3 scripts/generate-sbom.py -o /tmp/sbom.cdx.json
+          python3 -c "import json; d = json.load(open('/tmp/sbom.cdx.json')); assert d['bomFormat'] == 'CycloneDX' and d['specVersion'] == '1.5'"
   test:
     runs-on: ${{ matrix.os }}
     needs: lint
@@ -95,6 +106,8 @@ jobs:
             target: FuzzScrubText
           - pkg: ./internal/journey
             target: FuzzExtractErrorBody
+          - pkg: ./internal/journey
+            target: FuzzExtractAssets
           - pkg: ./internal/swarm
             target: FuzzDetectWaitingRoom
           - pkg: ./internal/report

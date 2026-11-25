@@ -64,7 +64,10 @@ test-fuzz:
 	@echo "── secrets fuzz targets"
 	@$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^FuzzScrubText$$" -fuzztime=$(FUZZTIME) ./internal/secrets
 	@echo "── journey fuzz targets"
-	@$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^FuzzExtractErrorBody$$" -fuzztime=$(FUZZTIME) ./internal/journey
+	@for t in FuzzExtractErrorBody FuzzExtractAssets; do \
+		echo "   $$t"; \
+		$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^$$t$$" -fuzztime=$(FUZZTIME) ./internal/journey || exit 1; \
+	done
 	@echo "── swarm fuzz targets"
 	@$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^FuzzDetectWaitingRoom$$" -fuzztime=$(FUZZTIME) ./internal/swarm
 	@echo "── report fuzz targets"
@@ -110,6 +113,41 @@ fmt-check:
 		gofmt -l .; \
 		exit 1; \
 	fi
+
+# ── Supply Chain & Security ──────────────────────────────────────────────────
+
+.PHONY: vulncheck
+vulncheck:
+	@GOVULN=$$(command -v govulncheck || true); \
+	if [ -z "$$GOVULN" ]; then \
+		GOPATH_BIN="$$($(GO) env GOPATH)/bin/govulncheck"; \
+		if [ -x "$$GOPATH_BIN" ]; then GOVULN="$$GOPATH_BIN"; fi; \
+	fi; \
+	if [ -z "$$GOVULN" ]; then \
+		echo "govulncheck not found on PATH or \$$(go env GOPATH)/bin — install with: go install golang.org/x/vuln/cmd/govulncheck@latest"; \
+		exit 1; \
+	fi; \
+	"$$GOVULN" ./...
+
+.PHONY: sbom
+sbom:
+	@mkdir -p $(BIN_DIR)
+	python3 scripts/generate-sbom.py -o $(BIN_DIR)/sbom.cdx.json
+
+.PHONY: checksums
+checksums:
+	@mkdir -p $(BIN_DIR)
+	@cd $(BIN_DIR) && files=$$(find . -maxdepth 1 -type f ! -name 'SHA256SUMS' ! -name '.keep' | sed 's|^\./||' | LC_ALL=C sort); \
+	if [ -z "$$files" ]; then \
+		echo "no artifacts found in $(BIN_DIR)/ — run 'make build-local' or 'make build' first"; \
+		exit 1; \
+	fi; \
+	if command -v sha256sum >/dev/null 2>&1; then \
+		sha256sum $$files > SHA256SUMS; \
+	else \
+		shasum -a 256 $$files > SHA256SUMS; \
+	fi
+	@echo "Wrote $(BIN_DIR)/SHA256SUMS"
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
 
@@ -199,6 +237,11 @@ help:
 	@echo "    make test-bench     benchmarks"
 	@echo "    make test-all       unit + fuzz + bench"
 	@echo "    make test-cover     tests with HTML coverage report"
+	@echo ""
+	@echo "  Supply Chain"
+	@echo "    make vulncheck      run govulncheck ./... across module dependencies"
+	@echo "    make sbom           generate CycloneDX 1.5 SBOM into bin/sbom.cdx.json"
+	@echo "    make checksums      write SHA-256 manifest into bin/SHA256SUMS"
 	@echo ""
 	@echo "  Play"
 	@echo "    make demo           start Neon Arcade demo target on $(DEMO_ADDR)"
