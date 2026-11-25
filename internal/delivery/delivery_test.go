@@ -289,3 +289,103 @@ func TestS3Target_ParsingKeysAndMissingRegionHint(t *testing.T) {
 		t.Errorf("expected actionable AWS_REGION hint, got: %v", err)
 	}
 }
+
+func TestLocalTarget_AtomicWritesAndNoStrayTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	lt := NewLocalTarget(dir, nil)
+
+	first := report.Rendered{
+		Filename: "lemmings.2026.11.25.example.com",
+		Domain:   "example.com",
+		Markdown: "# v1",
+		HTML:     "<html>v1</html>",
+		JSON:     []byte(`{"rev":1}`),
+		Artifacts: []report.ArtifactAsset{
+			{Filename: "shot1.jpg", MIMEType: "image/jpeg", Data: []byte("img-v1")},
+		},
+	}
+	if err := lt.Deliver(context.Background(), first); err != nil {
+		t.Fatalf("first Deliver: %v", err)
+	}
+
+	// Second delivery atomically replaces existing files and artifacts.
+	second := first
+	second.Markdown = "# v2 atomic replacement"
+	second.HTML = "<html>v2</html>"
+	second.JSON = []byte(`{"rev":2}`)
+	second.Artifacts = []report.ArtifactAsset{
+		{Filename: "shot1.jpg", MIMEType: "image/jpeg", Data: []byte("img-v2-updated")},
+	}
+	if err := lt.Deliver(context.Background(), second); err != nil {
+		t.Fatalf("second Deliver: %v", err)
+	}
+
+	dest := filepath.Join(dir, "lemmings", "example.com")
+	gotMD, err := os.ReadFile(filepath.Join(dest, second.Filename+".md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotMD) != second.Markdown {
+		t.Errorf("markdown = %q, want %q", gotMD, second.Markdown)
+	}
+	gotArt, err := os.ReadFile(filepath.Join(dest, second.Filename+".artifacts", "shot1.jpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotArt) != "img-v2-updated" {
+		t.Errorf("artifact = %q, want img-v2-updated", gotArt)
+	}
+
+	// Confirm zero stray .tmp-* files exist in report dir or artifacts dir.
+	for _, checkDir := range []string{dest, filepath.Join(dest, second.Filename+".artifacts")} {
+		entries, err := os.ReadDir(checkDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".tmp-") {
+				t.Errorf("stray temp file left in %s: %s", checkDir, e.Name())
+			}
+		}
+	}
+
+	// Reject ".", "..", empty, slashes, and control characters in LocalTarget.
+	for _, bad := range []string{"", ".", "..", "../escape", "a/b", `a\b`, "bad\x00name", "bad\nname"} {
+		if err := validateSafeComponent(bad); err == nil {
+			t.Errorf("validateSafeComponent(%q) = nil, want error", bad)
+		}
+		r := first
+		r.Filename = bad
+		if err := lt.Deliver(context.Background(), r); err == nil {
+			t.Errorf("LocalTarget accepted unsafe filename %q", bad)
+		}
+	}
+}
+
+func TestS3Target_RejectsUnsafeComponents(t *testing.T) {
+	t.Setenv("AWS_REGION", "us-east-1")
+	st, err := NewS3Target("s3://ops-bucket/reports", nil)
+	if err != nil {
+		t.Fatalf("NewS3Target: %v", err)
+	}
+
+	unsafe := []string{"", ".", "..", "../escape", "sub/file", `sub\file`, "nul\x00byte", "ctrl\nchar", "del\x7fchar"}
+	for _, bad := range unsafe {
+		if err := st.Deliver(context.Background(), report.Rendered{Filename: bad, Domain: "example.com", Markdown: "# x"}); err == nil || !strings.Contains(err.Error(), "invalid filename") {
+			t.Errorf("S3Target filename %q: err = %v, want invalid filename", bad, err)
+		}
+		if bad != "" {
+			if err := st.Deliver(context.Background(), report.Rendered{Filename: "valid-run", Domain: bad, Markdown: "# x"}); err == nil || !strings.Contains(err.Error(), "invalid domain") {
+				t.Errorf("S3Target domain %q: err = %v, want invalid domain", bad, err)
+			}
+		}
+		if err := st.Deliver(context.Background(), report.Rendered{
+			Filename:  "valid-run",
+			Domain:    "example.com",
+			Markdown:  "# x",
+			Artifacts: []report.ArtifactAsset{{Filename: bad, MIMEType: "image/jpeg", Data: []byte("x")}},
+		}); err == nil || !strings.Contains(err.Error(), "invalid artifact name") {
+			t.Errorf("S3Target artifact %q: err = %v, want invalid artifact name", bad, err)
+		}
+	}
+}

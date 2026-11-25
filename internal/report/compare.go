@@ -49,6 +49,12 @@ type CompareResult struct {
 	P95DeltaMS           float64      `json:"p95_delta_ms"`
 	OldP99MS             float64      `json:"old_p99_ms"`
 	NewP99MS             float64      `json:"new_p99_ms"`
+	OldAssetP95MS        float64      `json:"old_asset_p95_ms,omitempty"`
+	NewAssetP95MS        float64      `json:"new_asset_p95_ms,omitempty"`
+	AssetP95DeltaMS      float64      `json:"asset_p95_delta_ms,omitempty"`
+	OldQueueHeld         int64        `json:"old_queue_held,omitempty"`
+	NewQueueHeld         int64        `json:"new_queue_held,omitempty"`
+	QueueHeldDelta       int64        `json:"queue_held_delta,omitempty"`
 	NewFingerprints      []string     `json:"new_error_fingerprints,omitempty"`
 	ResolvedFingerprints []string     `json:"resolved_error_fingerprints,omitempty"`
 	Paths                []PathDiff   `json:"paths,omitempty"`
@@ -110,6 +116,12 @@ func Compare(oldData, newData Data, opts CompareOptions) CompareResult {
 		P95DeltaMS:       Millis(newData.P95) - Millis(oldData.P95),
 		OldP99MS:         Millis(oldData.P99),
 		NewP99MS:         Millis(newData.P99),
+		OldAssetP95MS:    Millis(oldData.Assets.P95),
+		NewAssetP95MS:    Millis(newData.Assets.P95),
+		AssetP95DeltaMS:  Millis(newData.Assets.P95) - Millis(oldData.Assets.P95),
+		OldQueueHeld:     oldData.Room.Held,
+		NewQueueHeld:     newData.Room.Held,
+		QueueHeldDelta:   newData.Room.Held - oldData.Room.Held,
 	}
 
 	// Per-path comparison.

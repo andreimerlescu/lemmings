@@ -2,6 +2,8 @@ package delivery
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -95,18 +97,63 @@ func (t *LocalTarget) Deliver(_ context.Context, r report.Rendered) error {
 }
 
 func writeInRoot(root *os.Root, rel string, data []byte, perm os.FileMode) (err error) {
-	f, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
-	if err != nil {
-		return err
+	dir := filepath.Dir(rel)
+	var (
+		f      *os.File
+		tmpRel string
+	)
+	for range 8 {
+		var rnd [8]byte
+		if _, rerr := rand.Read(rnd[:]); rerr != nil {
+			return fmt.Errorf("generate temp filename: %w", rerr)
+		}
+		tmpName := ".tmp-" + hex.EncodeToString(rnd[:])
+		if dir != "." && dir != "" {
+			tmpRel = filepath.Join(dir, tmpName)
+		} else {
+			tmpRel = tmpName
+		}
+		f, err = root.OpenFile(tmpRel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return err
+		}
 	}
+	if f == nil {
+		return fmt.Errorf("create unique temp file for %s: %w", rel, err)
+	}
+
+	closed := false
+	renamed := false
 	defer func() {
-		if cerr := f.Close(); cerr != nil {
-			err = errors.Join(err, cerr)
+		if !closed {
+			if cerr := f.Close(); cerr != nil {
+				err = errors.Join(err, cerr)
+			}
+		}
+		if !renamed {
+			_ = root.Remove(tmpRel)
 		}
 	}()
+
 	if _, err = f.Write(data); err != nil {
 		return err
 	}
+	if err = f.Sync(); err != nil {
+		return err
+	}
+	if err = f.Close(); err != nil {
+		closed = true
+		return err
+	}
+	closed = true
+
+	if err = root.Rename(tmpRel, rel); err != nil {
+		return err
+	}
+	renamed = true
 	return nil
 }
 
@@ -122,7 +169,15 @@ func extractDomain(explicit, filename string) string {
 }
 
 func validateSafeComponent(name string) error {
-	if name == "" || strings.Contains(name, "..") || strings.ContainsAny(name, `/\`) || !safeNameRe.MatchString(name) {
+	if name == "" || name == "." || name == ".." || strings.Contains(name, "..") || strings.ContainsAny(name, `/\`) {
+		return errors.New("unsafe path component")
+	}
+	for i := 0; i < len(name); i++ {
+		if name[i] < 0x20 || name[i] == 0x7f {
+			return errors.New("unsafe path component")
+		}
+	}
+	if !safeNameRe.MatchString(name) {
 		return errors.New("unsafe path component")
 	}
 	return nil

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	htmltemplate "html/template"
 	"math"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,12 +24,14 @@ import (
 )
 
 const (
+	// SchemaVersion identifies the JSON report schema emitted by this release.
+	SchemaVersion            = "2.0"
 	reportDateFormat         = "2006.01.02"
 	reportTimestampFormat    = "2006.01.02.150405Z"
 	maxReportPaths           = 1000
 	otherPath                = "[other paths]"
-	exactGlobalSamples       = 4096
-	exactPathSamples         = 512
+	exactGlobalSamples       = 8192
+	exactPathSamples         = 1024
 	reportTailSteps          = 40
 	maxHTMLInlineImageBytes  = 12 << 20 // 12 MiB cap for self-contained HTML data URIs
 	maxEmailInlineImageBytes = 2 << 20  // 2 MiB cap for SMTP-safe inline HTML reports
@@ -71,23 +74,25 @@ type ForensicsReport struct {
 
 // Data is the complete computed dataset passed to every renderer and JSON export.
 type Data struct {
-	Version     string        `json:"version"`
-	GeneratedAt time.Time     `json:"generated_at"`
-	Duration    time.Duration `json:"duration_ns"`
-	Config      swarm.Config  `json:"config"`
-	Journey     string        `json:"journey,omitempty"`
+	SchemaVersion string        `json:"schema_version"`
+	Version       string        `json:"version"`
+	GeneratedAt   time.Time     `json:"generated_at"`
+	Duration      time.Duration `json:"duration_ns"`
+	Config        swarm.Config  `json:"config"`
+	Journey       string        `json:"journey,omitempty"`
 
-	TotalLemmings    int64 `json:"total_lemmings"`
-	LemmingsStarted  int64 `json:"lemmings_started"`
-	LemmingsUnborn   int64 `json:"lemmings_not_started"`
-	TotalVisits      int64 `json:"total_visits"`
-	TotalBytes       int64 `json:"total_bytes"`
-	TotalWaitingRoom int64 `json:"total_waiting_room"`
-	Total2xx         int64 `json:"total_2xx"`
-	Total3xx         int64 `json:"total_3xx"`
-	Total4xx         int64 `json:"total_4xx"`
-	Total5xx         int64 `json:"total_5xx"`
-	TotalErrors      int64 `json:"total_transport_errors"`
+	TotalLemmings     int64 `json:"total_lemmings"`
+	LemmingsStarted   int64 `json:"lemmings_started"`
+	LemmingsCompleted int64 `json:"lemmings_completed"`
+	LemmingsUnborn    int64 `json:"lemmings_not_started"`
+	TotalVisits       int64 `json:"total_visits"`
+	TotalBytes        int64 `json:"total_bytes"`
+	TotalWaitingRoom  int64 `json:"total_waiting_room"`
+	Total2xx          int64 `json:"total_2xx"`
+	Total3xx          int64 `json:"total_3xx"`
+	Total4xx          int64 `json:"total_4xx"`
+	Total5xx          int64 `json:"total_5xx"`
+	TotalErrors       int64 `json:"total_transport_errors"`
 
 	FailedVisits    int64   `json:"failed_visits"`
 	CancelledVisits int64   `json:"cancelled_visits"`
@@ -110,7 +115,10 @@ type Data struct {
 	TTFBP95          time.Duration `json:"ttfb_p95_ns"`
 	PercentileMethod string        `json:"percentile_method"`
 
+	Assets       AssetReport     `json:"assets"`
 	Room         RoomReport      `json:"waiting_room"`
+	Concert      ConcertReport   `json:"concert"`
+	Scouts       ScoutReport     `json:"scouts"`
 	StatusCodes  []CountRow      `json:"status_codes"`
 	ErrorKinds   []CountRow      `json:"error_kinds"`
 	FailedChecks []CountRow      `json:"failed_checks"`
@@ -151,14 +159,56 @@ type PathReport struct {
 	HitShare    float64       `json:"hit_share"`
 }
 
-// RoomReport summarizes waiting room activity.
+// AssetReport summarizes same-origin subresource fetches when -assets is enabled.
+// Asset counts and latencies are strictly separated from page visit telemetry.
+type AssetReport struct {
+	Requests  int64           `json:"requests"`
+	Failed    int64           `json:"failed"`
+	Denied403 int64           `json:"denied_403"`
+	Bytes     int64           `json:"bytes"`
+	P50       time.Duration   `json:"p50_ns"`
+	P95       time.Duration   `json:"p95_ns"`
+	P99       time.Duration   `json:"p99_ns"`
+	ByClass   []AssetClassRow `json:"by_class,omitempty"`
+}
+
+// AssetClassRow summarizes subresource fetches for one asset class.
+type AssetClassRow struct {
+	Class     string        `json:"class"`
+	Requests  int64         `json:"requests"`
+	Failed    int64         `json:"failed"`
+	Denied403 int64         `json:"denied_403"`
+	Bytes     int64         `json:"bytes"`
+	P95       time.Duration `json:"p95_ns"`
+}
+
+// RoomReport summarizes waiting room activity and Concert queue outcomes.
 type RoomReport struct {
 	Held        int64         `json:"held"`
+	Admitted    int64         `json:"admitted"`
 	DiedInLine  int64         `json:"died_in_line"`
+	Expired     int64         `json:"expired"`
+	Denied      int64         `json:"denied"`
+	Rejected503 int64         `json:"rejected_503"`
+	TotalPolls  int64         `json:"total_polls"`
 	MaxPosition int           `json:"max_position"`
 	MeanWait    time.Duration `json:"mean_wait_ns"`
 	P95Wait     time.Duration `json:"p95_wait_ns"`
 	LongestWait time.Duration `json:"longest_wait_ns"`
+}
+
+// ConcertReport summarizes Concert admission-pass, room-ticket, and ban telemetry.
+type ConcertReport struct {
+	AdmitPasses int64 `json:"admit_passes"`
+	RoomTickets int64 `json:"room_tickets"`
+	Bans429     int64 `json:"bans_429"`
+	Bans403     int64 `json:"bans_403"`
+}
+
+// ScoutReport summarizes real-browser Scout page navigations.
+type ScoutReport struct {
+	Visits   int64 `json:"visits"`
+	Failures int64 `json:"failures"`
 }
 
 // CountRow is one labelled count row.
@@ -189,7 +239,10 @@ type LiveStats struct {
 	Sessions       int64           `json:"sessions"`
 	Rescued        int64           `json:"rescued"`
 	RescuedPercent float64         `json:"rescued_percent"`
+	Assets         AssetReport     `json:"assets"`
 	Room           RoomReport      `json:"room"`
+	Concert        ConcertReport   `json:"concert"`
+	Scouts         ScoutReport     `json:"scouts"`
 	Timeline       []TimelinePoint `json:"timeline,omitempty"`
 	Paths          []PathReport    `json:"paths,omitempty"`
 	StatusCodes    []CountRow      `json:"status_codes,omitempty"`
@@ -242,6 +295,15 @@ type pathStats struct {
 	waitingRoom int64
 	errors      int64
 	failed      int64
+	LatencySeries
+}
+
+type assetClassStats struct {
+	Class     string
+	Requests  int64
+	Failed    int64
+	Denied403 int64
+	Bytes     int64
 	LatencySeries
 }
 
@@ -358,29 +420,40 @@ type Reporter struct {
 	errorKinds                 map[string]int64
 	failedChecks               map[string]int64
 
-	roomHeld, roomDied int64
-	roomWait           Histogram
-	roomMaxPosition    int
+	roomHeld, roomAdmitted, roomDied           int64
+	roomExpired, roomDenied, roomRejected503   int64
+	roomPollEvents, roomVisitPolls             int64
+	roomWait                                   Histogram
+	roomMaxPosition                            int
+	concertAdmitPasses, concertRoomTickets     int64
+	concertBans429, concertBans403             int64
+	assetRequests, assetFailed, assetDenied403 int64
+	assetBytes                                 int64
+	assetLatency                               LatencySeries
+	assetsByClass                              map[string]*assetClassStats
+	scoutVisits, scoutFailures                 int64
 
 	sessions, flawless int64
 	exitReasons        map[string]int64
 	notable            notableSet
 
-	started, notStarted, dropped int64
+	started, completed, dropped int64
 }
 
 // New constructs a Reporter for cfg.
 func New(cfg swarm.Config) *Reporter {
 	return &Reporter{
-		cfg:          cfg,
-		byPath:       make(map[string]*pathStats),
-		startedAt:    time.Now(),
-		latency:      LatencySeries{exactCap: exactGlobalSamples},
-		timeline:     NewTimeline(),
-		statusCodes:  make(map[int]int64),
-		errorKinds:   make(map[string]int64),
-		failedChecks: make(map[string]int64),
-		exitReasons:  make(map[string]int64),
+		cfg:           cfg,
+		byPath:        make(map[string]*pathStats),
+		startedAt:     time.Now(),
+		latency:       LatencySeries{exactCap: exactGlobalSamples},
+		assetLatency:  LatencySeries{exactCap: exactGlobalSamples},
+		assetsByClass: make(map[string]*assetClassStats),
+		timeline:      NewTimeline(),
+		statusCodes:   make(map[int]int64),
+		errorKinds:    make(map[string]int64),
+		failedChecks:  make(map[string]int64),
+		exitReasons:   make(map[string]int64),
 	}
 }
 
@@ -411,10 +484,15 @@ func (r *Reporter) AddTarget(t Target) {
 	r.targets = append(r.targets, t)
 }
 
-// Attach subscribes the reporter to visit and lifecycle events on bus.
+// Attach subscribes the reporter to visit, asset, queue, scout, and lifecycle events on bus.
 func (r *Reporter) Attach(bus *events.Bus) {
 	r.unsub = bus.Subscribe(events.Filter(r.handleEvent,
-		events.VisitComplete, events.VisitError, events.LemmingBorn, events.LemmingDied))
+		events.VisitComplete, events.VisitError,
+		events.AssetComplete, events.AssetError,
+		events.QueuePoll,
+		events.ScoutVisit,
+		events.LemmingBorn, events.LemmingDied,
+	))
 }
 
 func (r *Reporter) handleEvent(e events.Event) {
@@ -423,6 +501,35 @@ func (r *Reporter) handleEvent(e events.Event) {
 		if v, ok := e.Payload.(*swarm.Visit); ok && v != nil {
 			r.RecordVisit(v)
 		}
+	case events.AssetComplete, events.AssetError:
+		var av *swarm.AssetVisit
+		if p, ok := e.Payload.(*swarm.AssetVisit); ok && p != nil {
+			av = p
+		} else {
+			av = &swarm.AssetVisit{
+				LemmingID:     e.LemmingID,
+				LemmingNumber: e.LemmingNumber,
+				URL:           e.URL,
+				Class:         e.AssetClass,
+				StatusCode:    e.StatusCode,
+				BytesIn:       e.BytesIn,
+				Duration:      e.Duration,
+				Failed:        e.Failed || e.Kind == events.AssetError,
+				Denied403:     e.Banned || e.StatusCode == http.StatusForbidden,
+				Timestamp:     e.OccurredAt,
+				FinishedAt:    e.OccurredAt,
+			}
+			if e.Err != nil {
+				av.ErrorKind = swarm.ErrorKind(e.Err)
+			}
+		}
+		r.recordAsset(av, e.AdmitPass)
+	case events.QueuePoll:
+		r.mu.Lock()
+		r.roomPollEvents++
+		r.mu.Unlock()
+	case events.ScoutVisit:
+		r.recordScoutVisit(e)
 	case events.LemmingBorn, events.LemmingDied:
 		r.mu.Lock()
 		b := r.timeline.bucket(e.OccurredAt.Sub(r.startedAt))
@@ -448,16 +555,80 @@ func (r *Reporter) MarkEnded(at time.Time, m *swarm.Metrics) {
 	defer r.mu.Unlock()
 	r.endedAt = at
 	if m != nil {
-		r.started = m.LemmingsCompleted.Load()
-		r.notStarted = m.LemmingsFailed.Load()
+		r.started = m.LemmingsStarted.Load()
+		r.completed = m.LemmingsCompleted.Load()
 		r.dropped = m.DroppedLogs.Load()
+	}
+}
+
+// RecordAsset folds one completed same-origin asset fetch into AssetReport and
+// the trace stream without mixing into page visit totals or page latencies.
+func (r *Reporter) RecordAsset(a *swarm.AssetVisit) {
+	if a == nil {
+		return
+	}
+	r.recordAsset(a, false)
+}
+
+func (r *Reporter) recordAsset(a *swarm.AssetVisit, admitPass bool) {
+	class := normalizeAssetClass(a.Class)
+	denied403 := a.Denied403 || a.StatusCode == http.StatusForbidden
+
+	r.mu.Lock()
+	r.assetRequests++
+	r.assetBytes += a.BytesIn
+	if a.Failed {
+		r.assetFailed++
+	}
+	if denied403 {
+		r.assetDenied403++
+	}
+	r.assetLatency.Add(a.Duration)
+
+	cs := r.assetsByClass[class]
+	if cs == nil {
+		cs = &assetClassStats{Class: class, LatencySeries: LatencySeries{exactCap: exactPathSamples}}
+		r.assetsByClass[class] = cs
+	}
+	cs.Requests++
+	cs.Bytes += a.BytesIn
+	if a.Failed {
+		cs.Failed++
+	}
+	if denied403 {
+		cs.Denied403++
+	}
+	cs.Add(a.Duration)
+	tw := r.trace
+	r.mu.Unlock()
+
+	if tw != nil {
+		tw.RecordTrace(traceOfAsset(a, class, admitPass))
+	}
+}
+
+func (r *Reporter) recordScoutVisit(e events.Event) {
+	r.mu.Lock()
+	r.scoutVisits++
+	if e.Failed {
+		r.scoutFailures++
+	}
+	tw := r.trace
+	r.mu.Unlock()
+
+	if tw != nil {
+		tw.RecordTrace(traceOfScout(e))
 	}
 }
 
 // RecordVisit folds one completed visit into all aggregates and the trace stream.
 func (r *Reporter) RecordVisit(v *swarm.Visit) {
+	finished := v.FinishedAt
+	if finished.IsZero() {
+		finished = time.Now()
+	}
 	r.mu.Lock()
-	r.recordVisitLocked(v, time.Now())
+	r.recordVisitLocked(v, finished)
 	tw := r.trace
 	r.mu.Unlock()
 	if tw != nil {
@@ -466,6 +637,11 @@ func (r *Reporter) RecordVisit(v *swarm.Visit) {
 }
 
 func (r *Reporter) recordVisitLocked(v *swarm.Visit, finished time.Time) {
+	if !v.FinishedAt.IsZero() {
+		finished = v.FinishedAt
+	} else if finished.IsZero() {
+		finished = time.Now()
+	}
 	failed := swarm.FailedVisit(v)
 
 	key := discovery.SafeURL(v.URL)
@@ -485,34 +661,35 @@ func (r *Reporter) recordVisitLocked(v *swarm.Visit, finished time.Time) {
 	if v.WaitingRoom.Detected {
 		ps.waitingRoom++
 	}
-	if v.Error != nil && !v.Cancelled {
-		ps.errors++
-	}
-	if failed {
-		ps.failed++
-	}
-	switch {
-	case v.StatusCode >= 200 && v.StatusCode < 300:
-		ps.xx2++
-	case v.StatusCode >= 300 && v.StatusCode < 400:
-		ps.xx3++
-	case v.StatusCode >= 400 && v.StatusCode < 500:
-		ps.xx4++
-	case v.StatusCode >= 500:
-		ps.xx5++
-	}
 
 	r.visits++
-	r.statusCodes[v.StatusCode]++
 	bucket := r.timeline.bucket(finished.Sub(r.startedAt))
 	bucket.Visits++
 	bucket.Bytes += v.BytesIn
-	bucket.Status[statusIndex(v.StatusCode)]++
 
 	if v.Cancelled {
 		r.cancelled++
 		bucket.Cancelled++
 	} else {
+		if v.Error != nil {
+			ps.errors++
+		}
+		if failed {
+			ps.failed++
+		}
+		switch {
+		case v.StatusCode >= 200 && v.StatusCode < 300:
+			ps.xx2++
+		case v.StatusCode >= 300 && v.StatusCode < 400:
+			ps.xx3++
+		case v.StatusCode >= 400 && v.StatusCode < 500:
+			ps.xx4++
+		case v.StatusCode >= 500:
+			ps.xx5++
+		}
+		r.statusCodes[v.StatusCode]++
+		bucket.Status[statusIndex(v.StatusCode)]++
+
 		ps.Add(v.EffectiveLatency())
 		r.latency.Add(v.EffectiveLatency())
 		bucket.Latency.Add(v.EffectiveLatency())
@@ -523,29 +700,58 @@ func (r *Reporter) recordVisitLocked(v *swarm.Visit, finished time.Time) {
 			r.failed++
 			bucket.Failed++
 		}
-	}
-
-	if v.ErrorKind != "" {
-		r.errorKinds[v.ErrorKind]++
-	} else if v.Error != nil && !v.Cancelled {
-		r.errorKinds[swarm.ErrorKind(v.Error)]++
-	}
-	for _, c := range v.Page.Checks {
-		if !c.Passed {
-			r.failedChecks[c.Name]++
+		if v.ErrorKind != "" {
+			r.errorKinds[v.ErrorKind]++
+		} else if v.Error != nil {
+			r.errorKinds[swarm.ErrorKind(v.Error)]++
+		}
+		for _, c := range v.Page.Checks {
+			if !c.Passed {
+				r.failedChecks[c.Name]++
+			}
+		}
+		if v.Expected != "" && !v.Match && v.Error == nil {
+			r.checksumChanges++
+		}
+		if v.Page.HTML {
+			r.htmlPages++
+		}
+		if v.Banned {
+			switch {
+			case v.StatusCode == http.StatusTooManyRequests:
+				r.concertBans429++
+			case v.StatusCode == http.StatusForbidden || v.WaitingRoom.Denied:
+				r.concertBans403++
+			}
 		}
 	}
-	if v.Expected != "" && !v.Match && v.Error == nil {
-		r.checksumChanges++
+
+	if v.ConcertAdmit {
+		r.concertAdmitPasses++
 	}
-	if v.Page.HTML {
-		r.htmlPages++
+	if v.RoomTicket {
+		r.concertRoomTickets++
+	}
+	if v.WaitingRoom.Rejected503 {
+		r.roomRejected503++
 	}
 	if v.WaitingRoom.Detected {
 		r.roomHeld++
 		r.roomWait.Add(v.WaitingRoom.Duration)
 		r.roomMaxPosition = max(r.roomMaxPosition, v.WaitingRoom.Position)
-		if v.Error != nil || v.Cancelled {
+		if polls := max(v.WaitingRoom.Polls, v.QueuePolls); polls > 0 {
+			r.roomVisitPolls += int64(polls)
+		}
+		if v.WaitingRoom.Admitted {
+			r.roomAdmitted++
+		}
+		if v.WaitingRoom.Expired {
+			r.roomExpired++
+		}
+		if v.WaitingRoom.Denied {
+			r.roomDenied++
+		}
+		if !v.WaitingRoom.Admitted && !v.WaitingRoom.Expired && !v.WaitingRoom.Denied && !v.WaitingRoom.Rejected503 && (v.Error != nil || v.Cancelled) {
 			r.roomDied++
 		}
 	}
@@ -560,7 +766,15 @@ func (r *Reporter) Ingest(ll swarm.LifeLog) {
 		ll.TotalVisits, ll.FailedVisits, ll.CancelledVisits = 0, 0, 0
 		for i := range ll.Visits {
 			v := &ll.Visits[i]
-			r.recordVisitLocked(v, v.Timestamp.Add(v.Duration))
+			finished := v.FinishedAt
+			if finished.IsZero() {
+				if !v.Timestamp.IsZero() {
+					finished = v.Timestamp.Add(v.Duration)
+				} else {
+					finished = time.Now()
+				}
+			}
+			r.recordVisitLocked(v, finished)
 			ll.TotalVisits++
 			switch {
 			case v.Cancelled:
@@ -690,10 +904,10 @@ func (r *Reporter) Live(points, paths int) LiveStats {
 		TTFBP95:   r.ttfb.Quantile(95),
 		Sessions:  r.sessions,
 		Rescued:   r.flawless,
-		Room: RoomReport{
-			Held: r.roomHeld, DiedInLine: r.roomDied, MaxPosition: r.roomMaxPosition,
-			MeanWait: r.roomWait.Mean(), P95Wait: r.roomWait.Quantile(95), LongestWait: r.roomWait.max,
-		},
+		Assets:    r.buildAssetReportLocked(true),
+		Room:      r.buildRoomReportLocked(),
+		Concert:   r.buildConcertReportLocked(),
+		Scouts:    r.buildScoutReportLocked(),
 	}
 	if completed := r.visits - r.cancelled; completed > 0 {
 		s.FailureRate = float64(r.failed) / float64(completed)
@@ -747,25 +961,28 @@ func (r *Reporter) buildReportDataLocked() Data {
 	cfg := r.cfg
 	cfg.Hit = discovery.SafeURL(cfg.Hit)
 
+	totalLemmings := r.cfg.Terrain * r.cfg.Pack
 	data := Data{
-		Version:         r.cfg.Version,
-		GeneratedAt:     time.Now(),
-		Duration:        end.Sub(r.startedAt).Round(time.Millisecond),
-		Config:          cfg,
-		TotalLemmings:   r.cfg.Terrain * r.cfg.Pack,
-		LemmingsStarted: r.started,
-		LemmingsUnborn:  r.notStarted,
-		TotalVisits:     r.visits,
-		FailedVisits:    r.failed,
-		CancelledVisits: r.cancelled,
-		Sessions:        r.sessions,
-		Rescued:         r.flawless,
-		ChecksumChanges: r.checksumChanges,
-		HTMLPages:       r.htmlPages,
-		DroppedLogs:     r.dropped,
-		Timeline:        r.timeline.Points(0),
-		Notable:         r.notable.lives(),
-		TraceFile:       r.cfg.TraceFile,
+		SchemaVersion:     SchemaVersion,
+		Version:           r.cfg.Version,
+		GeneratedAt:       time.Now(),
+		Duration:          end.Sub(r.startedAt).Round(time.Millisecond),
+		Config:            cfg,
+		TotalLemmings:     totalLemmings,
+		LemmingsStarted:   r.started,
+		LemmingsCompleted: r.completed,
+		LemmingsUnborn:    max(totalLemmings-r.started, 0),
+		TotalVisits:       r.visits,
+		FailedVisits:      r.failed,
+		CancelledVisits:   r.cancelled,
+		Sessions:          r.sessions,
+		Rescued:           r.flawless,
+		ChecksumChanges:   r.checksumChanges,
+		HTMLPages:         r.htmlPages,
+		DroppedLogs:       r.dropped,
+		Timeline:          r.timeline.Points(0),
+		Notable:           r.notable.lives(),
+		TraceFile:         r.cfg.TraceFile,
 	}
 	if r.cfg.Journey != nil {
 		data.Journey = r.cfg.Journey.Name
@@ -832,17 +1049,13 @@ func (r *Reporter) buildReportDataLocked() Data {
 	data.TTFBP95 = r.ttfb.Quantile(95)
 	data.PercentileMethod = "exact (nearest rank)"
 	if !r.latency.IsExact() {
-		data.PercentileMethod = fmt.Sprintf("log histogram, within %.0f%% of the true value", (histogramGrowth-1)*100)
+		data.PercentileMethod = fmt.Sprintf("log histogram, within %.1f%% of the true value", (histogramGrowth-1)*100)
 	}
 
-	data.Room = RoomReport{
-		Held:        r.roomHeld,
-		DiedInLine:  r.roomDied,
-		MaxPosition: r.roomMaxPosition,
-		MeanWait:    r.roomWait.Mean(),
-		P95Wait:     r.roomWait.Quantile(95),
-		LongestWait: r.roomWait.max,
-	}
+	data.Assets = r.buildAssetReportLocked(false)
+	data.Room = r.buildRoomReportLocked()
+	data.Concert = r.buildConcertReportLocked()
+	data.Scouts = r.buildScoutReportLocked()
 
 	data.StatusCodes = countRows(r.statusCodes, func(code int) string {
 		if code == 0 {
@@ -870,6 +1083,96 @@ func (r *Reporter) buildReportDataLocked() Data {
 
 	data.Gates, data.Verdict = r.evaluateGates(data)
 	return data
+}
+
+func (r *Reporter) buildAssetReportLocked(live bool) AssetReport {
+	ar := AssetReport{
+		Requests:  r.assetRequests,
+		Failed:    r.assetFailed,
+		Denied403: r.assetDenied403,
+		Bytes:     r.assetBytes,
+	}
+	if r.assetLatency.hist.count > 0 {
+		if live {
+			ar.P50 = r.assetLatency.hist.Quantile(50)
+			ar.P95 = r.assetLatency.hist.Quantile(95)
+			ar.P99 = r.assetLatency.hist.Quantile(99)
+		} else {
+			ar.P50 = r.assetLatency.Quantile(50)
+			ar.P95 = r.assetLatency.Quantile(95)
+			ar.P99 = r.assetLatency.Quantile(99)
+		}
+	}
+	if len(r.assetsByClass) > 0 {
+		rows := make([]AssetClassRow, 0, len(r.assetsByClass))
+		for _, cs := range r.assetsByClass {
+			var p95 time.Duration
+			if cs.hist.count > 0 {
+				if live {
+					p95 = cs.hist.Quantile(95)
+				} else {
+					p95 = cs.Quantile(95)
+				}
+			}
+			rows = append(rows, AssetClassRow{
+				Class:     cs.Class,
+				Requests:  cs.Requests,
+				Failed:    cs.Failed,
+				Denied403: cs.Denied403,
+				Bytes:     cs.Bytes,
+				P95:       p95,
+			})
+		}
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].Requests != rows[j].Requests {
+				return rows[i].Requests > rows[j].Requests
+			}
+			return rows[i].Class < rows[j].Class
+		})
+		ar.ByClass = rows
+	}
+	return ar
+}
+
+func (r *Reporter) buildRoomReportLocked() RoomReport {
+	return RoomReport{
+		Held:        r.roomHeld,
+		Admitted:    r.roomAdmitted,
+		DiedInLine:  r.roomDied,
+		Expired:     r.roomExpired,
+		Denied:      r.roomDenied,
+		Rejected503: r.roomRejected503,
+		TotalPolls:  max(r.roomPollEvents, r.roomVisitPolls),
+		MaxPosition: r.roomMaxPosition,
+		MeanWait:    r.roomWait.Mean(),
+		P95Wait:     r.roomWait.Quantile(95),
+		LongestWait: r.roomWait.max,
+	}
+}
+
+func (r *Reporter) buildConcertReportLocked() ConcertReport {
+	return ConcertReport{
+		AdmitPasses: r.concertAdmitPasses,
+		RoomTickets: r.concertRoomTickets,
+		Bans429:     r.concertBans429,
+		Bans403:     r.concertBans403,
+	}
+}
+
+func (r *Reporter) buildScoutReportLocked() ScoutReport {
+	return ScoutReport{
+		Visits:   r.scoutVisits,
+		Failures: r.scoutFailures,
+	}
+}
+
+func normalizeAssetClass(class string) string {
+	switch strings.ToLower(strings.TrimSpace(class)) {
+	case "style", "script", "image", "font", "audio", "video", "data":
+		return strings.ToLower(strings.TrimSpace(class))
+	default:
+		return "other"
+	}
 }
 
 func (r *Reporter) evaluateGates(data Data) ([]GateResult, string) {
@@ -1045,6 +1348,39 @@ var templateFuncs = map[string]any{
 	"rescueLine":  RescueLine,
 	"join":        strings.Join,
 	"upper":       strings.ToUpper,
+	"mdCell":      mdCell,
+	"mdFence":     mdFence,
+}
+
+func mdCell(s string) string {
+	if s == "" {
+		return ""
+	}
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "|", `\|`)
+	return s
+}
+
+func mdFence(s string) string {
+	maxRun := 0
+	cur := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '`' {
+			cur++
+			if cur > maxRun {
+				maxRun = cur
+			}
+		} else {
+			cur = 0
+		}
+	}
+	n := 3
+	if maxRun >= n {
+		n = maxRun + 1
+	}
+	return strings.Repeat("`", n)
 }
 
 var (

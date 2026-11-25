@@ -57,6 +57,9 @@ code,.mono { font-family:var(--mono); font-size:.9em; }
 .gates { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
 .gate { border:1px solid var(--line); border-radius:999px; padding:4px 12px; font-size:13px; }
 .gate.pass { color:var(--green); border-color:var(--green); } .gate.fail { color:var(--red); border-color:var(--red); font-weight:700; }
+.integrity-banner { margin:0 auto 20px; background:rgba(254,68,80,.10); border:2px solid var(--red); border-radius:var(--radius); padding:14px 18px; }
+.integrity-banner strong.banner-title { color:var(--red); display:block; font-size:13px; letter-spacing:.08em; text-transform:uppercase; margin-bottom:4px; }
+.integrity-banner ul { margin:6px 0 0 18px; font-size:14px; }
 
 .kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:28px; }
 @media (max-width:760px) { .kpis { grid-template-columns:repeat(2,1fr); } }
@@ -148,14 +151,26 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
   {{if .Gates}}<div class="gates">{{range .Gates}}<span class="gate {{if .Passed}}pass{{else}}fail{{end}}">{{if .Passed}}✓{{else}}✗{{end}} {{.Name}} {{.Observed}} (limit {{.Limit}})</span>{{end}}</div>{{end}}
 </section>
 
+{{if or .DroppedLogs .TraceDropped .Forensics.Stats.DroppedQueue}}
+<section class="integrity-banner" role="alert">
+  <strong class="banner-title">⚠ Data Integrity Warning — Telemetry Drops Detected</strong>
+  <p>One or more collector queues overflowed during this run; affected telemetry may be incomplete:</p>
+  <ul>
+    {{if .DroppedLogs}}<li><strong>{{formatInt .DroppedLogs}}</strong> lemming life records dropped under collector pressure</li>{{end}}
+    {{if .TraceDropped}}<li><strong>{{formatInt .TraceDropped}}</strong> trace records dropped (trace writer queue full)</li>{{end}}
+    {{if .Forensics.Stats.DroppedQueue}}<li><strong>{{formatInt .Forensics.Stats.DroppedQueue}}</strong> error forensics captures dropped (forensics queue full)</li>{{end}}
+  </ul>
+</section>
+{{end}}
+
 <section class="kpis">
-  <div class="kpi"><span>visits</span><strong>{{formatInt .TotalVisits}}</strong><em>{{float1 .VisitsPerSecond}} / s</em></div>
+  <div class="kpi"><span>page visits</span><strong>{{formatInt .TotalVisits}}</strong><em>{{float1 .VisitsPerSecond}} / s</em></div>
   <div class="kpi"><span>failed</span><strong{{if .FailedVisits}} class="fail-text"{{end}}>{{pct .FailureRate}}</strong><em>{{formatInt .FailedVisits}} visits</em></div>
   <div class="kpi"><span>p50</span><strong>{{ms .P50}}</strong><em>mean {{ms .Mean}}</em></div>
   <div class="kpi"><span>p95</span><strong>{{ms .P95}}</strong><em>ttfb {{ms .TTFBP95}}</em></div>
   <div class="kpi"><span>p99</span><strong>{{ms .P99}}</strong><em>max {{ms .Slowest}}</em></div>
-  <div class="kpi"><span>lemmings</span><strong>{{formatInt .LemmingsStarted}}</strong><em>of {{formatInt .TotalLemmings}} planned</em></div>
-  <div class="kpi"><span>transferred</span><strong>{{.TotalBytes | formatBytesInt}}</strong><em>decoded bodies</em></div>
+  <div class="kpi"><span>lemmings</span><strong>{{formatInt .LemmingsStarted}}</strong><em>{{formatInt .LemmingsCompleted}} completed · {{formatInt .LemmingsUnborn}} unborn / {{formatInt .TotalLemmings}}</em></div>
+  <div class="kpi"><span>transferred</span><strong>{{.TotalBytes | formatBytesInt}}</strong><em>decoded page bodies</em></div>
   <div class="kpi"><span>error artifacts</span><strong{{if .Forensics.Stats.Captured}} class="warn-text"{{end}}>{{formatInt .Forensics.Stats.Captured}}</strong><em>{{formatInt .Forensics.Stats.WithScreenshots}} screenshots</em></div>
 </section>
 
@@ -276,13 +291,59 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
 </div>
 {{end}}
 
-{{if .Room.Held}}
+{{if or .Assets.Requests .Config.Assets}}
+<h2 class="section">Same-origin assets (separated from page latency)</h2>
+<section class="kpis">
+  <div class="kpi"><span>asset requests</span><strong>{{formatInt .Assets.Requests}}</strong><em>{{.Assets.Bytes | formatBytesInt}}</em></div>
+  <div class="kpi"><span>asset failed</span><strong{{if .Assets.Failed}} class="fail-text"{{end}}>{{formatInt .Assets.Failed}}</strong><em>subresource errors</em></div>
+  <div class="kpi"><span>asset 403 denied</span><strong{{if .Assets.Denied403}} class="fail-text"{{end}}>{{formatInt .Assets.Denied403}}</strong><em>admit pass denied</em></div>
+  <div class="kpi"><span>asset p95</span><strong>{{ms .Assets.P95}}</strong><em>p50 {{ms .Assets.P50}} · p99 {{ms .Assets.P99}}</em></div>
+</section>
+{{if .Assets.ByClass}}
+<div class="card scroll"><table>
+  <tr><th>class</th><th class="num">requests</th><th class="num">failed</th><th class="num">403 denied</th><th class="num">p95</th><th class="num">bytes</th></tr>
+  {{range .Assets.ByClass}}<tr>
+    <td><span class="chip c3xx">{{.Class}}</span></td>
+    <td class="num">{{formatInt .Requests}}</td>
+    <td class="num{{if .Failed}} fail-text{{end}}">{{formatInt .Failed}}</td>
+    <td class="num{{if .Denied403}} fail-text{{end}}">{{formatInt .Denied403}}</td>
+    <td class="num">{{ms .P95}}</td>
+    <td class="num muted">{{.Bytes | formatBytesInt}}</td>
+  </tr>{{end}}
+</table></div>
+{{end}}
+{{end}}
+
+{{if or .Room.Held .Room.Rejected503 .Room.TotalPolls}}
 <h2 class="section">Waiting room</h2>
 <section class="kpis">
   <div class="kpi"><span>held</span><strong>{{formatInt .Room.Held}}</strong><em>visits queued</em></div>
-  <div class="kpi"><span>died in line</span><strong{{if .Room.DiedInLine}} class="fail-text"{{end}}>{{formatInt .Room.DiedInLine}}</strong><em>never admitted</em></div>
+  <div class="kpi"><span>admitted</span><strong>{{formatInt .Room.Admitted}}</strong><em>passed into origin</em></div>
+  <div class="kpi"><span>died in line</span><strong{{if .Room.DiedInLine}} class="fail-text"{{end}}>{{formatInt .Room.DiedInLine}}</strong><em>cancelled / error</em></div>
+  <div class="kpi"><span>expired / denied</span><strong{{if or .Room.Expired .Room.Denied}} class="fail-text"{{end}}>{{formatInt .Room.Expired}} / {{formatInt .Room.Denied}}</strong><em>evicted · 403 denied</em></div>
+  <div class="kpi"><span>rejected 503</span><strong{{if .Room.Rejected503}} class="fail-text"{{end}}>{{formatInt .Room.Rejected503}}</strong><em>breaker / capacity</em></div>
+  <div class="kpi"><span>queue polls</span><strong>{{formatInt .Room.TotalPolls}}</strong><em>status checks</em></div>
   <div class="kpi"><span>deepest</span><strong>#{{.Room.MaxPosition}}</strong><em>queue position</em></div>
-  <div class="kpi"><span>mean wait</span><strong>{{round .Room.MeanWait}}</strong><em>p95 {{round .Room.P95Wait}}</em></div>
+  <div class="kpi"><span>wait time</span><strong>{{round .Room.MeanWait}}</strong><em>p95 {{round .Room.P95Wait}} · max {{round .Room.LongestWait}}</em></div>
+</section>
+{{end}}
+
+{{if or .Concert.AdmitPasses .Concert.RoomTickets .Concert.Bans429 .Concert.Bans403}}
+<h2 class="section">Concert passes &amp; bans</h2>
+<section class="kpis">
+  <div class="kpi"><span>admit passes</span><strong>{{formatInt .Concert.AdmitPasses}}</strong><em>visits with concert_admit</em></div>
+  <div class="kpi"><span>room tickets</span><strong>{{formatInt .Concert.RoomTickets}}</strong><em>visits with room_ticket</em></div>
+  <div class="kpi"><span>bans (429)</span><strong{{if .Concert.Bans429}} class="fail-text"{{end}}>{{formatInt .Concert.Bans429}}</strong><em>rate-limit bans</em></div>
+  <div class="kpi"><span>bans (403)</span><strong{{if .Concert.Bans403}} class="fail-text"{{end}}>{{formatInt .Concert.Bans403}}</strong><em>forbidden bans</em></div>
+</section>
+{{end}}
+
+{{if or .Scouts.Visits .Config.Scouts}}
+<h2 class="section">Browser scouts</h2>
+<section class="kpis">
+  <div class="kpi"><span>scouts configured</span><strong>{{.Config.Scouts}}</strong><em>real Chrome sessions</em></div>
+  <div class="kpi"><span>scout visits</span><strong>{{formatInt .Scouts.Visits}}</strong><em>page navigations</em></div>
+  <div class="kpi"><span>scout failures</span><strong{{if .Scouts.Failures}} class="fail-text"{{end}}>{{formatInt .Scouts.Failures}}</strong><em>failed navigations</em></div>
 </section>
 {{end}}
 
@@ -331,6 +392,7 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
       <tr><td>until · ramp</td><td class="num">{{.Config.Until}} · {{.Config.Ramp}} ({{.Config.RampShape}})</td></tr>
       <tr><td>think time</td><td class="num">{{.Config.ThinkMin}} – {{.Config.ThinkMax}}</td></tr>
       <tr><td>navigation</td><td class="num">{{if .Journey}}journey “{{.Journey}}”{{else}}{{.Config.Navigation}}{{end}}</td></tr>
+      <tr><td>assets</td><td class="num">{{if .Config.Assets}}enabled ({{.Config.AssetsPerPage}}/page){{else}}disabled{{end}}</td></tr>
       <tr><td>forensics capture</td><td class="num">{{.Forensics.Stats.Mode}}{{if .Forensics.Stats.Browser}} ({{.Forensics.Stats.Browser}}){{end}}</td></tr>
       <tr><td>browser scouts</td><td class="num">{{.Config.Scouts}}</td></tr>
     </table></div>
@@ -338,7 +400,10 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
   <div>
     <h2 class="section">Evidence</h2>
     <div class="card"><table>
+      <tr><td>schema version</td><td class="num">{{.SchemaVersion}}</td></tr>
       <tr><td>percentiles</td><td>{{.PercentileMethod}}</td></tr>
+      <tr><td>lemmings started</td><td class="num">{{formatInt .LemmingsStarted}}</td></tr>
+      <tr><td>lemmings completed</td><td class="num">{{formatInt .LemmingsCompleted}}</td></tr>
       <tr><td>lemmings never started</td><td class="num">{{formatInt .LemmingsUnborn}}</td></tr>
       <tr><td>checksum changes</td><td class="num">{{formatInt .ChecksumChanges}}{{if not .Config.StrictChecksum}} <span class="muted">(informational)</span>{{end}}</td></tr>
       <tr><td>forensics deduped / dropped</td><td class="num">{{formatInt .Forensics.Stats.Deduplicated}} deduped · {{formatInt .Forensics.Stats.DroppedQueue}} queue · {{formatInt .Forensics.Stats.DroppedCap}} cap</td></tr>

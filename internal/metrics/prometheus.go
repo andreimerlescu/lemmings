@@ -24,7 +24,7 @@ import (
 
 const maxURLLabelCardinality = 999
 
-// PrometheusObserver exposes 17 lemmings_* metrics on a loopback /metrics endpoint.
+// PrometheusObserver exposes 22 lemmings_* metrics on a loopback /metrics endpoint.
 type PrometheusObserver struct {
 	cfg      swarm.Config
 	registry *prometheus.Registry
@@ -54,11 +54,16 @@ type PrometheusObserver struct {
 	droppedLogs         prometheus.Counter
 	overflowLogs        prometheus.Counter
 
-	// v2.0 forensics & browser scout metrics.
+	// v2.0 forensics, asset tier, Concert protocol & browser scout metrics.
 	artifactsCaptured *prometheus.CounterVec
 	artifactsDropped  *prometheus.CounterVec
 	jsConsoleErrors   prometheus.Counter
 	scoutsAlive       prometheus.Gauge
+	assets            *prometheus.CounterVec
+	assetDuration     prometheus.Histogram
+	queuePolls        prometheus.Counter
+	bans              *prometheus.CounterVec
+	scoutVisits       *prometheus.CounterVec
 }
 
 // NewPrometheusObserver creates a PrometheusObserver backed by an isolated registry.
@@ -152,12 +157,34 @@ func NewPrometheusObserver(cfg swarm.Config) *PrometheusObserver {
 		Name: "lemmings_scouts_alive",
 		Help: "Number of live real-browser Scout lemmings currently active.",
 	})
+	o.assets = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "lemmings_assets_total",
+		Help: "Total same-origin subresource asset fetches by class and HTTP status class.",
+	}, []string{"class", "status_class"})
+	o.assetDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "lemmings_asset_duration_seconds",
+		Help:    "Same-origin subresource asset fetch latency distribution in seconds.",
+		Buckets: prometheus.DefBuckets,
+	})
+	o.queuePolls = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "lemmings_queue_polls_total",
+		Help: "Total waiting room queue status polls sent.",
+	})
+	o.bans = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "lemmings_bans_total",
+		Help: "Total ban or rate-limit responses observed by HTTP status code.",
+	}, []string{"status"})
+	o.scoutVisits = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "lemmings_scout_visits_total",
+		Help: "Total real-browser Scout page navigations by outcome.",
+	}, []string{"outcome"})
 
 	reg.MustRegister(
 		o.alive, o.completed, o.failed, o.visits, o.failedVisits, o.cancelledVisits,
 		o.visitDuration, o.bytesTotal, o.waitingRoom, o.waitingRoomDuration,
 		o.terrainsOnline, o.droppedLogs, o.overflowLogs,
 		o.artifactsCaptured, o.artifactsDropped, o.jsConsoleErrors, o.scoutsAlive,
+		o.assets, o.assetDuration, o.queuePolls, o.bans, o.scoutVisits,
 	)
 	return o
 }
@@ -191,9 +218,12 @@ func (o *PrometheusObserver) Attach(ctx context.Context, bus *events.Bus) error 
 	o.unsub = bus.Subscribe(events.Filter(
 		o.handleEvent,
 		events.LemmingBorn, events.LemmingDied, events.LemmingFailed,
-		events.VisitComplete, events.VisitError, events.WaitingRoom,
+		events.VisitComplete, events.VisitError,
+		events.AssetComplete, events.AssetError,
+		events.WaitingRoom, events.QueuePoll,
 		events.TerrainOnline, events.TerrainDone, events.LogDropped, events.LogOverflow,
-		events.ArtifactCaptured, events.ArtifactDropped, events.ScoutStarted, events.ScoutDone,
+		events.ArtifactCaptured, events.ArtifactDropped,
+		events.ScoutStarted, events.ScoutVisit, events.ScoutDone,
 	))
 
 	mux := http.NewServeMux()
@@ -285,11 +315,15 @@ func (o *PrometheusObserver) handleEvent(e events.Event) {
 		o.failed.Inc()
 	case events.VisitComplete, events.VisitError:
 		o.recordVisit(e)
+	case events.AssetComplete, events.AssetError:
+		o.recordAsset(e)
 	case events.WaitingRoom:
 		o.waitingRoom.Inc()
 		if e.Duration > 0 {
 			o.waitingRoomDuration.Observe(e.Duration.Seconds())
 		}
+	case events.QueuePoll:
+		o.queuePolls.Inc()
 	case events.TerrainOnline:
 		o.terrainsOnline.Inc()
 	case events.TerrainDone:
@@ -315,6 +349,12 @@ func (o *PrometheusObserver) handleEvent(e events.Event) {
 		o.artifactsDropped.With(prometheus.Labels{"reason": reason}).Inc()
 	case events.ScoutStarted:
 		o.scoutsAlive.Inc()
+	case events.ScoutVisit:
+		outcome := "ok"
+		if e.Failed {
+			outcome = "failed"
+		}
+		o.scoutVisits.With(prometheus.Labels{"outcome": outcome}).Inc()
 	case events.ScoutDone:
 		o.scoutsAlive.Dec()
 	}
@@ -322,13 +362,23 @@ func (o *PrometheusObserver) handleEvent(e events.Event) {
 
 func (o *PrometheusObserver) recordVisit(e events.Event) {
 	o.bytesTotal.Add(float64(e.BytesIn))
-	switch {
-	case e.Cancelled:
+	if e.Cancelled {
 		o.cancelledVisits.Inc()
-	case e.Failed:
+		return
+	}
+	if e.Failed {
 		o.failedVisits.Inc()
 	}
 	o.visits.With(prometheus.Labels{"status_class": report.StatusClass(e.StatusCode)}).Inc()
+
+	if e.Banned {
+		switch e.StatusCode {
+		case http.StatusTooManyRequests:
+			o.bans.With(prometheus.Labels{"status": "429"}).Inc()
+		case http.StatusForbidden:
+			o.bans.With(prometheus.Labels{"status": "403"}).Inc()
+		}
+	}
 
 	if e.Duration > 0 {
 		if o.cfg.MetricsURLLabel == "none" {
@@ -337,6 +387,54 @@ func (o *PrometheusObserver) recordVisit(e events.Event) {
 			label := o.urlLabel(e.URL)
 			o.visitDuration.With(prometheus.Labels{"url": label}).Observe(e.Duration.Seconds())
 		}
+	}
+}
+
+func (o *PrometheusObserver) recordAsset(e events.Event) {
+	class := e.AssetClass
+	statusCode := e.StatusCode
+	dur := e.Duration
+	if av, ok := e.Payload.(*swarm.AssetVisit); ok && av != nil {
+		if class == "" {
+			class = av.Class
+		}
+		if statusCode == 0 {
+			statusCode = av.StatusCode
+		}
+		if dur == 0 {
+			dur = av.Duration
+		}
+	}
+	o.assets.With(prometheus.Labels{
+		"class":        boundAssetClass(class),
+		"status_class": boundStatusClass(statusCode),
+	}).Inc()
+	if dur > 0 {
+		o.assetDuration.Observe(dur.Seconds())
+	}
+}
+
+func boundAssetClass(class string) string {
+	switch strings.ToLower(strings.TrimSpace(class)) {
+	case "style", "script", "image", "font", "audio", "video", "data":
+		return strings.ToLower(strings.TrimSpace(class))
+	default:
+		return "other"
+	}
+}
+
+func boundStatusClass(code int) string {
+	switch {
+	case code >= 200 && code < 300:
+		return "2xx"
+	case code >= 300 && code < 400:
+		return "3xx"
+	case code >= 400 && code < 500:
+		return "4xx"
+	case code >= 500 && code < 600:
+		return "5xx"
+	default:
+		return "000"
 	}
 }
 
