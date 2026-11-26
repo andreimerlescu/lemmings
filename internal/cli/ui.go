@@ -248,6 +248,12 @@ func (u *UI) PrintBootSummary(cfg swarm.Config, browserStatus string) {
 	if cfg.PlanPassGate {
 		gates = append(gates, fmt.Sprintf("plan pass rate ≥ %.2f%%", cfg.MinPlanPassRate*100))
 	}
+	if cfg.MinQueueHeld > 0 {
+		gates = append(gates, "queue held ≥ "+report.FormatInt(cfg.MinQueueHeld))
+	}
+	if cfg.MaxQueueWait > 0 {
+		gates = append(gates, "p95 queue wait ≤ "+cfg.MaxQueueWait.String())
+	}
 	if len(gates) > 0 {
 		u.printf("%s%s\n", u.key("gates:"), strings.Join(gates, ", "))
 	}
@@ -269,6 +275,9 @@ func (u *UI) PrintBootSummary(cfg swarm.Config, browserStatus string) {
 	}
 	if cfg.ThinkMax == 0 {
 		warn("  ⚠  think time is zero: lemmings will not pause between pages.\n              this is a saturation test, not a model of real visitors.")
+	}
+	if cfg.RequestTimeout > 0 && cfg.Until > 0 && cfg.RequestTimeout >= cfg.Until {
+		warn("  ⚠  -request-timeout (%s) ≥ -until (%s): slow or hung origin requests\n              may end as cancelled instead of timing out as failures.", cfg.RequestTimeout, cfg.Until)
 	}
 	if cfg.RevealSessionCookies {
 		warn("  ⚠  -reveal-session-cookies is ON: raw session cookie values will be\n              visible inside the authenticated localhost portal (never written to reports).")

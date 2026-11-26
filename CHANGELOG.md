@@ -3,6 +3,46 @@
 All notable changes to lemmings are recorded here. Versions follow
 [Semantic Versioning](https://semver.org).
 
+## 2.0.1 ("boardy") — 2026-11-26
+
+### Waiting-Room Accuracy, Scouts, Forensics & Path Diagnostics
+
+- **Eliminated `DiedInLine` survivorship bias.** When a lemming's own `-until`
+  lifespan expires while still waiting in a queue (`context.DeadlineExceeded`),
+  Lemmings now classifies the visit as a failed **`queue-timeout`** rather than
+  a cancelled visit (`Cancelled=false`, `Failed=true`), recording its full wait
+  duration in global/path/timeline latency distributions as well as
+  `RoomReport.P95Wait` and `RoomReport.DiedInLine`. Explicit run cancellation
+  (`Ctrl-C` / `context.Canceled`) remains `Cancelled=true`, and sessions with
+  zero completed visits are never counted as `Rescued` / flawless.
+- **Waiting-room CI gates (`-min-queue-held` / `-mqh` and `-max-queue-wait` /
+  `-mqw`).** Added `-min-queue-held <N>` (exit `2` if `waiting_room.held < N`)
+  so fast-lane bypass tests (e.g., `want-cookies: room_ticket absent`) cannot
+  pass vacuously on an empty room, and `-max-queue-wait <dur>` (exit `2` if
+  `waiting_room.p95_wait > dur`) to gate queue wait latency alongside origin
+  `-p95-budget`.
+- **Browser Scouts span the entire swarm run.** When HTTP lemmings are active
+  (`-pack > 0`), `-scouts` now stay alive across the full `-ramp` and peak load
+  until all terrains finish (instead of exiting after one `-until` window at the
+  start of the ramp). Scout-only runs (`-pack 0`) continue using `-until`.
+- **Skip misleading CDP replay on `GET` steps with `with-headers`.** Failed
+  plan steps carrying custom `with-headers` (such as `Authorization` or
+  `Concert-Priority`) now capture HTTP-only forensics rather than replaying in
+  Chromium without those headers.
+- **Timeout vs. lifespan boot warning.** Prints a startup warning whenever
+  `-request-timeout >= -until` so operators know hung origin requests may end
+  as cancelled rather than timing out as failures.
+- **Cleaner waiting-room & per-persona queue breakdowns.** Split
+  `RoomReport.NotAdmitted` (`queue-not-admitted`) and `RoomReport.ReloadErrors`
+  out of `DiedInLine`, and added per-persona `queue_held`, `queue_admitted`,
+  `queue_died`, and `queue_p95_wait_ns` fields to `PersonaReport` so mixed-rank
+  runs (`guest` / `customer` / `staff`) show queue impact per rank.
+- **Per-path cold connection vs. warm latency visibility.** Added `cold_hits`,
+  `setup_p50_ns` (`DNS + Connect + TLS`), `warm_p50_ns` (reused connections),
+  and `ttfb_p50_ns` to `PathReport` (JSON, HTML, and Markdown) so cold TLS
+  handshake cost on `-hit` (`/`) is visibly separated from steady-state path
+  latency.
+
 ## 2.0.0 — 2026-11-26
 
 A major architectural, scripting, security, and forensics upgrade: Lemmings is
