@@ -3,6 +3,237 @@
 All notable changes to lemmings are recorded here. Versions follow
 [Semantic Versioning](https://semver.org).
 
+## 2.0.0 — 2026-11-26
+
+A major architectural, scripting, security, and forensics upgrade: Lemmings is
+now structured into clean Go bounded contexts (`cmd/lemmings` + `internal/*`),
+introduces a unified multi-method YAML `-plan` & multi-persona suite engine
+with deterministic rogue traffic, captures live error screenshots, JS console
+logs, cookie jar state, and extracted error bodies, streams them into the Admin
+Portal for triage review, and embeds everything cleanly into final reports.
+
+### Unified YAML Plans & Multi-Persona Suites
+
+- **Breaking Change:** Removed legacy `-journey` (`-j`), JSON journey files,
+  `internal/journey/`, `examples/journeys/`, and `docs/journeys-and-checks.md`,
+  replacing them with `-plan` (`-pl`), strict YAML plans, `internal/plan/`,
+  `examples/plans/`, and `docs/plans.md`.
+- **Single-plan & multi-persona YAML suites (`-plan` / `-pl`).** Accepts a
+  single YAML file, a directory of `*.yaml`/`*.yml` files (loaded in
+  lexicographic order), or a comma-separated list of files and directories.
+  Decoded with strict `KnownFields(true)` and single-document enforcement,
+  supporting both single-plan (`plan: [...]`) and multi-persona bundle
+  (`plans: [...]`, up to 100 unique plans per suite) formats with
+  `-max-plan-items` / `-mpi` (default `999`, range `1..1000000`, file read cap
+  scaling up to `64 MiB`).
+- **Multi-method stateful execution & request shaping.** Supports `GET`,
+  `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS`, jar-seeded
+  `with-cookies` (origin `/` persistence across redirects & steps), per-step
+  `with-headers` (rejecting `Host` and CR/LF/NUL), `with-body` (auto
+  `application/x-www-form-urlencoded`, or JSON object when `Content-Type` is
+  `application/json` / `application/*+json`), raw `body` (default
+  `text/plain; charset=utf-8`), fail-closed `${ENV_VAR}` expansion (`$$` literal
+  escape), per-step `chill` pacing, smart `follow-redirects` (auto-`false` when
+  `want-status` expects exclusively `3xx`), `stop-on-fail` (exit reason
+  `plan-failed`), and `loop`.
+- **Deep response assertions.** Supports `want-status` (int, string, ranges,
+  `2xx`, or YAML list; defaults to `2xx`), case-insensitive multi-value
+  `want-headers` (`is`, `contains`, `not-contains`, `begins-with`, `ends-with`,
+  `is-one`, presence-only, sensitive header redaction), jar-backed
+  `want-cookies` (`value`/`is`, `contains`, `not-contains`, `begins-with`,
+  `ends-with`, `is-one`, `absent: true`, presence-only, zero raw cookie values
+  in details), `want-body`, `want-content-type`, `want-title`, `want-selectors`,
+  and automatic `not-blank` skip on `HEAD`, `204`/`304`, or exclusively
+  non-`2xx` `want-status`.
+- **Deterministic weighting, rogue cohort (`-rogue-rate` / `-rr`) & CI gate
+  (`-min-plan-pass-rate` / `-mppr`).** Assigns non-rogue lemmings (default 95%)
+  deterministically across personas in proportion to `weight`, while a
+  deterministic rogue fraction (`floor(n*rate+1e-9) > floor((n-1)*rate+1e-9)`,
+  auto `0.05` when `-plan` is set) wanders via `-navigation` (`links`/`random`).
+  Adds `PlanReport` (cohort pass rate, rogue cohort, per-persona ordered
+  `PlanStepReport` tables) across CLI, Dashboard, JSON, HTML, and Markdown, plus
+  exit code `2` gating via `-min-plan-pass-rate`.
+- **Bundled examples & AI Agent Skill.** Added `SKILL.md` at repository root
+  (`name: lemmings-plans`), exhaustive `docs/plans.md` with 10 user-type persona
+  blueprints, five Neon Arcade example plans under `examples/plans/`
+  (`neon-arcade-auth.yaml`, `neon-arcade-personas.yaml`, `buy-tokens.yaml`,
+  `forensics-demo.yaml`, `known-bad.yaml`), and `make run-plan`.
+
+### Live Error Forensics & Screenshots
+
+- **Zero-Node pure-Go Chrome DevTools Protocol (CDP) engine.** Auto-detects
+  local Chrome/Chromium (or connects to `-cdp-url`), replays failing visits
+  inside isolated ephemeral incognito contexts with the lemming's cookies, user
+  agent, language, and viewport, and captures compressed screenshots, JS console
+  logs/exceptions, and failed subresources — falling back cleanly to HTTP-only
+  forensics when no browser is present.
+- **Four-part error artifacts** for every captured failure:
+  1. Session state, sequential lemming number (`#1..N`), breadcrumb trail, and
+     cookie jar status (`InspectingJar` metadata + HMAC fingerprint; raw cookie
+     values always redacted in reports).
+  2. JavaScript console errors, warnings, uncaught exceptions, and failed
+     subresources.
+  3. Visual screenshot (JPEG/PNG) bounded and deduplicated (`-capture-max`,
+     `-capture-per-error`, `-capture-workers`, `-capture-timeout`).
+  4. Parsed & extracted error page body (HTML, JSON/RFC-7807 Problem Details,
+     XML, or plain text with secret scrubbing and allowlisted diagnostic headers).
+- **Real-browser Scouts (`-scouts N`).** Optional browser-backed lemmings run
+  concurrently with the HTTP swarm to surface pure client-side JS and rendering
+  errors on HTTP `200 OK` pages.
+
+### Admin Portal Triage & Review Mode
+
+- **Live Error Forensics Gallery** streaming into the portal via SSE as
+  screenshots finish, with filter tabs (`All`, `Unreviewed`, `5xx`, `4xx`,
+  `JS Errors`, `Check Failures`) and search.
+- **4-Panel Artifact Inspector Modal** (Screenshot, Session & Cookie Jar,
+  Extracted Error & Body, JS Console) with triage actions (`Bug`, `Flaky`,
+  `Expected`, `Ignored`, `Unreviewed` + admin note) persisted directly into the
+  final HTML, Markdown, and JSON reports.
+- **Post-run Review Mode (`-review`).** Holds the portal open after the swarm
+  completes so the admin can review and tag screenshots before clicking
+  **Finalize & Write Report** (or pressing Ctrl-C).
+
+### Concert Waiting Room Protocol & Opt-In Asset Tier
+
+- **Native Concert protocol support.** Detects Concert `waiting.html`
+  (`/_concert/waiting.js` + `#position` / `.queue-page`), legacy HTML
+  (`/queue/status` + `#position`), and Concert `-api-json` HTTP `429` JSON
+  queues (same-origin `status_url` + `retry_after_seconds`); polls
+  `GET /queue/status` with `room_ticket` cookie and `Accept: application/json`,
+  handles `ready`, `position`, `waiting: false` (expired), `cookies_required`,
+  poll `429` backoff, `403` ban termination, and transient network backoff;
+  reloads once upon admission to mint `concert_admit` and separates origin
+  service latency from queue wait duration; never follows `/_concert/*` links
+  as origin pages.
+- **Opt-in static asset tier (`-assets`, `-assets-per-page 1..64`).** Pure-stdlib
+  HTML and CSS same-origin asset extractor (`plan.ExtractAssets`,
+  `plan.ExtractCSSAssets`, `FuzzExtractAssets`) honoring `<base href>`,
+  per-lemming 2048-entry cache, and `concert_admit` pass enforcement — reported
+  in `AssetReport` strictly separate from page visits and `-p95-budget`.
+- **Neon Arcade static assets.** Added `/assets/arcade.css` and
+  `/assets/logo.svg` static endpoints in `examples/demo/main.go` exempt from
+  demo chaos and waiting rooms.
+
+### Architecture, Precision, Reports & Supply Chain
+
+- **Go v2 Module Path (`github.com/andreimerlescu/lemmings/v2`).** Aligned
+  `go.mod`, internal imports, `Makefile`, and `go install` documentation with
+  Go Semantic Import Versioning (`go install github.com/andreimerlescu/lemmings/v2/cmd/lemmings@latest`).
+- **DDD Package Refactor.** Flat root `package main` refactored into
+  `cmd/lemmings/main.go` and 12 cohesive `internal/*` packages (`version`,
+  `secrets`, `events`, `discovery`, `plan`, `forensics`, `swarm`, `report`,
+  `delivery`, `dashboard`, `metrics`, `cli`).
+- **High-Precision Histograms & Report Schema `"2.0"`.** Tightened latency
+  histograms to `<= 0.5%` relative error across 4096 `uint64` bins
+  (`histogramGrowth = 1.005`), raised exact sample buffers to
+  `exactGlobalSamples = 8192` and `exactPathSamples = 1024`, added
+  `schema_version: "2.0"`, separated Page vs. Asset telemetry, enriched
+  `PlanReport`, `RoomReport`, `ConcertReport`, `ScoutReport`, distinct
+  Started/Completed/Unborn counts, prominent `DATA DROPPED` warnings across CLI,
+  dashboard, HTML, and Markdown reports, truncated-body detection
+  (`ErrTruncatedBody`), and excluded cancelled visits from HTTP status classes.
+- **24 Prometheus Metrics (`-observe`).** Added `lemmings_plan_lemmings_total`
+  (`outcome="passed|failed"`), `lemmings_rogue_lemmings_total`,
+  `lemmings_assets_total`, `lemmings_asset_duration_seconds`,
+  `lemmings_queue_polls_total`, `lemmings_bans_total`, and
+  `lemmings_scout_visits_total` alongside existing metrics, excluding cancelled
+  visits from `lemmings_visits_total{status_class}`.
+- **Native Concert Waiting Room & Traffic Chart Queued Series.** Detects
+  Concert waiting rooms served with HTTP `200`, `429`, or `503` (checking the
+  explicit `X-Concert-Queue: 1` header first, with `Retry-After` and optional
+  `X-Concert-Status-Url` / `X-Concert-Position`, and falling back to JSON/HTML
+  markers) while keeping bare upstream `503`s and Concert capacity-breaker
+  `{"queued":false}` `503`s classified as failures. Added a live `queued`
+  lemmings series (`timeline[].queued`) to both the Admin Portal and HTML
+  report traffic charts whenever waiting-room activity occurs.
+- **JSON Field Rename (`Session.Source`).** Renamed the HTTP-swarm artifact
+  source value in `forensics.artifacts[].session.source` from `"http-replay"`
+  to `"http-swarm"` (distinguishing the originating engine `"http-swarm"` /
+  `"browser-scout"` from the capture mode `"cdp-replay"` / `"cdp-scout"` /
+  `"http-only"`).
+- **Hybrid Forensics Reports & Naming.** Self-contained HTML embeds bounded
+  base64 screenshots on local reports (`12 MiB` cap) and writes
+  `.artifacts/<id>.<ext>` files for Markdown relative image links and lean JSON.
+  Remote delivery targets (`mailto:` and `s3://`) omit unscrubbed screenshots
+  by default unless `-include-remote-screenshots` is passed (`2 MiB` inline cap
+  for email, `12 MiB` cap + `.artifacts/` for S3). Added `-unique-report`,
+  `-report-name`, and Markdown table cell (`mdCell`) & adaptive code-fence
+  (`mdFence`) escaping.
+- **Regression Comparison (`lemmings compare`).** Compare baseline vs candidate
+  JSON reports (including `AssetP95DeltaMS` and `QueueHeldDelta`) with
+  `-max-failure-delta`, `-max-p95-delta`, `-max-rescued-drop`, new/resolved
+  error fingerprints, and CI exit code `2` on regression.
+- **Ramp Shapes & Dry Run.** Added `-ramp-shape` (`linear`, `fibonacci`, `step`)
+  and `-dry-run` pre-flight validation.
+- **Build Supply Chain.** Added zero-dependency deterministic CycloneDX 1.5 SBOM
+  generator (`scripts/generate-sbom.py`), `make vulncheck`, `make sbom`, and
+  `make checksums` (`bin/SHA256SUMS`), plus `go mod verify`, `govulncheck`, JS
+  syntax checks, and SBOM validation in `.github/workflows/go.yml`.
+- **Documentation Suite & Agent Skill.** Complete end-user and security
+  documentation under `docs/` (including `docs/plans.md` with 10 user-type
+  persona blueprints), root-level `SKILL.md` agent runbook, and refreshed
+  `README.md`.
+
+### Security Hardening (`SEC-01`..`SEC-10`)
+
+- **Breaking Change:** Removed `-smtp-pass` / `-spw` CLI flag so SMTP
+  credentials never appear in process `argv` (`ps aux`). Use
+  `-smtp-pass-file` (requires `0600` permissions), `-smtp-pass-stdin`,
+  `LEMMINGS_SMTP_PASS_FILE`, or `LEMMINGS_SMTP_PASS`.
+- **Dial-Time SSRF Guard & TLS 1.2+ Everywhere.** Added `discovery.SafeDialContext`
+  and `discovery.MinTLSConfig()` across discovery, swarm HTTP transport, and
+  remote CDP (`http`/`https`/`ws`/`wss`), blocking `169.254.0.0/16`, `fe80::/10`
+  (including zoned addresses), `fd00:ec2::254`, `0.0.0.0`/`::`, multicast, and
+  IPv4-mapped IPv6 equivalents before dialing validated literal IPs.
+- **Fail-Closed Loopback CDP (`-allow-remote-cdp`).** `-cdp-url` is restricted
+  to loopback endpoints by default; non-loopback endpoints require explicitly
+  passing `-allow-remote-cdp` (metadata/link-local IPs remain blocked).
+- **RFC 6265 Bounded Cookie Jar & CDP Cookie/Origin Guards.** Enforced RFC 6265
+  domain/public-suffix scoping and a `256`-entry cap on `InspectingJar`,
+  deterministic `(domain, path, name)` replay, domain validation before CDP
+  `Network.setCookies`, and Scout off-origin redirect capture blocking.
+- **Ctrl-C Drain & CDP Grace Budget.** Detached coordinator `workCtx` via
+  `context.WithoutCancel` so post-Ctrl-C drain completes queued captures, and
+  reserved `min(2s, timeout/4)` screenshot/DOM grace budget for slow pages.
+- **Behavior Change (`SEC-10`):** Screenshots are no longer included in reports
+  sent by email (`mailto:`) or uploaded to S3 (`s3://`) by default because
+  captured screenshots are not scrubbed. Local reports and the localhost Admin
+  Portal still include screenshots by default; pass
+  `-include-remote-screenshots` to opt in for email or S3 delivery.
+- Introduced redacting `secrets.Secret` value type and best-effort regex
+  scrubbing via `secrets.ScrubText` (including `glpat-`, `AIza`, `token`,
+  `jwt`, `aws_secret_access_key`, and `*_pass` patterns) across extracted error
+  excerpts and JS console logs.
+- Hardened `MailTarget` against SMTP header CRLF injection (`SEC-02`) and
+  fail-closed TLS (`MinVersion: tls.VersionTLS12`, `-smtp-require-tls`, `SEC-03`).
+- Bound Prometheus `/metrics` strictly to `127.0.0.1` with a loopback
+  `Host`-header guard (`SEC-04`; use an SSH tunnel or `Host`-rewriting reverse
+  proxy for remote scraping).
+- Replaced raw dashboard token cookies with HMAC-SHA256 signed random session
+  cookies, added per-remote-IP (`15/min`, `1024`-IP bounded cap, ignoring
+  `X-Forwarded-For`) plus global (`60/min`) auth rate limiting (`429`), and
+  added `http.NewCrossOriginProtection()` CSRF checks on all state-changing
+  routes (`SEC-05`).
+- Confined `LocalTarget` writes via atomic temp-file + `Sync` + `Rename` inside
+  Go's `os.OpenRoot`, enforced `validateSafeComponent` in both `LocalTarget` and
+  `S3Target` (`SEC-06`), and restricted trace files to `0600`.
+- Bounded sitemap indexing concurrency to a fixed worker pool
+  (`indexConcurrency = 8`, `SEC-07`) and joined every dashboard/metrics/CDP
+  goroutine cleanly on shutdown (`SEC-08`).
+- Isolated spawned headless Chromium child processes (`SEC-09`): replaced
+  `HOME`/`TMPDIR` with an ephemeral `0700` temp directory, passed a dedicated
+  `--user-data-dir` deleted on exit, and forwarded only minimal host vars
+  (`PATH` plus OS display/system vars) so neither host secrets nor your real
+  browser profile reach Chrome.
+- Hardened YAML plan inputs and forensics (`SEC-10`): marked `with-cookies`,
+  `with-headers`, `with-body`, and `body` as `json:"-"` so secrets never appear
+  in reports, traces, or the dashboard; redacted sensitive `want-headers` and
+  all raw `want-cookies` values in check failure details; failed non-GET /
+  request-body plan steps capture HTTP-only forensics (skipping bogus GET CDP
+  replay); and `-scouts` falls back to `URLPool` if any plan contains non-GET
+  steps.
+
 ## 1.0.0 — 2026-09-27
 
 The first stable release. Lemmings now behaves like a crowd of real

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>lemmings — {{HIT}}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 9' shape-rendering='crispEdges'%3E%3Cpath fill='%23ff7edb' d='M2 0h3v1h1v1H1V1h1z'/%3E%3Cpath fill='%23ffe3d1' d='M2 2h3v1H2z'/%3E%3Cpath fill='%2336f9f6' d='M1 3h5v3H1z'/%3E%3Cpath fill='%23ffe3d1' d='M0 4h1v1H0zM6 4h1v1H6z'/%3E%3Cpath fill='%23b893ce' d='M1 6h2v2H1zM4 6h2v2H4z'/%3E%3C/svg%3E">
+<!--THEME-->
+<!--STYLE-->
+</head>
+<body>
+<script type="application/json" id="config">{{CONFIG}}</script>
+
+<header class="top">
+  <div class="brand"><h1 class="wordmark">LEMMINGS</h1><span class="ver">v{{VERSION}}</span></div>
+  <div class="target"><span class="label">target</span><a id="target" href="{{HIT}}" rel="noreferrer noopener" target="_blank">{{HIT}}</a></div>
+  <div class="clock">
+    <span id="phase" class="phase" data-phase="connecting">connecting</span>
+    <span id="elapsed">0s</span>
+    <span class="eta" id="eta"></span>
+  </div>
+  <div class="toggles">
+    <button class="toggle" id="fx-toggle" type="button" aria-pressed="true" title="Motion effects (x)">fx</button>
+    <button class="toggle" id="theme-toggle" type="button" title="Light or dark (t)">◐ theme</button>
+  </div>
+</header>
+
+<div id="banner" class="banner" role="status" hidden></div>
+
+<div id="review-bar" class="review-bar" role="region" aria-label="Post-run review mode" hidden>
+  <div>
+    <strong>Review hold active</strong>
+    <span>Swarm complete. Inspect and triage captured error screenshots below, then finalize to write all reports with your verdicts.</span>
+  </div>
+  <button class="btn primary" id="finalize-btn" type="button" data-action="finalize-run">finalize &amp; write report →</button>
+</div>
+
+<section class="kpis" aria-label="Live totals">
+  <div class="kpi pink"><span class="label">alive</span><span class="v" id="alive">—</span><span class="sub" id="alive-sub">&nbsp;</span></div>
+  <div class="kpi green"><span class="label">rescued</span><span class="v" id="rescued">—</span><span class="sub" id="rescued-sub">flawless lives</span></div>
+  <div class="kpi"><span class="label">completed</span><span class="v" id="completed">—</span><span class="sub"><span id="started">0</span> started · <span id="failed">0</span> unborn</span></div>
+  <div class="kpi cyan"><span class="label">visits</span><span class="v" id="visits">—</span><span class="sub" id="rate">0 / s</span></div>
+  <div class="kpi" id="failrate-kpi"><span class="label">failed visits</span><span class="v" id="failrate">—</span><span class="sub" id="failed-visits">0 visits</span></div>
+  <div class="kpi yellow"><span class="label">p95</span><span class="v" id="p95">—</span><span class="sub" id="p50">p50 —</span></div>
+  <div class="kpi" id="assets-kpi"><span class="label">assets</span><span class="v" id="assets-count">—</span><span class="sub" id="assets-sub">off (-assets)</span></div>
+  <div class="kpi"><span class="label">waiting room</span><span class="v" id="wr">—</span><span class="sub" id="wr-sub">never queued</span></div>
+  <div class="kpi" id="bans-kpi"><span class="label">bans / passes</span><span class="v" id="bans-count">0</span><span class="sub" id="bans-sub">0 429 · 0 403</span></div>
+  <div class="kpi" id="scouts-kpi"><span class="label">scouts</span><span class="v" id="scouts-count">0</span><span class="sub" id="scouts-sub">0 alive · 0 fail</span></div>
+  <div class="kpi" id="artifacts-kpi"><span class="label">error artifacts</span><span class="v" id="artifacts-count">0</span><span class="sub" id="artifacts-sub">watching for failures</span></div>
+  <div class="kpi"><span class="label">transferred</span><span class="v" id="bytes">—</span><span class="sub" id="terrains">0 terrains online</span></div>
+</section>
+
+<main class="stage-row">
+  <section class="card scene-card" aria-label="The terrain">
+    <canvas id="scene" role="img" aria-label="Animated view of the lemmings currently alive. Click one to follow its life."></canvas>
+    <span class="scene-title">the terrain</span>
+    <span class="scene-count" id="scene-count"></span>
+    <div class="scene-legend" aria-hidden="true">
+      <span><i class="k2"></i>2xx</span><span><i class="k3"></i>3xx</span>
+      <span><i class="k4"></i>4xx / failed check</span><span><i class="k5"></i>5xx</span>
+      <span><i class="k0"></i>no response</span><span><i class="kq"></i>queued</span>
+    </div>
+  </section>
+
+  <aside class="card inspector" id="inspector" aria-live="polite">
+    <h2>lemming inspector <small id="inspector-hint">click a lemming</small></h2>
+    <div id="inspector-body">
+      <div class="empty">
+        <svg class="pix" viewBox="0 0 8 9" aria-hidden="true" shape-rendering="crispEdges"><path class="h" d="M2 0h3v1h1v1H1V1h1z"/><path class="f" d="M2 2h3v1H2zM0 4h1v1H0zM6 4h1v1H6z"/><path class="b" d="M1 3h5v3H1z"/><path class="l" d="M1 6h2v2H1zM4 6h2v2H4z"/></svg>
+        <p>Every lemming is a visitor with its own cookies, browser and pace.<br>Click one on the terrain to follow its life.</p>
+        <button class="btn" type="button" data-action="follow-random">follow a random lemming</button>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<section class="card plan-section" id="plan-section" aria-label="Plan execution" hidden>
+  <div class="plan-head">
+    <h2>plan execution <small id="plan-meta"></small></h2>
+  </div>
+  <div id="plan-body" class="plan-body"></div>
+</section>
+
+<section class="card forensics-section" aria-label="Live error forensics and screenshots">
+  <div class="forensics-head">
+    <h2>live error forensics &amp; screenshots <small id="forensics-meta">streaming as errors occur</small></h2>
+    <div class="forensics-controls">
+      <div class="filter-pills" id="status-filters" role="group" aria-label="Filter by review status">
+        <button class="pill-btn active" type="button" data-filter-status="all">all</button>
+        <button class="pill-btn" type="button" data-filter-status="unreviewed">unreviewed</button>
+        <button class="pill-btn" type="button" data-filter-status="bug">bugs</button>
+        <button class="pill-btn" type="button" data-filter-status="flaky">flaky</button>
+        <button class="pill-btn" type="button" data-filter-status="expected">expected</button>
+        <button class="pill-btn" type="button" data-filter-status="ignored">ignored</button>
+      </div>
+      <div class="filter-pills" id="kind-filters" role="group" aria-label="Filter by error kind">
+        <button class="pill-btn active" type="button" data-filter-kind="all">any error</button>
+        <button class="pill-btn" type="button" data-filter-kind="5xx">5xx</button>
+        <button class="pill-btn" type="button" data-filter-kind="4xx">4xx</button>
+        <button class="pill-btn" type="button" data-filter-kind="js">js console</button>
+        <button class="pill-btn" type="button" data-filter-kind="check">checks</button>
+      </div>
+      <input type="search" id="artifact-search" class="search-input" placeholder="filter path, error, lemming…" aria-label="Filter error artifacts">
+    </div>
+  </div>
+  <div id="artifact-grid" class="artifact-grid">
+    <div class="artifact-empty">No error artifacts captured yet. When a lemming hits a failure, its screenshot, session state, cookie jar, JS console, and extracted error body stream here live.</div>
+  </div>
+</section>
+
+<section class="charts">
+  <div class="card">
+    <h2>traffic <small id="traffic-note">visits per second</small></h2>
+    <div class="chart-wrap"><canvas class="chart" id="chart-traffic" aria-label="Visits, failures and lemmings alive over time" role="img"></canvas></div>
+    <div class="legend"><span><i class="lg-cyan"></i>visits / s</span><span><i class="lg-red"></i>failures / s</span><span><i class="dash lg-yellow"></i>alive</span><span id="queued-legend" hidden><i class="dash lg-orange"></i>queued</span></div>
+  </div>
+  <div class="card">
+    <h2>latency <small id="latency-note">per completed visit</small></h2>
+    <div class="chart-wrap"><canvas class="chart" id="chart-latency" aria-label="Latency percentiles over time" role="img"></canvas></div>
+    <div class="legend"><span><i class="lg-pink"></i>p95</span><span><i class="lg-cyan"></i>p50</span><span id="budget-legend" hidden><i class="dash lg-red"></i>p95 budget</span></div>
+  </div>
+  <div class="card codes">
+    <h2>responses</h2>
+    <div class="codes-grid">
+      <div class="code-tile s2"><span>2XX</span><b id="XX2">0</b></div>
+      <div class="code-tile s3"><span>3XX</span><b id="XX3">0</b></div>
+      <div class="code-tile s4"><span>4XX</span><b id="XX4">0</b></div>
+      <div class="code-tile s5"><span>5XX</span><b id="XX5">0</b></div>
+    </div>
+    <h2>what went wrong</h2>
+    <ul class="rows" id="causes"><li><span class="none">nothing yet</span></li></ul>
+  </div>
+</section>
+
+<section class="lower">
+  <div class="card">
+    <h2>terrain map <small id="map-note"></small></h2>
+    <div class="terrain-map" id="terrain-map"></div>
+    <div class="map-legend">
+      <span><i class="lg-wait"></i>waiting</span><span><i class="lg-on"></i>online (brighter = busier)</span>
+      <span><i class="lg-hurt"></i>failures</span><span><i class="lg-done"></i>done</span>
+    </div>
+  </div>
+  <div class="card">
+    <h2>busiest paths</h2>
+    <table>
+      <thead><tr><th>path</th><th class="num">hits</th><th class="num">p50</th><th class="num">p95</th><th class="num">failed</th></tr></thead>
+      <tbody id="paths"><tr><td colspan="5" class="muted">waiting for the first visit…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="card feed-card">
+    <h2>happenings <small>click a name or capture</small></h2>
+    <ol class="feed" id="feed"></ol>
+  </div>
+</section>
+
+<footer>
+  <span>lemmings v{{VERSION}} · <span id="plan"></span></span>
+  <span><kbd>f</kbd> follow random · <kbd>←</kbd><kbd>→</kbd> cycle artifacts · <kbd>esc</kbd> close · <kbd>t</kbd> theme · <kbd>x</kbd> effects</span>
+</footer>
+
+<div class="modal" id="artifact-modal" hidden>
+  <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-head">
+      <div class="modal-title-group">
+        <span class="chip s5" id="modal-status">500</span>
+        <h2 id="modal-title">/path</h2>
+        <span class="muted mono" id="modal-sub"></span>
+      </div>
+      <div class="modal-nav">
+        <button class="btn ghost" type="button" data-action="prev-artifact" title="Previous artifact (←)">← prev</button>
+        <button class="btn ghost" type="button" data-action="next-artifact" title="Next artifact (→)">next →</button>
+        <button class="btn ghost" type="button" data-action="close-modal" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+
+    <div class="triage-bar">
+      <div class="triage-buttons" id="triage-buttons" role="group" aria-label="Triage status">
+        <button class="pill-btn" type="button" data-triage="bug">bug</button>
+        <button class="pill-btn" type="button" data-triage="flaky">flaky</button>
+        <button class="pill-btn" type="button" data-triage="expected">expected</button>
+        <button class="pill-btn" type="button" data-triage="ignored">ignored</button>
+        <button class="pill-btn" type="button" data-triage="unreviewed">unreviewed</button>
+      </div>
+      <input type="text" id="triage-note" class="triage-note-input" maxlength="500" placeholder="Add admin review note (included in final report)…" aria-label="Admin triage note">
+      <button class="btn" type="button" data-action="save-triage" id="save-triage-btn">save triage</button>
+      <span class="triage-feedback" id="triage-feedback" role="status"></span>
+    </div>
+
+    <div class="modal-tabs" role="tablist">
+      <button class="tab-btn active" type="button" role="tab" data-tab="screenshot" aria-selected="true">1 · screenshot</button>
+      <button class="tab-btn" type="button" role="tab" data-tab="session" aria-selected="false">2 · session &amp; cookies</button>
+      <button class="tab-btn" type="button" role="tab" data-tab="error" aria-selected="false">3 · error page body</button>
+      <button class="tab-btn" type="button" role="tab" data-tab="console" aria-selected="false">4 · js console</button>
+    </div>
+
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<div class="finale" id="finale" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="finale-title">
+    <div class="over">level complete</div>
+    <h2 id="finale-title">All lemmings accounted for.</h2>
+    <div class="score" id="finale-score">—</div>
+    <p class="caption" id="finale-caption">rescued</p>
+    <dl>
+      <div><dt>visits</dt><dd id="finale-visits">—</dd></div>
+      <div><dt>failed</dt><dd id="finale-failed">—</dd></div>
+      <div><dt>p95</dt><dd id="finale-p95">—</dd></div>
+    </dl>
+    <div class="gates" id="finale-gates"></div>
+    <p class="note">The full report — HTML, Markdown, JSON, and error artifacts — is being written now. Its path is printed in your terminal.</p>
+    <button class="btn" type="button" data-action="close-finale">keep looking</button>
+  </div>
+</div>
+
+<!--SCRIPT-->
+</body>
+</html>

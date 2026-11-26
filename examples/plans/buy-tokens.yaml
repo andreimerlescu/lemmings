@@ -1,0 +1,40 @@
+name: buy-tokens
+plan:
+  - name: arrive
+    path: /
+    want-status: 200
+    want-content-type: text/html
+    want-title: Neon Arcade
+    want-selectors:
+      - nav
+      - .grid
+    want-body:
+      - contains: Insert coin
+
+  - name: browse
+    path: /games
+    want-status: 200
+    want-selectors:
+      - ul
+    want-body:
+      - contains: Outrun Horizon
+
+  - name: pick a game
+    path: /games/outrun
+    want-status: 200
+    want-title: Outrun Horizon
+    want-body:
+      - contains: High score
+
+  - name: checkout
+    path: /checkout
+    want-status: 200
+    want-body:
+      - contains: Tokens are on the way
+
+  - name: tokens
+    path: /tokens
+    want-status: 200
+    want-body:
+      - contains: 10 tokens
+      - not-contains: Something went wrong
