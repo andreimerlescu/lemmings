@@ -169,6 +169,30 @@ func TestRenderData_HybridForensicsPackagingAndSecretRedaction(t *testing.T) {
 	if parsed.Forensics.Artifacts[0].Screenshot == nil || parsed.Forensics.Artifacts[0].Screenshot.RelativePath != wantRel {
 		t.Errorf("JSON screenshot relative path = %+v, want %q", parsed.Forensics.Artifacts[0].Screenshot, wantRel)
 	}
+
+	// SEC-10: verify default remote variants omit inline base64 screenshots and external screenshot links.
+	if strings.Contains(rendered.RemoteHTML, "data:image/jpeg;base64,") {
+		t.Error("SEC-10 violation: RemoteHTML embedded inline screenshot base64 data")
+	}
+	if !strings.Contains(rendered.RemoteHTML, "-include-remote-screenshots") {
+		t.Error("RemoteHTML missing opt-in notice for omitted screenshots")
+	}
+	if strings.Contains(rendered.RemoteMarkdown, wantRel) {
+		t.Errorf("SEC-10 violation: RemoteMarkdown linked external screenshot %q", wantRel)
+	}
+	if !strings.Contains(rendered.RemoteMarkdown, "-include-remote-screenshots") {
+		t.Error("RemoteMarkdown missing opt-in notice for omitted screenshots")
+	}
+	var parsedRemote Data
+	if err := json.Unmarshal(rendered.RemoteJSON, &parsedRemote); err != nil {
+		t.Fatalf("RemoteJSON unmarshal: %v", err)
+	}
+	if len(parsedRemote.Forensics.Artifacts) != 1 || parsedRemote.Forensics.Artifacts[0].Screenshot == nil {
+		t.Fatalf("RemoteJSON missing artifact metadata: %+v", parsedRemote.Forensics)
+	}
+	if parsedRemote.Forensics.Artifacts[0].Screenshot.RelativePath != "" {
+		t.Errorf("RemoteJSON should omit dangling screenshot image_path, got %q", parsedRemote.Forensics.Artifacts[0].Screenshot.RelativePath)
+	}
 }
 
 func TestCompare_RegressionAndFingerprints(t *testing.T) {
@@ -284,6 +308,47 @@ func TestTimeline_CompactionAndAliveCounts(t *testing.T) {
 	}
 	if visits != 1500 {
 		t.Errorf("compaction lost visits: got %d, want 1500", visits)
+	}
+}
+
+func TestTimeline_QueuedDeduplicationAndSVGChart(t *testing.T) {
+	start := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	rep := New(swarm.Config{Hit: "http://127.0.0.1:8080/", Terrain: 1, Pack: 2, Limit: 2, Until: 10 * time.Second})
+	rep.MarkStarted(start)
+
+	bus := events.NewBus()
+	rep.Attach(bus)
+	defer bus.Close()
+
+	// Two lemmings born at t=0s.
+	bus.Emit(events.Event{Kind: events.LemmingBorn, LemmingID: "l1", OccurredAt: start})
+	bus.Emit(events.Event{Kind: events.LemmingBorn, LemmingID: "l2", OccurredAt: start})
+	// l1 enters waiting room at t=1s, gets position update at t=2s (must not double-count), l2 enters at t=2s.
+	bus.Emit(events.Event{Kind: events.WaitingRoomQueued, LemmingID: "l1", Position: 10, OccurredAt: start.Add(1 * time.Second)})
+	bus.Emit(events.Event{Kind: events.WaitingRoomQueued, LemmingID: "l1", Position: 5, OccurredAt: start.Add(2 * time.Second)})
+	bus.Emit(events.Event{Kind: events.WaitingRoomQueued, LemmingID: "l2", Position: 11, OccurredAt: start.Add(2 * time.Second)})
+	// l1 exits waiting room at t=3s; l2 dies while still queued at t=4s (must decrement queued).
+	bus.Emit(events.Event{Kind: events.WaitingRoom, LemmingID: "l1", OccurredAt: start.Add(3 * time.Second)})
+	bus.Emit(events.Event{Kind: events.LemmingDied, LemmingID: "l2", OccurredAt: start.Add(4 * time.Second)})
+	bus.Emit(events.Event{Kind: events.LemmingDied, LemmingID: "l1", OccurredAt: start.Add(4 * time.Second)})
+
+	pts := rep.Result().Timeline
+	if len(pts) < 5 {
+		t.Fatalf("expected at least 5 timeline points, got %d", len(pts))
+	}
+	wantQueued := []int64{0, 1, 2, 1, 0}
+	for i, want := range wantQueued {
+		if pts[i].Queued != want {
+			t.Errorf("t=%ds: Queued = %d, want %d (pts=%+v)", i, pts[i].Queued, want, pts)
+		}
+	}
+
+	svg := string(TimelineSVG(pts))
+	if !strings.Contains(svg, `class="s-queued line dash"`) {
+		t.Errorf("TimelineSVG missing queued series polyline:\n%s", svg)
+	}
+	if !strings.Contains(svg, `alive / queued`) {
+		t.Errorf("TimelineSVG missing right-axis 'alive / queued' label")
 	}
 }
 
@@ -1402,7 +1467,7 @@ func TestRenderData_PlanExecutionFormatsAndSEC10NoSecretLeak(t *testing.T) {
 			LemmingNumber:  1,
 			LemmingID:      "lem-auth-1",
 			LemmingName:    "Arcade Runner",
-			Source:         "http-replay",
+			Source:         "http-swarm",
 			NavigationMode: "plan",
 			PlanName:       "auth-buyer",
 			PlanStep:       "submit-order",

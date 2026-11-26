@@ -50,6 +50,9 @@ var acceptLanguages = []string{
 const (
 	waitingRoomSignature    = `/queue/status`
 	concertWaitingJSMarker  = `/_concert/waiting.js`
+	concertQueueHeader      = `X-Concert-Queue`
+	concertStatusURLHeader  = `X-Concert-Status-Url`
+	concertPositionHeader   = `X-Concert-Position`
 	defaultQueueStatusURL   = `/queue/status`
 	concertAdmitCookieName  = `concert_admit`
 	roomTicketCookieName    = `room_ticket`
@@ -598,7 +601,7 @@ func (l *Lemming) submitForensics(ll *LifeLog, v *Visit, step *plan.PlanItem, bo
 			LemmingNumber:  l.identity.Number,
 			LemmingID:      l.identity.ID,
 			LemmingName:    l.identity.Name,
-			Source:         "http-replay",
+			Source:         "http-swarm",
 			Terrain:        int(l.identity.Terrain),
 			Pack:           int(l.identity.Pack),
 			Persona:        PersonaOf(l.identity.UserAgent),
@@ -1031,14 +1034,14 @@ func (l *Lemming) waitInRoom(
 			visit.Failed = true
 			return reload.body, reload.headers, reload.contentType
 		}
-		if reload.status == http.StatusServiceUnavailable {
-			visit.WaitingRoom.Rejected503 = true
-			return reload.body, reload.headers, reload.contentType
-		}
 		if _, stillQueued := DetectWaitingRoomResponse(reload.status, reload.contentType, reload.headers, reload.body); stillQueued {
 			visit.WaitingRoom.Admitted = false
 			visit.Failed = true
 			visit.Error = errQueueNotAdmitted
+			return reload.body, reload.headers, reload.contentType
+		}
+		if reload.status == http.StatusServiceUnavailable {
+			visit.WaitingRoom.Rejected503 = true
 			return reload.body, reload.headers, reload.contentType
 		}
 		if reload.status == http.StatusTooManyRequests {
@@ -1433,16 +1436,23 @@ func (l *Lemming) pickURL() string {
 	return l.cfg.Hit
 }
 
-// DetectWaitingRoomResponse inspects an HTTP response for all three supported
-// waiting room formats:
-//   - Concert HTML (waiting.html): /_concert/waiting.js + id="position" or
-//     class="queue-page" + id="position" (Mode: "concert-html").
-//   - Legacy HTML (room / Neon Arcade): /queue/status + id="position"
-//     (Mode: "legacy-html").
-//   - Concert -api-json 429 JSON: status 429 with {"queued": true, ...}
-//     (Mode: "concert-json").
+// DetectWaitingRoomResponse inspects an HTTP response for Concert and legacy
+// waiting rooms (served with HTTP 2xx, 429, or 503, while leaving bare and
+// breaker 503s undetected):
+//  1. Explicit Concert header: X-Concert-Queue: 1 (or true), checked first so
+//     copy/markup edits never break detection; honors Retry-After and optional
+//     X-Concert-Status-Url / X-Concert-Position headers or JSON/HTML metadata.
+//  2. Concert -api-json 429/503 JSON: {"queued": true, ...} (Mode: "concert-json").
+//  3. Fallback HTML matching: Concert waiting.html (/_concert/waiting.js,
+//     class="queue-page" + id="position", Set-Cookie room_ticket + waiting
+//     markers, or "Your place is saved" page -> Mode: "concert-html") and
+//     legacy Neon Arcade / room (/queue/status + id="position" -> Mode: "legacy-html").
 func DetectWaitingRoomResponse(status int, contentType string, headers http.Header, body []byte) (WaitingRoomSignal, bool) {
-	if len(body) == 0 {
+	statusAllowed := status == 0 ||
+		(status >= 200 && status < 300) ||
+		status == http.StatusTooManyRequests ||
+		status == http.StatusServiceUnavailable
+	if !statusAllowed {
 		return WaitingRoomSignal{}, false
 	}
 
@@ -1451,49 +1461,37 @@ func DetectWaitingRoomResponse(status int, contentType string, headers http.Head
 		headerRetry = ParseRetryAfter(headers.Get("Retry-After"), time.Now())
 	}
 
-	// (c) Concert -api-json 429 JSON queue response.
-	if status == http.StatusTooManyRequests && isJSONContentTypeOrEmpty(contentType) {
-		trimmed := bytes.TrimSpace(body)
-		if len(trimmed) > 0 && len(trimmed) <= maxQueueStatusBodyBytes && trimmed[0] == '{' {
-			var payload struct {
-				Queued            bool   `json:"queued"`
-				StatusURL         string `json:"status_url"`
-				RetryAfterSeconds int    `json:"retry_after_seconds"`
-				Position          int    `json:"position"`
-			}
-			if err := json.Unmarshal(trimmed, &payload); err == nil && payload.Queued {
-				retryAfter := clampRetryAfterSeconds(payload.RetryAfterSeconds)
-				if retryAfter == 0 {
-					retryAfter = headerRetry
-				}
-				return WaitingRoomSignal{
-					Detected:   true,
-					Mode:       WaitingRoomModeConcertJSON,
-					Position:   max(payload.Position, 0),
-					StatusURL:  sanitizeStatusURL(payload.StatusURL),
-					RetryAfter: retryAfter,
-				}, true
-			}
+	// (1) Explicit Concert queue header takes precedence over body heuristics.
+	if headers != nil {
+		if qv := strings.ToLower(strings.TrimSpace(headers.Get(concertQueueHeader))); qv == "1" || qv == "true" || qv == "yes" {
+			return detectConcertHeaderSignal(contentType, headers, body, headerRetry)
 		}
 	}
 
-	// (a) Concert HTML and (b) Legacy HTML waiting rooms.
-	if status != 0 && (status < 200 || status >= 300) && status != http.StatusTooManyRequests {
+	if len(body) == 0 {
 		return WaitingRoomSignal{}, false
 	}
+
+	// (2) Concert -api-json 429/503 JSON queue response (breaker 503 has queued:false).
+	if (status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable) && isJSONContentTypeOrEmpty(contentType) {
+		if sig, ok := parseConcertJSONSignal(body, headerRetry, false); ok {
+			return sig, true
+		}
+	}
+
+	// (3) Fallback Concert HTML and Legacy HTML waiting rooms.
 	if !isHTMLContentTypeOrEmpty(contentType) {
 		return WaitingRoomSignal{}, false
 	}
 
 	s := string(body)
-	if !hasPositionMarker(s) {
-		return WaitingRoomSignal{}, false
-	}
+	hasPos := hasPositionMarker(s)
 
 	// (a) Concert waiting.html.
 	if strings.Contains(s, concertWaitingJSMarker) ||
-		strings.Contains(s, `class="queue-page"`) ||
-		strings.Contains(s, `class='queue-page'`) {
+		(hasPos && (strings.Contains(s, `class="queue-page"`) || strings.Contains(s, `class='queue-page'`))) ||
+		(hasSetCookie(headers, roomTicketCookieName) && (hasPos || strings.Contains(s, "Your place is saved") || strings.Contains(s, waitingRoomSignature))) ||
+		(strings.Contains(s, "Your place is saved") && (hasPos || strings.Contains(s, "Concert") || strings.Contains(s, "concert."))) {
 		return WaitingRoomSignal{
 			Detected:   true,
 			Mode:       WaitingRoomModeConcertHTML,
@@ -1504,7 +1502,7 @@ func DetectWaitingRoomResponse(status int, contentType string, headers http.Head
 	}
 
 	// (b) Legacy room / Neon Arcade HTML.
-	if strings.Contains(s, waitingRoomSignature) {
+	if hasPos && strings.Contains(s, waitingRoomSignature) {
 		return WaitingRoomSignal{
 			Detected:   true,
 			Mode:       WaitingRoomModeLegacyHTML,
@@ -1515,6 +1513,95 @@ func DetectWaitingRoomResponse(status int, contentType string, headers http.Head
 	}
 
 	return WaitingRoomSignal{}, false
+}
+
+func detectConcertHeaderSignal(contentType string, headers http.Header, body []byte, headerRetry time.Duration) (WaitingRoomSignal, bool) {
+	statusURL := sanitizeStatusURL(headers.Get(concertStatusURLHeader))
+	pos := parseNonNegativeInt(headers.Get(concertPositionHeader))
+
+	if isJSONContentTypeOrEmpty(contentType) && len(bytes.TrimSpace(body)) > 0 && bytes.TrimSpace(body)[0] == '{' {
+		// If the JSON body explicitly says {"queued":false}, treat as not queued (breaker).
+		if isConcertBreaker503(contentType, body) {
+			return WaitingRoomSignal{}, false
+		}
+		if sig, ok := parseConcertJSONSignal(body, headerRetry, true); ok {
+			if sig.StatusURL == defaultQueueStatusURL && statusURL != defaultQueueStatusURL {
+				sig.StatusURL = statusURL
+			}
+			if sig.Position == 0 && pos > 0 {
+				sig.Position = pos
+			}
+			return sig, true
+		}
+	}
+
+	if pos == 0 && len(body) > 0 {
+		pos = extractWaitingRoomPosition(string(body))
+	}
+	return WaitingRoomSignal{
+		Detected:   true,
+		Mode:       WaitingRoomModeConcertHTML,
+		Position:   pos,
+		StatusURL:  statusURL,
+		RetryAfter: headerRetry,
+	}, true
+}
+
+func parseConcertJSONSignal(body []byte, headerRetry time.Duration, allowOmittedQueued bool) (WaitingRoomSignal, bool) {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || len(trimmed) > maxQueueStatusBodyBytes || trimmed[0] != '{' {
+		return WaitingRoomSignal{}, false
+	}
+	var payload struct {
+		Queued            *bool  `json:"queued"`
+		StatusURL         string `json:"status_url"`
+		RetryAfterSeconds int    `json:"retry_after_seconds"`
+		Position          int    `json:"position"`
+	}
+	if err := json.Unmarshal(trimmed, &payload); err != nil {
+		return WaitingRoomSignal{}, false
+	}
+	if payload.Queued != nil && !*payload.Queued {
+		return WaitingRoomSignal{}, false
+	}
+	if payload.Queued == nil && !allowOmittedQueued {
+		return WaitingRoomSignal{}, false
+	}
+	retryAfter := clampRetryAfterSeconds(payload.RetryAfterSeconds)
+	if retryAfter == 0 {
+		retryAfter = headerRetry
+	}
+	return WaitingRoomSignal{
+		Detected:   true,
+		Mode:       WaitingRoomModeConcertJSON,
+		Position:   max(payload.Position, 0),
+		StatusURL:  sanitizeStatusURL(payload.StatusURL),
+		RetryAfter: retryAfter,
+	}, true
+}
+
+func parseNonNegativeInt(raw string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+func hasSetCookie(headers http.Header, name string) bool {
+	if headers == nil || name == "" {
+		return false
+	}
+	if len(headers.Values("Set-Cookie")) == 0 {
+		return false
+	}
+	resp := &http.Response{Header: headers}
+	for _, c := range resp.Cookies() {
+		if c.Name == name && c.Value != "" && c.MaxAge >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // DetectWaitingRoom checks body for Concert waiting.html or legacy waiting room

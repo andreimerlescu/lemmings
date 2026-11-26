@@ -14,12 +14,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// S3Target uploads rendered reports and standalone screenshot assets to Amazon S3.
+// S3Target uploads rendered reports to Amazon S3. By default (SEC-10),
+// screenshots (both inline HTML data URIs and standalone .artifacts/ objects)
+// are omitted unless explicitly enabled via SetIncludeScreenshots(true).
 type S3Target struct {
-	bucket      string
-	prefix      string
-	region      string
-	onDelivered DeliveredFunc
+	bucket             string
+	prefix             string
+	region             string
+	includeScreenshots bool
+	onDelivered        DeliveredFunc
 }
 
 // NewS3Target parses an s3://bucket[/prefix] URI into an S3Target.
@@ -49,6 +52,10 @@ func NewS3Target(uri string, onDelivered DeliveredFunc) (*S3Target, error) {
 	}, nil
 }
 
+// SetIncludeScreenshots controls whether unscrubbed error screenshots (inline
+// HTML images and .artifacts/ objects) are uploaded to S3 (false by default under SEC-10).
+func (t *S3Target) SetIncludeScreenshots(include bool) { t.includeScreenshots = include }
+
 // Name returns the target URI description.
 func (t *S3Target) Name() string {
 	if t.prefix != "" {
@@ -57,19 +64,83 @@ func (t *S3Target) Name() string {
 	return fmt.Sprintf("s3://%s", t.bucket)
 }
 
-// Deliver uploads .md, .html, .json, and any .artifacts/ screenshots to S3.
-func (t *S3Target) Deliver(ctx context.Context, r report.Rendered) error {
+type s3Upload struct {
+	label       string
+	key         string
+	contentType string
+	body        []byte
+	isArtifact  bool
+}
+
+func (t *S3Target) buildUploads(r report.Rendered) ([]s3Upload, error) {
 	if err := validateSafeComponent(r.Filename); err != nil {
-		return fmt.Errorf("s3 target: invalid filename %q: %w", r.Filename, err)
+		return nil, fmt.Errorf("s3 target: invalid filename %q: %w", r.Filename, err)
 	}
 	domain := extractDomain(r.Domain, r.Filename)
 	if err := validateSafeComponent(domain); err != nil {
-		return fmt.Errorf("s3 target: invalid domain %q: %w", domain, err)
+		return nil, fmt.Errorf("s3 target: invalid domain %q: %w", domain, err)
 	}
 	for _, a := range r.Artifacts {
 		if err := validateSafeComponent(a.Filename); err != nil {
-			return fmt.Errorf("s3 target: invalid artifact name %q: %w", a.Filename, err)
+			return nil, fmt.Errorf("s3 target: invalid artifact name %q: %w", a.Filename, err)
 		}
+	}
+
+	mdBody := r.Markdown
+	htmlBody := r.HTML
+	jsonBody := r.JSON
+	if !t.includeScreenshots {
+		if r.RemoteMarkdown != "" {
+			mdBody = r.RemoteMarkdown
+		}
+		if r.RemoteHTML != "" {
+			htmlBody = r.RemoteHTML
+		}
+		if r.RemoteJSON != nil {
+			jsonBody = r.RemoteJSON
+		}
+	}
+
+	var uploads []s3Upload
+	for _, f := range []struct {
+		ext, label, contentType string
+		body                    []byte
+	}{
+		{".md", "md", "text/markdown; charset=utf-8", []byte(mdBody)},
+		{".html", "html", "text/html; charset=utf-8", []byte(htmlBody)},
+		{".json", "json", "application/json", jsonBody},
+	} {
+		if f.body == nil {
+			continue
+		}
+		uploads = append(uploads, s3Upload{
+			label:       f.label,
+			key:         t.objectKey(r.Filename + f.ext),
+			contentType: f.contentType,
+			body:        f.body,
+		})
+	}
+
+	if t.includeScreenshots {
+		for _, a := range r.Artifacts {
+			uploads = append(uploads, s3Upload{
+				label:       a.Filename,
+				key:         t.objectKey(r.Filename + ".artifacts/" + a.Filename),
+				contentType: a.MIMEType,
+				body:        a.Data,
+				isArtifact:  true,
+			})
+		}
+	}
+	return uploads, nil
+}
+
+// Deliver uploads .md, .html, .json (and .artifacts/ screenshots only when
+// SetIncludeScreenshots(true) is set) to S3.
+func (t *S3Target) Deliver(ctx context.Context, r report.Rendered) error {
+	uploads, err := t.buildUploads(r)
+	if err != nil {
+		return err
 	}
 
 	cfg, err := t.loadAWSConfig(ctx)
@@ -81,33 +152,21 @@ func (t *S3Target) Deliver(ctx context.Context, r report.Rendered) error {
 	}
 
 	client := s3.NewFromConfig(cfg)
-	for _, f := range []struct {
-		ext, label, contentType string
-		body                    []byte
-	}{
-		{".md", "md", "text/markdown; charset=utf-8", []byte(r.Markdown)},
-		{".html", "html", "text/html; charset=utf-8", []byte(r.HTML)},
-		{".json", "json", "application/json", r.JSON},
-	} {
-		if f.body == nil {
-			continue
+	uploadedArtifacts := false
+	for _, u := range uploads {
+		if err := t.upload(ctx, client, u.key, u.contentType, u.body); err != nil {
+			if u.isArtifact {
+				return fmt.Errorf("s3 target: upload artifact %s: %w", u.label, err)
+			}
+			return fmt.Errorf("s3 target: upload %s: %w", u.label, err)
 		}
-		key := t.objectKey(r.Filename + f.ext)
-		if err := t.upload(ctx, client, key, f.contentType, f.body); err != nil {
-			return fmt.Errorf("s3 target: upload %s: %w", f.label, err)
-		}
-		if t.onDelivered != nil {
-			t.onDelivered(f.label, fmt.Sprintf("s3://%s/%s", t.bucket, key))
+		if u.isArtifact {
+			uploadedArtifacts = true
+		} else if t.onDelivered != nil {
+			t.onDelivered(u.label, fmt.Sprintf("s3://%s/%s", t.bucket, u.key))
 		}
 	}
-
-	for _, a := range r.Artifacts {
-		key := t.objectKey(r.Filename + ".artifacts/" + a.Filename)
-		if err := t.upload(ctx, client, key, a.MIMEType, a.Data); err != nil {
-			return fmt.Errorf("s3 target: upload artifact %s: %w", a.Filename, err)
-		}
-	}
-	if len(r.Artifacts) > 0 && t.onDelivered != nil {
+	if uploadedArtifacts && t.onDelivered != nil {
 		t.onDelivered("assets", fmt.Sprintf("s3://%s/%s", t.bucket, t.objectKey(r.Filename+".artifacts/")))
 	}
 	return nil

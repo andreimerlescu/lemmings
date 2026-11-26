@@ -23,13 +23,16 @@ import (
 
 const smtpTimeout = 30 * time.Second
 
-// MailTarget delivers the HTML report inline (SMTP-size-budgeted) and Markdown
-// as an attachment via hardened SMTP (TLS 1.2+, validated headers, secrets.Secret).
+// MailTarget delivers the HTML report inline and Markdown as an attachment via
+// hardened SMTP (TLS 1.2+, validated headers, secrets.Secret). By default
+// (SEC-10), screenshots are omitted from emailed reports unless explicitly
+// enabled via SetIncludeScreenshots(true).
 type MailTarget struct {
-	to      []string
-	cc      []string
-	subject string
-	smtpCfg SMTPConfig
+	to                 []string
+	cc                 []string
+	subject            string
+	smtpCfg            SMTPConfig
+	includeScreenshots bool
 }
 
 // NewMailTarget parses an RFC 6068 mailto: URI.
@@ -76,6 +79,10 @@ func NewMailTarget(uri string) (*MailTarget, error) {
 // SetSMTPConfig replaces SMTP settings (primarily for testing and explicit wiring).
 func (t *MailTarget) SetSMTPConfig(cfg SMTPConfig) { t.smtpCfg = cfg }
 
+// SetIncludeScreenshots controls whether unscrubbed error screenshots are
+// included in emailed HTML/Markdown reports (false by default under SEC-10).
+func (t *MailTarget) SetIncludeScreenshots(include bool) { t.includeScreenshots = include }
+
 // SMTPConfig returns the target's SMTP configuration (Pass remains redacted on format/log).
 func (t *MailTarget) SMTPConfig() SMTPConfig { return t.smtpCfg }
 
@@ -84,13 +91,34 @@ func (t *MailTarget) Name() string {
 	return fmt.Sprintf("mailto:%s", strings.Join(t.to, ","))
 }
 
-// Deliver builds the MIME message and sends it over SMTPS (465) or STARTTLS.
-func (t *MailTarget) Deliver(ctx context.Context, r report.Rendered) error {
-	htmlBody := r.HTMLForEmail
+// selectBodies chooses the HTML and Markdown payloads according to
+// includeScreenshots (defaulting to screenshot-free remote variants under SEC-10).
+func (t *MailTarget) selectBodies(r report.Rendered) (mdBody, htmlBody string) {
+	if t.includeScreenshots {
+		htmlBody = r.HTMLForEmail
+		if htmlBody == "" {
+			htmlBody = r.HTML
+		}
+		return r.Markdown, htmlBody
+	}
+	htmlBody = r.RemoteHTML
+	if htmlBody == "" {
+		htmlBody = r.HTMLForEmail
+	}
 	if htmlBody == "" {
 		htmlBody = r.HTML
 	}
-	msg, err := t.buildMessage(r.Filename, r.Markdown, htmlBody)
+	mdBody = r.RemoteMarkdown
+	if mdBody == "" {
+		mdBody = r.Markdown
+	}
+	return mdBody, htmlBody
+}
+
+// Deliver builds the MIME message and sends it over SMTPS (465) or STARTTLS.
+func (t *MailTarget) Deliver(ctx context.Context, r report.Rendered) error {
+	mdBody, htmlBody := t.selectBodies(r)
+	msg, err := t.buildMessage(r.Filename, mdBody, htmlBody)
 	if err != nil {
 		return fmt.Errorf("mail target: build message: %w", err)
 	}

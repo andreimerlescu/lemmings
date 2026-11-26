@@ -104,7 +104,7 @@ type SessionSnapshot struct {
 	LemmingNumber  int64             `json:"lemming_number"`
 	LemmingID      string            `json:"lemming_id"`
 	LemmingName    string            `json:"lemming_name"`
-	Source         string            `json:"source"` // http-replay or browser-scout
+	Source         string            `json:"source"` // http-swarm or browser-scout
 	Terrain        int               `json:"terrain"`
 	Pack           int               `json:"pack"`
 	Persona        string            `json:"persona"`

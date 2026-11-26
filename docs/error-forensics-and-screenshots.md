@@ -10,7 +10,7 @@ Every captured error artifact (`forensics.Artifact`) answers four operational qu
 
 ### 1. Session State, Cookie Jar Status & Lemming Number
 - **Global Lemming Number (`#1..N`)**, unique ID, friendly name (e.g., `Hyper Viper`), terrain/pack slot, browser persona, full User-Agent, and `Accept-Language`.
-- **Plan & Trail Context:** active navigation mode (`links`, `random`, `plan`, `rogue`, `scout`), source (`http-replay` or `browser-scout`), assigned plan name, step, HTTP method & role, visit sequence number, session age, waiting room queue status, `Referer`, and the last 8 visited paths (`RecentTrail`).
+- **Plan & Trail Context:** active navigation mode (`links`, `random`, `plan`, `rogue`, `scout`), source (`http-swarm` or `browser-scout`), assigned plan name, step, HTTP method & role, visit sequence number, session age, waiting room queue status, `Referer`, and the last 8 visited paths (`RecentTrail`).
 - **Cookie Jar Status (`InspectingJar`):** total cookies, active vs. expired counts, overall health (`empty`, `healthy`, `has-expired`), and per-cookie metadata (`Name`, `Domain`, `Path`, `Secure`, `HttpOnly`, `SameSite`, `ExpiresAt`, `SessionOnly`, `ValueBytes`, and a per-run HMAC-SHA256 `Fingerprint` so you can verify whether a cookie changed without ever exposing raw token values).
 
 ### 2. JavaScript Console Output
@@ -18,7 +18,7 @@ Captured via Chrome DevTools Protocol (`Runtime.consoleAPICalled`, `Runtime.exce
 - `console.error`, `console.warn`, `console.log`, and `console.info` entries with source URL, line, and column.
 - Uncaught JavaScript exceptions with stack traces.
 - Failed subresource loads (broken images, failed XHR/fetch scripts, missing CSS).
-- All console text and stack traces are automatically scrubbed via `secrets.ScrubText` before storage.
+- All console text and stack traces pass through best-effort pattern scrubbing (`secrets.ScrubText`) before storage.
 
 ### 3. Visual Screenshot
 - Rendered inside a freshly created **ephemeral incognito Chromium `BrowserContext`** sized to the lemming's viewport (`1280×800` desktop or `390×844` mobile based on User-Agent).
@@ -36,7 +36,7 @@ Even when no browser is available (HTTP-only mode), Lemmings parses up to `512 K
 - **XML (SOAP / S3 style):** leaf `<Code>`/`<FaultCode>`, `<Message>`/`<FaultString>`, and `<RequestId>`/`<TraceId>` elements.
 - **Plain Text:** first headline line, stack trace lines, and bounded body excerpt.
 - **Allowlisted Diagnostic Headers Only:** retains safe headers (`X-Request-Id`, `X-Correlation-Id`, `Traceparent`, `Cf-Ray`, `X-Amz-Request-Id`, `Retry-After`, `Cache-Control`, `Server`, `Via`, `X-Cache`) while explicitly excluding `Set-Cookie`, `Authorization`, and custom auth headers.
-- Every extracted field is scrubbed via `secrets.ScrubText` before leaving memory.
+- Every extracted text field passes through best-effort pattern scrubbing (`secrets.ScrubText`) before leaving memory.
 
 ---
 
@@ -97,11 +97,17 @@ To protect both your workstation and the target server during a failure storm, c
 
 ---
 
-## Cookie & Secret Redaction Guarantees
+## Cookie & Secret Redaction
 
-- **Saved reports (HTML, Markdown, JSON, S3, Email, Trace JSONL) ALWAYS redact cookie values.** Only cookie metadata and ephemeral HMAC fingerprints are persisted.
-- **YAML plan inputs & assertion details (`SEC-10`):** Plan `with-cookies`, `with-headers`, `with-body`, and `body` values are marked `json:"-"` and never serialized into artifacts, reports, traces, or dashboard responses. Failed `want-cookies` checks never include raw cookie values in `CheckResult.Detail`, and failed `want-headers` checks redact sensitive header values.
-- **Authenticated Localhost Portal Opt-In:** If you need to inspect a failing session's exact raw cookie values during live local debugging, start Lemmings with `-reveal-session-cookies`. Even then, raw values are served **only** over the authenticated loopback `/api/artifacts/{id}` endpoint and are **never** written to disk or exported reports.
+Some protections are structural and always hold; others are best-effort pattern matching and cannot guarantee catching every secret:
+
+- **Structural exclusions (always enforced):**
+  - **Saved reports (HTML, Markdown, JSON, S3, Email, Trace JSONL) never persist raw cookie values.** Only cookie metadata and ephemeral HMAC fingerprints are saved.
+  - **YAML plan inputs & assertion details (`SEC-10`):** Plan `with-cookies`, `with-headers`, `with-body`, and `body` values are marked `json:"-"` and never serialized into artifacts, reports, traces, or dashboard responses. Failed `want-cookies` checks never include raw cookie values in `CheckResult.Detail`, and failed `want-headers` checks redact sensitive header values.
+  - **Diagnostic response headers** use an explicit allowlist; `Set-Cookie`, `Authorization`, and custom auth headers are never retained.
+  - **Authenticated Localhost Portal Opt-In:** If you need to inspect a failing session's exact raw cookie values during live local debugging, start Lemmings with `-reveal-session-cookies`. Even then, raw values are served **only** over the authenticated loopback `/api/artifacts/{id}` endpoint and are **never** written to disk or exported reports.
+- **Best-effort text scrubbing (`secrets.ScrubText`):** Extracted error page bodies and JS console entries are passed through regex patterns matching known credential shapes (auth/cookie headers, `Bearer`/`Basic`, 3-part JWTs, AWS `AKIA`/`ASIA`, GitHub `gh*_`, GitLab `glpat-`, Google `AIza`, `sk-`/`xox*-`/`ops_`, PEM private keys, credentialed URLs, and common key names such as `password`, `secret`, `api_key`, `token`, `jwt`, `aws_secret_access_key`, `*_pass`). Pattern matching reduces leaks but **cannot guarantee catching arbitrary, unlabeled, or custom secret formats** echoed by a target server.
+- **Screenshots are NOT scrubbed:** Captured JPEG/PNG images render the exact pixels shown by headless Chromium. If an error page displays a token, stack-trace secret, or sensitive user data on screen, it will be visible in the screenshot. Because of this, **remote report targets (`mailto:` and `s3://`) omit screenshots by default**; screenshots stay in local reports and the localhost Admin Portal unless you explicitly opt in with `-include-remote-screenshots`.
 
 ---
 
@@ -109,7 +115,8 @@ To protect both your workstation and the target server during a failure storm, c
 
 | Destination / Format | Screenshot Handling |
 | --- | --- |
-| **Local / S3 HTML** | Embedded as self-contained inline `data:image/jpeg;base64,...` URIs up to a `12 MiB` budget (overflow artifacts link cleanly to their `.artifacts/` file). |
-| **Email HTML (`mailto:`)** | Uses a dedicated `2 MiB` SMTP-safe inline budget so reports stay deliverable through corporate mail relays. |
-| **Markdown (`.md`)** | Links relative screenshot paths (`./<report-name>.artifacts/<id>.jpg`) written alongside the report on Local and S3 targets, rendering natively on GitHub and Markdown viewers. |
-| **JSON (`.json`)** | Keeps JSON lean and diffable: stores `image_path`, `sha256`, dimensions, byte size, triage status/note, session metadata, console entries, and extracted error body — **zero base64 blobs**. |
+| **Local HTML** | Embedded as self-contained inline `data:image/jpeg;base64,...` URIs up to a `12 MiB` budget (overflow artifacts link cleanly to their `.artifacts/` file). |
+| **Local Markdown (`.md`)** | Links relative screenshot paths (`./<report-name>.artifacts/<id>.jpg`) written alongside the report, rendering natively on GitHub and Markdown viewers. |
+| **Remote S3 (`s3://`)** | **Screenshots omitted by default** (no inline base64 images in `.html`, no `.artifacts/` image uploads, no dangling `image_path`). Pass `-include-remote-screenshots` to upload standalone `.artifacts/` files and inline base64 HTML (up to `12 MiB`). |
+| **Remote Email (`mailto:`)** | **Screenshots omitted by default** (no inline base64 images). Pass `-include-remote-screenshots` to embed screenshots up to a dedicated `2 MiB` SMTP-safe inline budget. |
+| **JSON (`.json`)** | Keeps JSON lean and diffable: stores `image_path` (omitted on remote-default deliveries), `sha256`, dimensions, byte size, triage status/note, session metadata, console entries, and extracted error body — **zero base64 blobs**. |

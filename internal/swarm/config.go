@@ -55,8 +55,9 @@ func DefaultConfig() Config {
 		CapturePerError: 3,
 		CaptureWorkers:  2,
 		CaptureTimeout:  8 * time.Second,
-		CaptureFormat:   CaptureFormatJPEG,
-		AllowRemoteCDP:  false,
+		CaptureFormat:            CaptureFormatJPEG,
+		AllowRemoteCDP:           false,
+		IncludeRemoteScreenshots: false,
 	}
 }
 
@@ -115,10 +116,11 @@ type Config struct {
 	CaptureWorkers       int           `json:"capture_workers"`
 	CaptureTimeout       time.Duration `json:"capture_timeout_ns"`
 	CaptureFormat        string        `json:"capture_format"`
-	ChromeBin            string        `json:"-"`
-	CDPURL               string        `json:"-"`
-	AllowRemoteCDP       bool          `json:"-"`
-	Scouts               int           `json:"scouts"`
+	ChromeBin                string        `json:"-"`
+	CDPURL                   string        `json:"-"`
+	AllowRemoteCDP           bool          `json:"-"`
+	IncludeRemoteScreenshots bool          `json:"-"`
+	Scouts                   int           `json:"scouts"`
 	RevealSessionCookies bool          `json:"-"`
 	ReviewMode           bool          `json:"-"`
 	DryRun               bool          `json:"-"`

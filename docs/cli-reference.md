@@ -11,7 +11,7 @@ lemmings compare [flags] <baseline.json> <candidate.json>
 
 | Flag | Alias | Default | Range / Values | Description |
 | --- | --- | --- | --- | --- |
-| `-hit` | `-h` | `http://localhost:8080/` | `http://` or `https://` | Target origin URL. All crawls, links, redirects, and captures stay strictly on this origin. |
+| `-hit` | `-h` | `http://localhost:8080/` | `http://` or `https://` | Target origin URL. All crawls, links, redirects, and captures stay strictly on this origin. Loopback (`127.0.0.1`, `localhost`, `::1`) and RFC 1918 private IPs are allowed; unspecified (`0.0.0.0`, `::`), link-local/IMDS, and multicast IPs are rejected. |
 | `-terrain` | `-t` | `50` | `1..10000` | Number of terrain goroutine scheduler groups. |
 | `-pack` | `-p` | `50` | `0..100000` | Number of lemmings per terrain (`total = terrain × pack`). |
 | `-limit` | `-l` | `100` | `-1` or `1..1000000` | Semaphore ceiling for concurrent lemmings (`-1` disables cap). |
@@ -56,6 +56,7 @@ lemmings compare [flags] <baseline.json> <candidate.json>
 | `-chrome-bin` | — | `""` | executable path | Explicit path to Chrome/Chromium binary (overrides auto-detection; fails closed if unusable). |
 | `-cdp-url` | — | `""` | `ws://`, `wss://`, `http://`, `https://` | Connect to a Chrome DevTools Protocol endpoint instead of launching local Chrome. Restricted to loopback hosts (`localhost`, `127.0.0.1`, `::1`) unless `-allow-remote-cdp` is set. |
 | `-allow-remote-cdp` | — | `false` | `bool` | Allow non-loopback `-cdp-url` endpoints. Cloud-metadata, link-local, unspecified, and multicast IPs remain unconditionally blocked by `SafeDialContext`. |
+| `-include-remote-screenshots` | — | `false` | `bool` | Include unscrubbed error screenshots in remote reports (`mailto:` and `s3://`). Local reports and the localhost Admin Portal always include screenshots. |
 | `-scouts` | — | `0` | `0..8` | Real-browser Scout lemmings running alongside the HTTP swarm to detect pure JS/render errors on HTTP `200 OK` pages. Walks GET-only `-plan` suites or falls back automatically to the indexed `URLPool` when any plan contains non-GET steps. |
 | `-dashboard-port` | `-dp` | `4000` | `1024..65535` | Loopback (`127.0.0.1`) port for the live Admin Portal. |
 | `-review` | — | `false` | `bool` | Keep the Admin Portal open after the swarm finishes until **Finalize & Write Report** is clicked or Ctrl-C is pressed. |
@@ -88,7 +89,7 @@ lemmings compare [flags] <baseline.json> <candidate.json>
 
 | Flag | Alias | Default | Range / Values | Description |
 | --- | --- | --- | --- | --- |
-| `-observe` | `-obs` | `false` | `bool` | Enable Prometheus `/metrics` HTTP exporter on loopback. |
+| `-observe` | `-obs` | `false` | `bool` | Enable Prometheus `/metrics` HTTP exporter bound strictly to `127.0.0.1` (loopback `Host` header required; use an SSH tunnel or a `Host`-rewriting reverse proxy for remote scraping). |
 | `-metrics-port` | `-mp` | `9090` | `1024..65535` | Loopback port for Prometheus `/metrics`. |
 | `-metrics-url-label` | `-mul` | `path` | `full`, `path`, `none` | URL label granularity on `lemmings_visit_duration_seconds` (capped at 999 unique URLs). |
 | `-tty` | — | `true` | `bool` | Use carriage-return live updates on stdout (`-tty=false` for CI logs). |

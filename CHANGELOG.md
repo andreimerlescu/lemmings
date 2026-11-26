@@ -139,11 +139,27 @@ Portal for triage review, and embeds everything cleanly into final reports.
   `lemmings_queue_polls_total`, `lemmings_bans_total`, and
   `lemmings_scout_visits_total` alongside existing metrics, excluding cancelled
   visits from `lemmings_visits_total{status_class}`.
+- **Native Concert Waiting Room & Traffic Chart Queued Series.** Detects
+  Concert waiting rooms served with HTTP `200`, `429`, or `503` (checking the
+  explicit `X-Concert-Queue: 1` header first, with `Retry-After` and optional
+  `X-Concert-Status-Url` / `X-Concert-Position`, and falling back to JSON/HTML
+  markers) while keeping bare upstream `503`s and Concert capacity-breaker
+  `{"queued":false}` `503`s classified as failures. Added a live `queued`
+  lemmings series (`timeline[].queued`) to both the Admin Portal and HTML
+  report traffic charts whenever waiting-room activity occurs.
+- **JSON Field Rename (`Session.Source`).** Renamed the HTTP-swarm artifact
+  source value in `forensics.artifacts[].session.source` from `"http-replay"`
+  to `"http-swarm"` (distinguishing the originating engine `"http-swarm"` /
+  `"browser-scout"` from the capture mode `"cdp-replay"` / `"cdp-scout"` /
+  `"http-only"`).
 - **Hybrid Forensics Reports & Naming.** Self-contained HTML embeds bounded
-  base64 screenshots (12 MiB cap for local/S3, 2 MiB cap for email); Local and
-  S3 targets also write `.artifacts/<id>.<ext>` files for Markdown relative
-  image links and lean JSON. Added `-unique-report`, `-report-name`, and
-  Markdown table cell (`mdCell`) & adaptive code-fence (`mdFence`) escaping.
+  base64 screenshots on local reports (`12 MiB` cap) and writes
+  `.artifacts/<id>.<ext>` files for Markdown relative image links and lean JSON.
+  Remote delivery targets (`mailto:` and `s3://`) omit unscrubbed screenshots
+  by default unless `-include-remote-screenshots` is passed (`2 MiB` inline cap
+  for email, `12 MiB` cap + `.artifacts/` for S3). Added `-unique-report`,
+  `-report-name`, and Markdown table cell (`mdCell`) & adaptive code-fence
+  (`mdFence`) escaping.
 - **Regression Comparison (`lemmings compare`).** Compare baseline vs candidate
   JSON reports (including `AssetP95DeltaMS` and `QueueHeldDelta`) with
   `-max-failure-delta`, `-max-p95-delta`, `-max-rescued-drop`, new/resolved
@@ -180,11 +196,20 @@ Portal for triage review, and embeds everything cleanly into final reports.
 - **Ctrl-C Drain & CDP Grace Budget.** Detached coordinator `workCtx` via
   `context.WithoutCancel` so post-Ctrl-C drain completes queued captures, and
   reserved `min(2s, timeout/4)` screenshot/DOM grace budget for slow pages.
-- Introduced redacting `secrets.Secret` value type and `secrets.ScrubText`
-  across error excerpts, JS console logs, and reports.
+- **Behavior Change (`SEC-10`):** Screenshots are no longer included in reports
+  sent by email (`mailto:`) or uploaded to S3 (`s3://`) by default because
+  captured screenshots are not scrubbed. Local reports and the localhost Admin
+  Portal still include screenshots by default; pass
+  `-include-remote-screenshots` to opt in for email or S3 delivery.
+- Introduced redacting `secrets.Secret` value type and best-effort regex
+  scrubbing via `secrets.ScrubText` (including `glpat-`, `AIza`, `token`,
+  `jwt`, `aws_secret_access_key`, and `*_pass` patterns) across extracted error
+  excerpts and JS console logs.
 - Hardened `MailTarget` against SMTP header CRLF injection (`SEC-02`) and
   fail-closed TLS (`MinVersion: tls.VersionTLS12`, `-smtp-require-tls`, `SEC-03`).
-- Added loopback `Host`-header guard to Prometheus `/metrics` (`SEC-04`).
+- Bound Prometheus `/metrics` strictly to `127.0.0.1` with a loopback
+  `Host`-header guard (`SEC-04`; use an SSH tunnel or `Host`-rewriting reverse
+  proxy for remote scraping).
 - Replaced raw dashboard token cookies with HMAC-SHA256 signed random session
   cookies, added per-remote-IP (`15/min`, `1024`-IP bounded cap, ignoring
   `X-Forwarded-For`) plus global (`60/min`) auth rate limiting (`429`), and
@@ -196,8 +221,11 @@ Portal for triage review, and embeds everything cleanly into final reports.
 - Bounded sitemap indexing concurrency to a fixed worker pool
   (`indexConcurrency = 8`, `SEC-07`) and joined every dashboard/metrics/CDP
   goroutine cleanly on shutdown (`SEC-08`).
-- Scrubbed spawned headless Chromium child environment to a minimal allowlist
-  so ambient host tokens never reach the browser process (`SEC-09`).
+- Isolated spawned headless Chromium child processes (`SEC-09`): replaced
+  `HOME`/`TMPDIR` with an ephemeral `0700` temp directory, passed a dedicated
+  `--user-data-dir` deleted on exit, and forwarded only minimal host vars
+  (`PATH` plus OS display/system vars) so neither host secrets nor your real
+  browser profile reach Chrome.
 - Hardened YAML plan inputs and forensics (`SEC-10`): marked `with-cookies`,
   `with-headers`, `with-body`, and `body` as `json:"-"` so secrets never appear
   in reports, traces, or the dashboard; redacted sensitive `want-headers` and

@@ -154,14 +154,16 @@ func (s *LatencySeries) Quantile(p float64) time.Duration {
 }
 
 type timeBucket struct {
-	Visits    int64
-	Failed    int64
-	Cancelled int64
-	Status    [6]int64
-	Bytes     int64
-	Born      int64
-	Died      int64
-	Latency   Histogram
+	Visits       int64
+	Failed       int64
+	Cancelled    int64
+	Status       [6]int64
+	Bytes        int64
+	Born         int64
+	Died         int64
+	QueueEntered int64
+	QueueExited  int64
+	Latency      Histogram
 }
 
 // Timeline is an auto-compacting bounded time series.
@@ -198,6 +200,8 @@ func (t *Timeline) compact() {
 		dst.Bytes += src.Bytes
 		dst.Born += src.Born
 		dst.Died += src.Died
+		dst.QueueEntered += src.QueueEntered
+		dst.QueueExited += src.QueueExited
 		for c := range src.Status {
 			dst.Status[c] += src.Status[c]
 		}
@@ -220,6 +224,7 @@ type TimelinePoint struct {
 	NoResponse    int64   `json:"s000"`
 	Bytes         int64   `json:"bytes"`
 	Alive         int64   `json:"alive"`
+	Queued        int64   `json:"queued,omitempty"`
 	RatePerSecond float64 `json:"rps"`
 	P50Millis     float64 `json:"p50_ms"`
 	P95Millis     float64 `json:"p95_ms"`
@@ -228,11 +233,12 @@ type TimelinePoint struct {
 // Points renders the timeline (or the last n points when n > 0).
 func (t *Timeline) Points(n int) []TimelinePoint {
 	out := make([]TimelinePoint, len(t.buckets))
-	var alive int64
+	var alive, queued int64
 	secs := t.width.Seconds()
 	for i := range t.buckets {
 		b := &t.buckets[i]
 		alive += b.Born - b.Died
+		queued += b.QueueEntered - b.QueueExited
 		out[i] = TimelinePoint{
 			OffsetSeconds: float64(i) * secs,
 			Visits:        b.Visits,
@@ -245,6 +251,7 @@ func (t *Timeline) Points(n int) []TimelinePoint {
 			Status5xx:     b.Status[5],
 			Bytes:         b.Bytes,
 			Alive:         max(alive, 0),
+			Queued:        max(queued, 0),
 			RatePerSecond: float64(b.Visits) / secs,
 			P50Millis:     Millis(b.Latency.Quantile(50)),
 			P95Millis:     Millis(b.Latency.Quantile(95)),
