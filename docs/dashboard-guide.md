@@ -67,7 +67,7 @@ Clicking any gallery card opens the 4-panel forensic modal backed by `GET /api/a
 
 ## Admin Triage & Post-Run `-review` Mode
 
-At the top of the Artifact Inspector Modal, click any triage button (`Bug`, `Flaky`, `Expected`, `Ignored`, or `Unreviewed`) and optionally enter a short note (up to 500 characters). Saving sends `POST /api/artifacts/{id}/review`:
+At the top of the Artifact Inspector Modal, click any triage button (`Bug`, `Flaky`, `Expected`, `Ignored`, or `Unreviewed`) and optionally enter a short note (up to 500 characters). Clicking a triage pill auto-saves immediately, and pressing `Enter` (or leaving the note input / clicking **save triage**) saves the note via `POST /api/artifacts/{id}/review`:
 
 - Persists your verdict and note immediately into the forensics `Store`.
 - Broadcasts an `artifact_review` SSE update to all open portal tabs.

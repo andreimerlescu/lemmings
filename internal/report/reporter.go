@@ -537,19 +537,19 @@ type Reporter struct {
 // New constructs a Reporter for cfg.
 func New(cfg swarm.Config) *Reporter {
 	r := &Reporter{
-		cfg:           cfg,
-		byPath:        make(map[string]*pathStats),
-		startedAt:     time.Now(),
-		latency:       LatencySeries{exactCap: exactGlobalSamples},
-		assetLatency:  LatencySeries{exactCap: exactGlobalSamples},
-		assetsByClass: make(map[string]*assetClassStats),
-		personas:      make(map[string]*personaStats),
+		cfg:            cfg,
+		byPath:         make(map[string]*pathStats),
+		startedAt:      time.Now(),
+		latency:        LatencySeries{exactCap: exactGlobalSamples},
+		assetLatency:   LatencySeries{exactCap: exactGlobalSamples},
+		assetsByClass:  make(map[string]*assetClassStats),
+		personas:       make(map[string]*personaStats),
 		timeline:       NewTimeline(),
 		queuedLemmings: make(map[string]struct{}),
-		statusCodes:   make(map[int]int64),
-		errorKinds:    make(map[string]int64),
-		failedChecks:  make(map[string]int64),
-		exitReasons:   make(map[string]int64),
+		statusCodes:    make(map[int]int64),
+		errorKinds:     make(map[string]int64),
+		failedChecks:   make(map[string]int64),
+		exitReasons:    make(map[string]int64),
 	}
 	if cfg.Plan != nil {
 		for _, p := range cfg.Plan.Plans {

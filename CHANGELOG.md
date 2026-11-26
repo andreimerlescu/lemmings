@@ -3,7 +3,7 @@
 All notable changes to lemmings are recorded here. Versions follow
 [Semantic Versioning](https://semver.org).
 
-## 2.0.0 — 2026-11-25
+## 2.0.0 — 2026-11-26
 
 A major architectural, scripting, security, and forensics upgrade: Lemmings is
 now structured into clean Go bounded contexts (`cmd/lemmings` + `internal/*`),
