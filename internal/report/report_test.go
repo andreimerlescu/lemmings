@@ -352,6 +352,138 @@ func TestTimeline_QueuedDeduplicationAndSVGChart(t *testing.T) {
 	}
 }
 
+func TestWaitingRoomGatesAndDiedInLineNotRescued(t *testing.T) {
+	// 1. Vacuous fast-lane run with zero held visits fails -min-queue-held gate.
+	repEmpty := New(swarm.Config{
+		Hit:          "http://127.0.0.1:8080/",
+		Terrain:      1,
+		Pack:         1,
+		Limit:        1,
+		Until:        5 * time.Second,
+		MinQueueHeld: 1,
+	})
+	repEmpty.RecordVisit(&swarm.Visit{URL: "http://127.0.0.1:8080/", StatusCode: 200, Latency: 20 * time.Millisecond})
+	resEmpty := repEmpty.Result()
+	if !resEmpty.GatesFailed() || resEmpty.Verdict != "FAILED" {
+		t.Fatalf("expected -min-queue-held 1 to fail when Room.Held=0, got verdict=%s gates=%+v", resEmpty.Verdict, resEmpty.Gates)
+	}
+
+	// 2. Died-in-line queue-timeout enters failure rate + latency P95, trips -max-queue-wait, and is NOT counted as rescued.
+	repQueue := New(swarm.Config{
+		Hit:          "http://127.0.0.1:8080/",
+		Terrain:      1,
+		Pack:         3,
+		Limit:        3,
+		Until:        5 * time.Second,
+		MinQueueHeld: 2,
+		MaxQueueWait: 2 * time.Second,
+	})
+	// Admitted visitor: fast origin (30ms), short queue wait (500ms).
+	repQueue.RecordVisit(&swarm.Visit{
+		URL: "http://127.0.0.1:8080/", StatusCode: 200, Latency: 30 * time.Millisecond,
+		WaitingRoom: swarm.WaitingRoomMetric{Detected: true, Admitted: true, Duration: 500 * time.Millisecond},
+	})
+	repQueue.Ingest(swarm.LifeLog{Identity: swarm.Identity{Number: 1, ID: "ok"}, Streamed: true, TotalVisits: 1})
+
+	// Starved visitor (queue-timeout): waited 5s, failed with queue-timeout.
+	repQueue.RecordVisit(&swarm.Visit{
+		URL: "http://127.0.0.1:8080/", StatusCode: 503, Failed: true, ErrorKind: "queue-timeout",
+		Error:       errors.New("waiting room wait exceeded lemming lifespan"),
+		Latency:     5 * time.Second,
+		WaitingRoom: swarm.WaitingRoomMetric{Detected: true, Admitted: false, Duration: 5 * time.Second},
+	})
+	repQueue.Ingest(swarm.LifeLog{Identity: swarm.Identity{Number: 2, ID: "starved"}, Streamed: true, TotalVisits: 1, FailedVisits: 1})
+
+	// Cancelled visitor with zero completed visits must NOT count as rescued either.
+	repQueue.Ingest(swarm.LifeLog{Identity: swarm.Identity{Number: 3, ID: "cancelled"}, Streamed: true, TotalVisits: 1, CancelledVisits: 1})
+
+	res := repQueue.Result()
+	if res.FailedVisits != 1 || res.FailureRate != 0.5 {
+		t.Errorf("expected 1 failed visit (50%%), got failed=%d rate=%v", res.FailedVisits, res.FailureRate)
+	}
+	if res.P95 < 4*time.Second {
+		t.Errorf("survivorship bias: expected P95 to reflect 5s queue-timeout visit, got %s", res.P95)
+	}
+	if res.Rescued != 1 || res.Sessions != 3 {
+		t.Errorf("expected only 1 of 3 sessions rescued, got rescued=%d sessions=%d", res.Rescued, res.Sessions)
+	}
+	if res.Room.Held != 2 || res.Room.DiedInLine != 1 {
+		t.Errorf("unexpected room counters: %+v", res.Room)
+	}
+	// min-queue-held (2 >= 2) passes, max-queue-wait (5s > 2s) fails.
+	if len(res.Gates) != 2 || !res.Gates[0].Passed || res.Gates[1].Passed {
+		t.Errorf("unexpected waiting-room gate results: %+v", res.Gates)
+	}
+}
+
+func TestReporter_RoomErrorSplitPersonaQueueAndColdWarmPathTiming(t *testing.T) {
+	rep := New(swarm.Config{
+		Hit:     "http://127.0.0.1:8080/",
+		Terrain: 1,
+		Pack:    4,
+		Limit:   4,
+		Until:   10 * time.Second,
+	})
+
+	// Cold hit on "/" (DNS+Connect+TLS = 140ms, total 180ms) + warm hit on "/" (40ms).
+	rep.RecordVisit(&swarm.Visit{
+		Role: swarm.RolePlan, PlanName: "guest", Step: "home", StepIndex: 1,
+		URL: "http://127.0.0.1:8080/", StatusCode: 200, Latency: 180 * time.Millisecond,
+		Timing:      swarm.RequestTiming{DNS: 10 * time.Millisecond, Connect: 50 * time.Millisecond, TLS: 80 * time.Millisecond, TTFB: 175 * time.Millisecond, Reused: false},
+		WaitingRoom: swarm.WaitingRoomMetric{Detected: true, Admitted: true, Duration: 3 * time.Second},
+	})
+	rep.RecordVisit(&swarm.Visit{
+		Role: swarm.RolePlan, PlanName: "staff", Step: "home", StepIndex: 1,
+		URL: "http://127.0.0.1:8080/", StatusCode: 200, Latency: 40 * time.Millisecond,
+		Timing: swarm.RequestTiming{TTFB: 38 * time.Millisecond, Reused: true},
+	})
+	// Post-queue errors: not-admitted vs reload transport error vs true died-in-line.
+	rep.RecordVisit(&swarm.Visit{
+		Role: swarm.RolePlan, PlanName: "guest", Step: "home", StepIndex: 1,
+		URL: "http://127.0.0.1:8080/", StatusCode: 503, Failed: true, ErrorKind: "queue-not-admitted",
+		Error:       errors.New("not admitted"),
+		WaitingRoom: swarm.WaitingRoomMetric{Detected: true, Duration: 2 * time.Second},
+	})
+	rep.RecordVisit(&swarm.Visit{
+		Role: swarm.RolePlan, PlanName: "guest", Step: "home", StepIndex: 1,
+		URL: "http://127.0.0.1:8080/", StatusCode: 0, Failed: true, ErrorKind: "reset",
+		Error:       errors.New("connection reset"),
+		WaitingRoom: swarm.WaitingRoomMetric{Detected: true, Duration: 1 * time.Second},
+	})
+	rep.RecordVisit(&swarm.Visit{
+		Role: swarm.RolePlan, PlanName: "guest", Step: "home", StepIndex: 1,
+		URL: "http://127.0.0.1:8080/", StatusCode: 503, Failed: true, ErrorKind: "queue-timeout",
+		Error:       errors.New("queue timeout"),
+		Latency:     5 * time.Second,
+		WaitingRoom: swarm.WaitingRoomMetric{Detected: true, Duration: 5 * time.Second},
+	})
+
+	d := rep.Result()
+	if d.Room.Held != 4 || d.Room.Admitted != 1 || d.Room.DiedInLine != 1 || d.Room.NotAdmitted != 1 || d.Room.ReloadErrors != 1 {
+		t.Fatalf("RoomReport split mismatch: %+v", d.Room)
+	}
+	if len(d.Paths) != 1 {
+		t.Fatalf("expected 1 path row, got %d", len(d.Paths))
+	}
+	p := d.Paths[0]
+	if p.ColdHits != 1 || p.SetupP50 < 130*time.Millisecond || p.WarmP50 < 35*time.Millisecond || p.WarmP50 > 45*time.Millisecond || p.TTFBP50 <= 0 {
+		t.Errorf("PathReport cold/warm/TTFB timing mismatch: %+v", p)
+	}
+	if d.Plan == nil || len(d.Plan.Personas) != 2 {
+		t.Fatalf("expected 2 personas in PlanReport, got %+v", d.Plan)
+	}
+	byName := map[string]PersonaReport{}
+	for _, pr := range d.Plan.Personas {
+		byName[pr.Name] = pr
+	}
+	if g := byName["guest"]; g.QueueHeld != 4 || g.QueueAdmitted != 1 || g.QueueDied != 1 || g.QueueP95Wait < 4*time.Second {
+		t.Errorf("guest per-persona queue stats mismatch: %+v", g)
+	}
+	if s := byName["staff"]; s.QueueHeld != 0 || s.QueueAdmitted != 0 || s.QueueDied != 0 {
+		t.Errorf("staff per-persona queue stats should be zero: %+v", s)
+	}
+}
+
 func TestRenderHTML_EscapesUntrustedContent(t *testing.T) {
 	const xss = `<script>alert("xss")</script>`
 	store := forensics.NewStore(10, 3)

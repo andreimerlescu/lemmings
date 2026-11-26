@@ -5,7 +5,10 @@ package version
 import "strings"
 
 // Default is the semantic release version when Build is not overridden at link time.
-const Default = "2.0.0"
+const Default = "2.0.1"
+
+// Codename is the human-friendly release name for the current release line.
+const Codename = "boardy"
 
 // Build can be overridden via -ldflags at build time. It must never hold secrets.
 var Build = ""

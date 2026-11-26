@@ -50,7 +50,7 @@
 | rogue lemmings | {{formatInt .Plan.RogueLemmings}} ({{formatInt .Plan.RogueFlawless}} flawless) |
 | rogue rate     | {{pct .Plan.RogueRate}} |
 {{range .Plan.Personas}}
-### {{mdCell .Name}} (weight {{.Weight}} · {{formatInt .Passed}}/{{formatInt .Lemmings}} passed · {{pct100 .PassRate}})
+### {{mdCell .Name}} (weight {{.Weight}} · {{formatInt .Passed}}/{{formatInt .Lemmings}} passed · {{pct100 .PassRate}}{{if .QueueHeld}} · queued {{formatInt .QueueHeld}} / {{formatInt .QueueAdmitted}} admitted / p95 wait {{round .QueueP95Wait}}{{end}})
 {{if .Steps}}
 | # | step | method | path | hits | passed | failed | p50 | p95 | p99 | top failure |
 |---|------|--------|------|------|--------|--------|-----|-----|-----|-------------|
@@ -169,7 +169,9 @@ Separated from page visit totals and latency.
 |--------|-------|
 | lemmings held    | {{formatInt .Room.Held}} |
 | admitted         | {{formatInt .Room.Admitted}} |
-| died in line     | {{formatInt .Room.DiedInLine}} |
+| died in line     | {{formatInt .Room.DiedInLine}} |{{if .Room.NotAdmitted}}
+| not admitted     | {{formatInt .Room.NotAdmitted}} |{{end}}{{if .Room.ReloadErrors}}
+| reload errors    | {{formatInt .Room.ReloadErrors}} |{{end}}
 | expired          | {{formatInt .Room.Expired}} |
 | denied (403)     | {{formatInt .Room.Denied}} |
 | rejected (503)   | {{formatInt .Room.Rejected503}} |
@@ -213,7 +215,7 @@ Separated from page visit totals and latency.
 | path | hits | bytes | p50 | p95 | p99 | 2xx | 3xx | 4xx | 5xx | failed |
 |------|------|-------|-----|-----|-----|-----|-----|-----|-----|--------|
 {{range .Paths -}}
-| {{mdCell .URL}} | {{formatInt .Hits}} | {{.Bytes}} | {{.P50}} | {{.P95}} | {{.P99}} | {{formatInt .XX2}} | {{formatInt .XX3}} | {{formatInt .XX4}} | {{formatInt .XX5}} | {{formatInt .Failed}} |
+| {{mdCell .URL}} | {{formatInt .Hits}} | {{.Bytes}} | {{.P50}}{{if .ColdHits}} ({{if .WarmP50}}warm {{.WarmP50}}, {{end}}setup {{.SetupP50}}){{end}} | {{.P95}} | {{.P99}} | {{formatInt .XX2}} | {{formatInt .XX3}} | {{formatInt .XX4}} | {{formatInt .XX5}} | {{formatInt .Failed}} |
 {{end}}
 {{- if or .DroppedLogs .TraceDropped .TraceError .Forensics.Stats.DroppedQueue}}
 ## evidence gaps

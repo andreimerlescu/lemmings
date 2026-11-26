@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	htmltemplate "html/template"
 	"math"
@@ -163,6 +164,10 @@ type PathReport struct {
 	P50         time.Duration `json:"p50_ns"`
 	P95         time.Duration `json:"p95_ns"`
 	P99         time.Duration `json:"p99_ns"`
+	ColdHits    int64         `json:"cold_hits,omitempty"`
+	SetupP50    time.Duration `json:"setup_p50_ns,omitempty"`
+	WarmP50     time.Duration `json:"warm_p50_ns,omitempty"`
+	TTFBP50     time.Duration `json:"ttfb_p50_ns,omitempty"`
 	HitShare    float64       `json:"hit_share"`
 }
 
@@ -191,17 +196,19 @@ type AssetClassRow struct {
 
 // RoomReport summarizes waiting room activity and Concert queue outcomes.
 type RoomReport struct {
-	Held        int64         `json:"held"`
-	Admitted    int64         `json:"admitted"`
-	DiedInLine  int64         `json:"died_in_line"`
-	Expired     int64         `json:"expired"`
-	Denied      int64         `json:"denied"`
-	Rejected503 int64         `json:"rejected_503"`
-	TotalPolls  int64         `json:"total_polls"`
-	MaxPosition int           `json:"max_position"`
-	MeanWait    time.Duration `json:"mean_wait_ns"`
-	P95Wait     time.Duration `json:"p95_wait_ns"`
-	LongestWait time.Duration `json:"longest_wait_ns"`
+	Held         int64         `json:"held"`
+	Admitted     int64         `json:"admitted"`
+	DiedInLine   int64         `json:"died_in_line"`
+	NotAdmitted  int64         `json:"not_admitted,omitempty"`
+	ReloadErrors int64         `json:"reload_errors,omitempty"`
+	Expired      int64         `json:"expired"`
+	Denied       int64         `json:"denied"`
+	Rejected503  int64         `json:"rejected_503"`
+	TotalPolls   int64         `json:"total_polls"`
+	MaxPosition  int           `json:"max_position"`
+	MeanWait     time.Duration `json:"mean_wait_ns"`
+	P95Wait      time.Duration `json:"p95_wait_ns"`
+	LongestWait  time.Duration `json:"longest_wait_ns"`
 }
 
 // ConcertReport summarizes Concert admission-pass, room-ticket, and ban telemetry.
@@ -232,14 +239,18 @@ type PlanReport struct {
 
 // PersonaReport summarizes execution metrics for one named Plan persona in a Suite.
 type PersonaReport struct {
-	Name       string           `json:"name"`
-	Weight     int              `json:"weight"`
-	TotalSteps int              `json:"total_steps"`
-	Lemmings   int64            `json:"lemmings"`
-	Passed     int64            `json:"passed"`
-	Failed     int64            `json:"failed"`
-	PassRate   float64          `json:"pass_rate"`
-	Steps      []PlanStepReport `json:"steps,omitempty"`
+	Name          string           `json:"name"`
+	Weight        int              `json:"weight"`
+	TotalSteps    int              `json:"total_steps"`
+	Lemmings      int64            `json:"lemmings"`
+	Passed        int64            `json:"passed"`
+	Failed        int64            `json:"failed"`
+	PassRate      float64          `json:"pass_rate"`
+	QueueHeld     int64            `json:"queue_held,omitempty"`
+	QueueAdmitted int64            `json:"queue_admitted,omitempty"`
+	QueueDied     int64            `json:"queue_died,omitempty"`
+	QueueP95Wait  time.Duration    `json:"queue_p95_wait_ns,omitempty"`
+	Steps         []PlanStepReport `json:"steps,omitempty"`
 }
 
 // PlanStepReport summarizes execution metrics for one ordered step inside a Plan persona.
@@ -348,26 +359,34 @@ type planStepStats struct {
 }
 
 type personaStats struct {
-	Name       string
-	Weight     int
-	TotalSteps int
-	Lemmings   int64
-	Passed     int64
-	Failed     int64
-	Steps      []*planStepStats
+	Name          string
+	Weight        int
+	TotalSteps    int
+	Lemmings      int64
+	Passed        int64
+	Failed        int64
+	queueHeld     int64
+	queueAdmitted int64
+	queueDied     int64
+	queueWait     Histogram
+	Steps         []*planStepStats
 }
 
 type pathStats struct {
-	URL         string
-	Hits        int64
-	Bytes       int64
-	xx2         int64
-	xx3         int64
-	xx4         int64
-	xx5         int64
-	waitingRoom int64
-	errors      int64
-	failed      int64
+	URL          string
+	Hits         int64
+	Bytes        int64
+	xx2          int64
+	xx3          int64
+	xx4          int64
+	xx5          int64
+	waitingRoom  int64
+	errors       int64
+	failed       int64
+	coldHits     int64
+	setupLatency Histogram
+	warmLatency  Histogram
+	ttfb         Histogram
 	LatencySeries
 }
 
@@ -507,6 +526,7 @@ type Reporter struct {
 	failedChecks               map[string]int64
 
 	roomHeld, roomAdmitted, roomDied           int64
+	roomNotAdmitted, roomReloadErrors          int64
 	roomExpired, roomDenied, roomRejected503   int64
 	roomPollEvents, roomVisitPolls             int64
 	roomWait                                   Histogram
@@ -847,6 +867,16 @@ func (r *Reporter) recordVisitLocked(v *swarm.Visit, finished time.Time) {
 		bucket.Status[statusIndex(v.StatusCode)]++
 
 		ps.Add(v.EffectiveLatency())
+		if setup := v.Timing.DNS + v.Timing.Connect + v.Timing.TLS; !v.Timing.Reused && setup > 0 {
+			ps.coldHits++
+			ps.setupLatency.Add(setup)
+		}
+		if v.Timing.Reused {
+			ps.warmLatency.Add(v.EffectiveLatency())
+		}
+		if v.Timing.TTFB > 0 {
+			ps.ttfb.Add(v.Timing.TTFB)
+		}
 		r.latency.Add(v.EffectiveLatency())
 		bucket.Latency.Add(v.EffectiveLatency())
 		if v.Timing.TTFB > 0 {
@@ -910,8 +940,33 @@ func (r *Reporter) recordVisitLocked(v *swarm.Visit, finished time.Time) {
 		if v.WaitingRoom.Denied {
 			r.roomDenied++
 		}
+		diedInLine := false
 		if !v.WaitingRoom.Admitted && !v.WaitingRoom.Expired && !v.WaitingRoom.Denied && !v.WaitingRoom.Rejected503 && (v.Error != nil || v.Cancelled) {
-			r.roomDied++
+			kind := v.ErrorKind
+			if kind == "" && v.Error != nil {
+				kind = swarm.ErrorKind(v.Error)
+			}
+			switch {
+			case kind == "queue-not-admitted":
+				r.roomNotAdmitted++
+			case v.Cancelled || kind == "queue-timeout" || errors.Is(v.Error, context.DeadlineExceeded) || errors.Is(v.Error, context.Canceled):
+				r.roomDied++
+				diedInLine = true
+			default:
+				r.roomReloadErrors++
+			}
+		}
+		if v.Role == swarm.RolePlan && v.PlanName != "" {
+			if persona := r.ensurePersonaLocked(v.PlanName, v.StepIndex); persona != nil {
+				persona.queueHeld++
+				persona.queueWait.Add(v.WaitingRoom.Duration)
+				if v.WaitingRoom.Admitted {
+					persona.queueAdmitted++
+				}
+				if diedInLine {
+					persona.queueDied++
+				}
+			}
 		}
 	}
 }
@@ -1079,7 +1134,8 @@ func (r *Reporter) Ingest(ll swarm.LifeLog) {
 	}
 
 	r.sessions++
-	if ll.FailedVisits == 0 && ll.Error == nil {
+	completedVisits := ll.TotalVisits - ll.CancelledVisits
+	if ll.FailedVisits == 0 && ll.Error == nil && completedVisits > 0 {
 		r.flawless++
 	}
 	switch role {
@@ -1100,7 +1156,7 @@ func (r *Reporter) Ingest(ll swarm.LifeLog) {
 		}
 	case swarm.RoleRogue:
 		r.rogueLemmings++
-		if ll.FailedVisits == 0 && ll.Error == nil {
+		if ll.FailedVisits == 0 && ll.Error == nil && completedVisits > 0 {
 			r.rogueFlawless++
 		}
 	}
@@ -1329,6 +1385,10 @@ func (r *Reporter) buildReportDataLocked() Data {
 			P50:         ps.Quantile(50),
 			P95:         ps.Quantile(95),
 			P99:         ps.Quantile(99),
+			ColdHits:    ps.coldHits,
+			SetupP50:    ps.setupLatency.Quantile(50),
+			WarmP50:     ps.warmLatency.Quantile(50),
+			TTFBP50:     ps.ttfb.Quantile(50),
 		})
 	}
 	sort.Slice(data.Paths, func(i, j int) bool {
@@ -1443,17 +1503,19 @@ func (r *Reporter) buildAssetReportLocked(live bool) AssetReport {
 
 func (r *Reporter) buildRoomReportLocked() RoomReport {
 	return RoomReport{
-		Held:        r.roomHeld,
-		Admitted:    r.roomAdmitted,
-		DiedInLine:  r.roomDied,
-		Expired:     r.roomExpired,
-		Denied:      r.roomDenied,
-		Rejected503: r.roomRejected503,
-		TotalPolls:  max(r.roomPollEvents, r.roomVisitPolls),
-		MaxPosition: r.roomMaxPosition,
-		MeanWait:    r.roomWait.Mean(),
-		P95Wait:     r.roomWait.Quantile(95),
-		LongestWait: r.roomWait.max,
+		Held:         r.roomHeld,
+		Admitted:     r.roomAdmitted,
+		DiedInLine:   r.roomDied,
+		NotAdmitted:  r.roomNotAdmitted,
+		ReloadErrors: r.roomReloadErrors,
+		Expired:      r.roomExpired,
+		Denied:       r.roomDenied,
+		Rejected503:  r.roomRejected503,
+		TotalPolls:   max(r.roomPollEvents, r.roomVisitPolls),
+		MaxPosition:  r.roomMaxPosition,
+		MeanWait:     r.roomWait.Mean(),
+		P95Wait:      r.roomWait.Quantile(95),
+		LongestWait:  r.roomWait.max,
 	}
 }
 
@@ -1500,12 +1562,16 @@ func (r *Reporter) buildPlanReportLocked(live bool) *PlanReport {
 				continue
 			}
 			pRep := PersonaReport{
-				Name:       ps.Name,
-				Weight:     ps.Weight,
-				TotalSteps: ps.TotalSteps,
-				Lemmings:   ps.Lemmings,
-				Passed:     ps.Passed,
-				Failed:     ps.Failed,
+				Name:          ps.Name,
+				Weight:        ps.Weight,
+				TotalSteps:    ps.TotalSteps,
+				Lemmings:      ps.Lemmings,
+				Passed:        ps.Passed,
+				Failed:        ps.Failed,
+				QueueHeld:     ps.queueHeld,
+				QueueAdmitted: ps.queueAdmitted,
+				QueueDied:     ps.queueDied,
+				QueueP95Wait:  ps.queueWait.Quantile(95),
 			}
 			if ps.Lemmings > 0 {
 				pRep.PassRate = 100 * float64(ps.Passed) / float64(ps.Lemmings)
@@ -1580,6 +1646,22 @@ func (r *Reporter) evaluateGates(data Data) ([]GateResult, string) {
 			Limit:    fmt.Sprintf("≥ %.2f%%", r.cfg.MinPlanPassRate*100),
 			Observed: fmt.Sprintf("%.2f%%", obsShare*100),
 			Passed:   data.Plan != nil && data.Plan.PlanLemmings > 0 && obsShare >= r.cfg.MinPlanPassRate,
+		})
+	}
+	if r.cfg.MinQueueHeld > 0 {
+		gates = append(gates, GateResult{
+			Name:     "queue held",
+			Limit:    "≥ " + FormatInt(r.cfg.MinQueueHeld),
+			Observed: FormatInt(data.Room.Held),
+			Passed:   data.Room.Held >= r.cfg.MinQueueHeld,
+		})
+	}
+	if r.cfg.MaxQueueWait > 0 {
+		gates = append(gates, GateResult{
+			Name:     "p95 queue wait",
+			Limit:    "≤ " + r.cfg.MaxQueueWait.String(),
+			Observed: RoundDuration(data.Room.P95Wait).String(),
+			Passed:   data.Room.P95Wait <= r.cfg.MaxQueueWait,
 		})
 	}
 	switch {

@@ -331,19 +331,28 @@ func (s *Swarm) Run(ctx context.Context) error {
 	}()
 
 	// Start optional real-browser Scouts concurrently alongside the HTTP swarm.
+	// When HTTP lemmings are active (Pack > 0), Scouts stay alive across the full
+	// ramp and peak load until all terrains finish, instead of exiting after one
+	// -until window at the start of the ramp.
+	scoutCtx, cancelScouts := context.WithCancel(runCtx)
+	defer cancelScouts()
 	var scoutWg sync.WaitGroup
 	if s.cfg.Scouts > 0 && s.forensics != nil {
 		if cdp, ok := s.forensics.Capturer().(*forensics.CDPCapturer); ok {
+			scoutUntil := time.Duration(0)
+			if s.cfg.Pack == 0 {
+				scoutUntil = s.cfg.Until
+			}
 			scoutWg.Add(1)
 			go func() {
 				defer scoutWg.Done()
-				forensics.RunScouts(runCtx, forensics.ScoutConfig{
+				forensics.RunScouts(scoutCtx, forensics.ScoutConfig{
 					Count:          s.cfg.Scouts,
 					Origin:         s.pool.Origin,
 					Hit:            s.cfg.Hit,
 					URLs:           s.pool.URLs,
 					Plan:           s.cfg.Plan,
-					Until:          s.cfg.Until,
+					Until:          scoutUntil,
 					ThinkMin:       s.cfg.ThinkMin,
 					ThinkMax:       s.cfg.ThinkMax,
 					NextNumber:     s.NextLemmingNumber,
@@ -370,6 +379,9 @@ func (s *Swarm) Run(ctx context.Context) error {
 		}(t)
 	}
 	terrainWg.Wait()
+	if s.cfg.Pack > 0 {
+		cancelScouts()
+	}
 	scoutWg.Wait()
 
 	close(s.primary)

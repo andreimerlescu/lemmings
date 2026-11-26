@@ -1317,7 +1317,7 @@ func TestWaitingRoom_Poll429Backoff403BanEvictionCookiesAndCancel(t *testing.T) 
 		}
 	})
 
-	// 6. Context cancellation exits waiting room promptly.
+	// 6. Explicit context cancellation (e.g. Ctrl-C) exits waiting room as Cancelled=true, Failed=false.
 	t.Run("poll-cancel", func(t *testing.T) {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/page", func(w http.ResponseWriter, _ *http.Request) {
@@ -1331,12 +1331,39 @@ func TestWaitingRoom_Poll429Backoff403BanEvictionCookiesAndCancel(t *testing.T) 
 		srv := httptest.NewServer(mux)
 		defer srv.Close()
 
-		cctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
-		defer cancel()
+		cctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(40*time.Millisecond, cancel)
 		lem := NewLemming(5, 0, 0, Config{Hit: srv.URL + "/page", RequestTimeout: 2 * time.Second}, &discovery.URLPool{Origin: srv.URL}, srv.Client(), nil, nil, nil, nil)
 		v, _, _, _, _ := lem.hit(cctx, srv.URL+"/page", nil)
 		if !v.WaitingRoom.Detected || !v.Cancelled || v.Failed {
 			t.Errorf("cancelled waiting room should set Detected=true Cancelled=true Failed=false, got wr=%+v cancelled=%v failed=%v", v.WaitingRoom, v.Cancelled, v.Failed)
+		}
+	})
+
+	// 7. Lifespan timeout while still queued (DiedInLine) fails as queue-timeout and records wait latency.
+	t.Run("poll-timeout-died-in-line", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/page", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, waitingPage)
+		})
+		mux.HandleFunc("/queue/status", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"ready":false,"waiting":true,"position":99}`)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		tctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+		defer cancel()
+		lem := NewLemming(6, 0, 0, Config{Hit: srv.URL + "/page", RequestTimeout: 2 * time.Second}, &discovery.URLPool{Origin: srv.URL}, srv.Client(), nil, nil, nil, nil)
+		v, _, _, _, _ := lem.hit(tctx, srv.URL+"/page", nil)
+		if !v.WaitingRoom.Detected || v.Cancelled || !v.Failed || v.ErrorKind != "queue-timeout" {
+			t.Errorf("died-in-line timeout should set Detected=true Cancelled=false Failed=true ErrorKind=queue-timeout, got wr=%+v cancelled=%v failed=%v kind=%q",
+				v.WaitingRoom, v.Cancelled, v.Failed, v.ErrorKind)
+		}
+		if v.EffectiveLatency() <= 0 || v.EffectiveLatency() != v.WaitingRoom.Duration {
+			t.Errorf("died-in-line EffectiveLatency (%s) should equal WaitingRoom.Duration (%s)", v.EffectiveLatency(), v.WaitingRoom.Duration)
 		}
 	})
 }
