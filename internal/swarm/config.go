@@ -39,22 +39,22 @@ var validReportSlug = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 // DefaultConfig returns a Config populated with safe default values.
 func DefaultConfig() Config {
 	return Config{
-		Terrain:         1,
-		Pack:            1,
-		Limit:           1,
-		Until:           time.Minute,
-		RampShape:       RampLinear,
-		RequestTimeout:  DefaultRequestTimeout,
-		MaxBodyBytes:    DefaultMaxBodyBytes,
-		Navigation:      plan.NavigationLinks,
-		Assets:          false,
-		AssetsPerPage:   DefaultAssetsPerPage,
-		MaxPlanItems:    plan.DefaultMaxPlanItems,
-		RogueRate:       -1,
-		CaptureMax:      50,
-		CapturePerError: 3,
-		CaptureWorkers:  2,
-		CaptureTimeout:  8 * time.Second,
+		Terrain:                  1,
+		Pack:                     1,
+		Limit:                    1,
+		Until:                    time.Minute,
+		RampShape:                RampLinear,
+		RequestTimeout:           DefaultRequestTimeout,
+		MaxBodyBytes:             DefaultMaxBodyBytes,
+		Navigation:               plan.NavigationLinks,
+		Assets:                   false,
+		AssetsPerPage:            DefaultAssetsPerPage,
+		MaxPlanItems:             plan.DefaultMaxPlanItems,
+		RogueRate:                -1,
+		CaptureMax:               50,
+		CapturePerError:          3,
+		CaptureWorkers:           2,
+		CaptureTimeout:           8 * time.Second,
 		CaptureFormat:            CaptureFormatJPEG,
 		AllowRemoteCDP:           false,
 		IncludeRemoteScreenshots: false,
@@ -110,20 +110,20 @@ type Config struct {
 	TraceFile      string        `json:"-"`
 
 	// Error forensics, CDP screenshots, browser Scouts & Admin Portal review.
-	CaptureEnabled       bool          `json:"capture_enabled"`
-	CaptureMax           int           `json:"capture_max"`
-	CapturePerError      int           `json:"capture_per_error"`
-	CaptureWorkers       int           `json:"capture_workers"`
-	CaptureTimeout       time.Duration `json:"capture_timeout_ns"`
-	CaptureFormat        string        `json:"capture_format"`
+	CaptureEnabled           bool          `json:"capture_enabled"`
+	CaptureMax               int           `json:"capture_max"`
+	CapturePerError          int           `json:"capture_per_error"`
+	CaptureWorkers           int           `json:"capture_workers"`
+	CaptureTimeout           time.Duration `json:"capture_timeout_ns"`
+	CaptureFormat            string        `json:"capture_format"`
 	ChromeBin                string        `json:"-"`
 	CDPURL                   string        `json:"-"`
 	AllowRemoteCDP           bool          `json:"-"`
 	IncludeRemoteScreenshots bool          `json:"-"`
 	Scouts                   int           `json:"scouts"`
-	RevealSessionCookies bool          `json:"-"`
-	ReviewMode           bool          `json:"-"`
-	DryRun               bool          `json:"-"`
+	RevealSessionCookies     bool          `json:"-"`
+	ReviewMode               bool          `json:"-"`
+	DryRun                   bool          `json:"-"`
 
 	// CI gates.
 	FailureGate     bool          `json:"failure_gate"`

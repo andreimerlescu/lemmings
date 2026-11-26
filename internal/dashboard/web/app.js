@@ -757,7 +757,7 @@
         this.activeDetail.review_status = upd.review_status;
         this.activeDetail.review_note = upd.review_note || '';
         this.selectedTriage = upd.review_status;
-        this.syncTriageUI();
+        this.syncTriageUI(true);
       }
       if (upd.stats) this.applyStats(upd.stats);
       this.renderGrid();
@@ -895,29 +895,37 @@
       setText('modal-sub', 'Artifact #' + a.sequence + ' · Lemming #' + fmtInt(a.session.lemming_number) + ' ' + a.session.lemming_name + ' · ' + a.trigger_reason + ' · ' + a.capture_mode);
     },
 
-    syncTriageUI() {
+    syncTriageUI(preserveInput) {
       $('triage-buttons').querySelectorAll('[data-triage]').forEach((b) => {
         b.classList.toggle('active', b.dataset.triage === this.selectedTriage);
       });
-      if (this.activeDetail) $('triage-note').value = this.activeDetail.review_note || '';
+      const noteEl = $('triage-note');
+      if (this.activeDetail && (!preserveInput || document.activeElement !== noteEl)) {
+        noteEl.value = this.activeDetail.review_note || '';
+      }
     },
 
     async saveTriage() {
-      if (!this.activeID) return;
+      const id = this.activeID;
+      if (!id) return;
+      const status = this.selectedTriage;
       const note = $('triage-note').value.trim();
       setText('triage-feedback', 'saving…');
       try {
-        const r = await fetch('/api/artifacts/' + encodeURIComponent(this.activeID) + '/review', {
+        const r = await fetch('/api/artifacts/' + encodeURIComponent(id) + '/review', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: this.selectedTriage, note }),
+          body: JSON.stringify({ status, note }),
         });
-        if (!r.ok) { setText('triage-feedback', 'save failed'); return; }
+        if (!r.ok) {
+          if (this.activeID === id) setText('triage-feedback', 'save failed');
+          return;
+        }
         const upd = await r.json();
         this.onReviewUpdate(upd);
-        setText('triage-feedback', '✓ saved');
+        if (this.activeID === id) setText('triage-feedback', '✓ saved');
       } catch (e) {
-        setText('triage-feedback', 'network error');
+        if (this.activeID === id) setText('triage-feedback', 'network error');
       }
     },
 
@@ -1658,6 +1666,7 @@
     if (triage) {
       forensicsUI.selectedTriage = triage.dataset.triage;
       $('triage-buttons').querySelectorAll('[data-triage]').forEach((b) => b.classList.toggle('active', b === triage));
+      forensicsUI.saveTriage();
       return;
     }
 
@@ -1685,6 +1694,16 @@
   $('artifact-search').addEventListener('input', (e) => {
     forensicsUI.query = e.target.value;
     forensicsUI.renderGrid();
+  });
+
+  $('triage-note').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      forensicsUI.saveTriage();
+    }
+  });
+  $('triage-note').addEventListener('change', () => {
+    forensicsUI.saveTriage();
   });
 
   $('artifact-modal').addEventListener('click', (e) => {
