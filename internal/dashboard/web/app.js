@@ -40,6 +40,14 @@
     if (s >= 500) return 's5';
     return 's0';
   }
+  function methodClass(m) {
+    const up = String(m || 'GET').toUpperCase();
+    if (up === 'GET') return 'm-get';
+    if (up === 'POST') return 'm-post';
+    if (up === 'PUT' || up === 'PATCH') return 'm-put';
+    if (up === 'DELETE') return 'm-delete';
+    return 'm-other';
+  }
   function el(tag, cls, text) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -625,6 +633,8 @@
       frag.append(who);
 
       const badges = el('div', 'badges');
+      if (l.role) badges.append(el('span', 'badge role-' + l.role, l.role));
+      if (l.plan_name) badges.append(el('span', 'badge plan-badge', 'plan: ' + l.plan_name));
       [l.persona, l.language && l.language.split(',')[0]].filter(Boolean).forEach((b) => badges.append(el('span', 'badge', b)));
       frag.append(badges);
 
@@ -637,7 +647,13 @@
 
       if (l.died) {
         const home = l.state === 'home';
-        const why = { lifespan: 'its time ran out', 'page-limit': 'it read enough pages', 'journey-complete': 'it finished the journey', cancelled: 'the run was stopped' }[l.exit] || l.exit || 'it left';
+        const why = {
+          lifespan: 'its time ran out',
+          'page-limit': 'it read enough pages',
+          'plan-complete': 'it completed the plan',
+          'plan-failed': 'it stopped after a plan failure',
+          cancelled: 'the run was stopped',
+        }[l.exit] || l.exit || 'it left';
         frag.append(el('div', 'epitaph ' + (home ? 'home' : 'gone'),
           (home ? '✓ Made it home without a single failed page — ' : '✗ Left with ' + fmtInt(l.failed) + ' failed page' + (l.failed === 1 ? '' : 's') + ' — ') + why + '.'));
       }
@@ -649,7 +665,13 @@
         const li = el('li', (v.f ? 'failed' : '') + (this.shown.has(v.n) ? '' : ' fresh'));
         this.shown.add(v.n);
         li.append(el('span', 'n', '#' + v.n));
-        li.append(el('span', 'path', (v.step ? v.step + ' · ' : '') + v.p));
+        const pathEl = el('span', 'path');
+        if (v.m) {
+          const m = String(v.m).toUpperCase();
+          pathEl.append(el('span', 'method-badge ' + methodClass(m), m));
+        }
+        pathEl.append(document.createTextNode((v.step ? v.step + ' · ' : '') + v.p));
+        li.append(pathEl);
         li.append(el('span', 'chip ' + (v.c ? 's0' : statusClass(v.s)), v.c ? 'cut' : String(v.s || '×')));
         if (v.title) li.append(el('span', 'title', v.title));
         const timing = el('span', 'timing');
@@ -938,13 +960,20 @@
       } else if (this.activeTab === 'session') {
         const s = a.session;
         const tbl = el('table', 'kv-table');
+        const navBits = [
+          s.navigation_mode || '—',
+          s.role ? 'role ' + s.role : '',
+          s.plan_name ? 'plan "' + s.plan_name + '"' : '',
+          s.plan_step ? 'step "' + s.plan_step + '"' : '',
+          s.method ? String(s.method).toUpperCase() : '',
+        ].filter(Boolean);
         const rows = [
           ['Lemming Number', '#' + fmtInt(s.lemming_number)],
           ['Name / ID', s.lemming_name + ' (' + s.lemming_id + ')'],
           ['Origin / Source', 'Terrain ' + s.terrain + ', Pack ' + s.pack + ' · ' + s.source],
           ['Persona', s.persona + ' · ' + s.language],
           ['User-Agent', s.user_agent],
-          ['Navigation', s.navigation_mode + (s.journey_name ? ' · journey "' + s.journey_name + '"' : '') + (s.journey_step ? ' · step "' + s.journey_step + '"' : '')],
+          ['Navigation', navBits.join(' · ')],
           ['Visit Sequence', '#' + s.visit_sequence + ' (total ' + s.total_visits + ', failed ' + s.failed_visits + ', age ' + fmtMs(s.session_age_ms) + ')'],
           ['Waiting Room', s.in_waiting_room ? 'queued at #' + s.queue_position : 'not queued'],
           ['Referrer', s.referrer || '—'],
@@ -1336,10 +1365,12 @@
         setText('wr-sub', 'never queued');
       }
       charts.update(live);
+      renderPlan(live.plan || null);
       renderPaths(live.paths || []);
       renderCauses(live.causes || []);
-    } else if (polls > 0) {
-      setText('wr-sub', fmtInt(polls) + ' polls');
+    } else {
+      renderPlan(null);
+      if (polls > 0) setText('wr-sub', fmtInt(polls) + ' polls');
     }
     renderTerrains(s.terrains || []);
     const droppedQueue = (s.forensics && s.forensics.dropped_queue) || 0;
@@ -1349,6 +1380,92 @@
       if (droppedQueue > 0) dbits.push(fmtInt(droppedQueue) + ' forensic captures');
       showBanner('⚠ DATA DROPPED: ' + dbits.join(' and ') + ' were dropped under backpressure. Aggregate visit totals remain exact.', false);
     }
+  }
+
+  function renderPlan(plan) {
+    const sec = $('plan-section');
+    const body = $('plan-body');
+    if (!sec || !body) return;
+    if (!plan) {
+      sec.hidden = true;
+      return;
+    }
+    sec.hidden = false;
+    const metaBits = [
+      'plan cohort: ' + fmtInt(plan.plan_passed) + ' / ' + fmtInt(plan.plan_lemmings) + ' passed (' +
+        (plan.plan_lemmings ? Number(plan.plan_pass_rate || 0).toFixed(1) + '%' : '—') + ')',
+    ];
+    if (plan.plan_failed > 0) metaBits.push(fmtInt(plan.plan_failed) + ' failed');
+    if (plan.rogue_lemmings > 0 || plan.rogue_rate > 0) {
+      metaBits.push('rogue: ' + fmtInt(plan.rogue_lemmings) + ' (' + fmtInt(plan.rogue_flawless) + ' flawless · ' + (Number(plan.rogue_rate || 0) * 100).toFixed(1) + '%)');
+    }
+    setText('plan-meta', metaBits.join(' · '));
+
+    const personas = plan.personas || [];
+    if (!personas.length) {
+      body.replaceChildren(el('p', 'muted', 'Waiting for plan execution telemetry…'));
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    for (const persona of personas) {
+      const block = el('div', 'plan-persona');
+      const head = el('div', 'plan-persona-head');
+      head.append(el('span', 'plan-persona-name', persona.name));
+      const pBits = [
+        'weight ' + fmtInt(persona.weight || 1),
+        fmtInt(persona.passed) + ' / ' + fmtInt(persona.lemmings) + ' passed (' + (persona.lemmings ? Number(persona.pass_rate || 0).toFixed(1) + '%' : '—') + ')',
+        fmtInt(persona.total_steps || (persona.steps ? persona.steps.length : 0)) + ' steps',
+      ];
+      head.append(el('span', 'plan-persona-meta', pBits.join(' · ')));
+      block.append(head);
+
+      const wrap = el('div', 'plan-table-wrap');
+      const tbl = el('table', 'plan-table');
+      const thead = el('thead');
+      const htr = el('tr');
+      [
+        ['#', 'num'], ['step', ''], ['method', ''], ['path', ''],
+        ['hits', 'num'], ['passed', 'num'], ['failed', 'num'],
+        ['p50', 'num'], ['p95', 'num'], ['top failure', ''],
+      ].forEach(([label, cls]) => htr.append(el('th', cls || null, label)));
+      thead.append(htr);
+      tbl.append(thead);
+
+      const tbody = el('tbody');
+      const steps = persona.steps || [];
+      if (!steps.length) {
+        const tr = el('tr');
+        const td = el('td', 'muted', 'No steps recorded yet.');
+        td.colSpan = 10;
+        tr.append(td);
+        tbody.append(tr);
+      } else {
+        for (const st of steps) {
+          const tr = el('tr');
+          const m = String(st.method || 'GET').toUpperCase();
+          const mTd = el('td');
+          mTd.append(el('span', 'method-badge ' + methodClass(m), m));
+          tr.append(
+            el('td', 'num muted', String(st.index)),
+            el('td', 'step-name', st.name || '—'),
+            mTd,
+            el('td', 'url', st.path || '/'),
+            el('td', 'num', fmtInt(st.hits)),
+            el('td', 'num' + (st.passed ? ' good' : ''), fmtInt(st.passed)),
+            el('td', 'num' + (st.failed ? ' bad' : ''), fmtInt(st.failed)),
+            el('td', 'num', st.hits ? fmtNs(st.p50_ns) : '—'),
+            el('td', 'num', st.hits ? fmtNs(st.p95_ns) : '—'),
+            el('td', st.top_failure ? 'step-fail mono' : 'muted', st.top_failure || '—')
+          );
+          tbody.append(tr);
+        }
+      }
+      tbl.append(tbody);
+      wrap.append(tbl);
+      block.append(wrap);
+      frag.append(block);
+    }
+    body.replaceChildren(frag);
   }
 
   function renderPaths(paths) {
@@ -1429,6 +1546,12 @@
       if (CFG.p95_gate > 0) {
         const ok = live.p95_ns / 1e9 <= CFG.p95_gate;
         gates.append(el('span', 'gate ' + (ok ? 'pass' : 'fail'), (ok ? '✓' : '✗') + ' p95 ≤ ' + fmtMs(CFG.p95_gate * 1000)));
+      }
+      if (CFG.min_plan_pass_gate >= 0 && live.plan) {
+        const obsShare = live.plan.plan_lemmings > 0 ? live.plan.plan_passed / live.plan.plan_lemmings : 0;
+        const ok = live.plan.plan_lemmings > 0 && obsShare >= CFG.min_plan_pass_gate;
+        gates.append(el('span', 'gate ' + (ok ? 'pass' : 'fail'),
+          (ok ? '✓' : '✗') + ' plan pass rate ' + (obsShare * 100).toFixed(2) + '% ≥ ' + (CFG.min_plan_pass_gate * 100).toFixed(2) + '%'));
       }
       $('finale').hidden = false;
       $('finale').querySelector('button').focus();
@@ -1584,8 +1707,12 @@
   });
   window.addEventListener('resize', () => charts.redraw());
 
+  const planLabel = (CFG.plans && CFG.plans.length)
+    ? (CFG.plans.length === 1 ? 'plan “' + CFG.plans[0] + '”' : CFG.plans.length + ' plans (' + CFG.plans.join(', ') + ')') +
+      (CFG.rogue_rate > 0 ? ' · ' + (CFG.rogue_rate * 100).toFixed(1) + '% rogue' : '')
+    : (CFG.navigation || 'links') + ' navigation';
   setText('plan', fmtInt(CFG.terrain) + ' × ' + fmtInt(CFG.pack) + ' lemmings · ' +
-    (CFG.journey ? 'journey “' + CFG.journey + '”' : CFG.navigation + ' navigation') + ' · ramp ' +
+    planLabel + ' · ramp ' +
     (CFG.ramp_shape || 'linear') +
     (CFG.assets ? ' · assets (' + (CFG.assets_per_page || 8) + '/page)' : '') +
     (CFG.scouts ? ' · ' + CFG.scouts + ' browser scouts' : ''));

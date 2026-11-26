@@ -12,9 +12,9 @@ For every target directory or S3 prefix, Lemmings writes:
 
 | File | Description |
 | --- | --- |
-| `<name>.html` | Self-contained Synthwave '84 dark/light interactive report with inline SVG traffic/latency charts, separated Page vs. Asset class tables, enriched Waiting Room / Concert pass & ban metrics, Browser Scout totals, notable lemmings, prominent `DATA DROPPED` integrity warnings when backpressure drops occur, and inline base64 screenshots (capped at `12 MiB` for Local/S3; `2 MiB` for SMTP email). |
-| `<name>.md` | GitHub-friendly Markdown report with ASCII sparklines, `mdCell`-escaped tables, adaptive `mdFence`-escaped error body excerpts, extracted error details, JS console summaries, and relative image links (`./<name>.artifacts/<id>.jpg`) so screenshots render directly in PRs and repositories. |
-| `<name>.json` | Machine-readable report (`schema_version: "2.0"`) for CI pipelines, archival, and `lemmings compare`. Contains exact counters (`lemmings_started`, `lemmings_completed`, `lemmings_not_started`), high-precision percentiles (`exactGlobalSamples = 8192`, `exactPathSamples = 1024`, then `<= 0.5%` 4096-bin `uint64` histogram), `assets`, `waiting_room`, `concert`, `scouts`, gates, and forensics metadata (`image_path`, `sha256`, triage verdicts, console entries, extracted errors) with **zero base64 blobs** and **zero secrets or raw cookie values**. |
+| `<name>.html` | Self-contained Synthwave '84 dark/light interactive report with inline SVG traffic/latency charts, `PlanReport` (plan cohort pass rate, rogue cohort breakdown, and per-persona ordered `PlanStepReport` tables when `-plan` is set), separated Page vs. Asset class tables, enriched Waiting Room / Concert pass & ban metrics, Browser Scout totals, notable lemmings, prominent `DATA DROPPED` integrity warnings when backpressure drops occur, and inline base64 screenshots (capped at `12 MiB` for Local/S3; `2 MiB` for SMTP email). |
+| `<name>.md` | GitHub-friendly Markdown report with ASCII sparklines, `mdCell`-escaped tables (including `PlanReport` persona & ordered step tables), adaptive `mdFence`-escaped error body excerpts, extracted error details, JS console summaries, and relative image links (`./<name>.artifacts/<id>.jpg`) so screenshots render directly in PRs and repositories. |
+| `<name>.json` | Machine-readable report (`schema_version: "2.0"`) for CI pipelines, archival, and `lemmings compare`. Contains exact counters (`lemmings_started`, `lemmings_completed`, `lemmings_not_started`), high-precision percentiles (`exactGlobalSamples = 8192`, `exactPathSamples = 1024`, then `<= 0.5%` 4096-bin `uint64` histogram), `PlanReport` (cohort pass rate, rogue cohort, and per-persona ordered `PlanStepReport` tables), `assets`, `waiting_room`, `concert`, `scouts`, gates, and forensics metadata (`image_path`, `sha256`, triage verdicts, console entries, extracted errors) with **zero base64 blobs** and **zero secrets, plan `with-*`/`body` inputs, or raw cookie values**. |
 | `<name>.artifacts/<id>.jpg` | Standalone compressed screenshot images written beside Local and S3 reports. |
 
 ### Report Naming
@@ -28,7 +28,7 @@ By default, reports are named `lemmings.YYYY.MM.DD.<domain>` under `<save-to>/le
 
 Pass `-trace-file /path/to/visits.jsonl` to stream every individual visit (pages, `-assets` fetches, and browser Scout navigations) as newline-delimited JSON while the swarm runs:
 - Created with `O_CREATE|O_EXCL` and permissions **`0600`** — Lemmings never overwrites an existing trace file.
-- Records `kind` (`"page"`, `"asset"`, `"scout"`), `asset_class`, `queue_polls`, `queue_admitted`, `concert_admit`, `room_ticket`, and `banned` alongside status, latency, and check failure metadata.
+- Records `kind` (`"page"`, `"asset"`, `"scout"`), `asset_class`, `queue_polls`, `queue_admitted`, `concert_admit`, `room_ticket`, and `banned` alongside status, latency, and check failure metadata (never writing plan `with-*` or `body` values).
 - Every URL in the trace is passed through `discovery.SafeURL` (stripping credentials, query strings, and fragments).
 - Any dropped trace entries (`trace_dropped > 0`) trigger a prominent `DATA DROPPED` integrity warning in the CLI summary and reports.
 
@@ -73,12 +73,13 @@ lemmings -hit https://staging.example.com/ \
 
 ## CI Gates
 
-Fail a build automatically (exit code `2`) if reliability or tail latency breaches your SLO:
+Fail a build automatically (exit code `2`) if reliability, plan cohort pass rate, or tail latency breaches your SLO:
 
 ```bash
 lemmings -hit https://staging.example.com/ \
   -terrain 10 -pack 20 -limit 100 -until 60s -ramp 15s \
-  -journey journeys/checkout.json \
+  -plan ./plans/ \
+  -min-plan-pass-rate 0.99 \
   -max-failure-rate 0.01 \
   -p95-budget 750ms \
   -tty=false \
@@ -90,6 +91,7 @@ lemmings -hit https://staging.example.com/ \
 | --- | --- | --- |
 | `-max-failure-rate` (`-mfr`) | `-1` *(disabled)* | Observed `failed_visits / (total_visits - cancelled_visits) <= value` (`0..1`). |
 | `-p95-budget` (`-p95`) | `0` *(disabled)* | Observed global `p95` **page** visit latency `<= duration` (excludes waiting-room wait and `-assets` fetches). |
+| `-min-plan-pass-rate` (`-mppr`) | `-1` *(disabled)* | Observed plan cohort pass share `PlanPassed / PlanLemmings >= value` (`0..1`). Requires `-plan` (rogue lemmings are tracked separately in `PlanReport` and do not affect this ratio). |
 
 ---
 
@@ -150,8 +152,10 @@ jobs:
           lemmings \
             -hit https://staging.example.com/ \
             -cdp-url http://127.0.0.1:9222 \
+            -plan ./plans/ \
             -terrain 6 -pack 15 -limit 60 -until 45s -ramp 10s \
             -scouts 2 \
+            -min-plan-pass-rate 0.99 \
             -max-failure-rate 0.02 \
             -p95-budget 800ms \
             -tty=false \

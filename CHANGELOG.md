@@ -5,11 +5,59 @@ All notable changes to lemmings are recorded here. Versions follow
 
 ## 2.0.0 — 2026-11-25
 
-A major architectural, security, and forensics upgrade: Lemmings is now
-structured into clean Go bounded contexts (`cmd/lemmings` + `internal/*`),
-captures live error screenshots, JS console logs, cookie jar state, and
-extracted error bodies, streams them into the Admin Portal for triage review,
-and embeds everything cleanly into final reports.
+A major architectural, scripting, security, and forensics upgrade: Lemmings is
+now structured into clean Go bounded contexts (`cmd/lemmings` + `internal/*`),
+introduces a unified multi-method YAML `-plan` & multi-persona suite engine
+with deterministic rogue traffic, captures live error screenshots, JS console
+logs, cookie jar state, and extracted error bodies, streams them into the Admin
+Portal for triage review, and embeds everything cleanly into final reports.
+
+### Unified YAML Plans & Multi-Persona Suites
+
+- **Breaking Change:** Removed legacy `-journey` (`-j`), JSON journey files,
+  `internal/journey/`, `examples/journeys/`, and `docs/journeys-and-checks.md`,
+  replacing them with `-plan` (`-pl`), strict YAML plans, `internal/plan/`,
+  `examples/plans/`, and `docs/plans.md`.
+- **Single-plan & multi-persona YAML suites (`-plan` / `-pl`).** Accepts a
+  single YAML file, a directory of `*.yaml`/`*.yml` files (loaded in
+  lexicographic order), or a comma-separated list of files and directories.
+  Decoded with strict `KnownFields(true)` and single-document enforcement,
+  supporting both single-plan (`plan: [...]`) and multi-persona bundle
+  (`plans: [...]`, up to 100 unique plans per suite) formats with
+  `-max-plan-items` / `-mpi` (default `999`, range `1..1000000`, file read cap
+  scaling up to `64 MiB`).
+- **Multi-method stateful execution & request shaping.** Supports `GET`,
+  `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, and `OPTIONS`, jar-seeded
+  `with-cookies` (origin `/` persistence across redirects & steps), per-step
+  `with-headers` (rejecting `Host` and CR/LF/NUL), `with-body` (auto
+  `application/x-www-form-urlencoded`, or JSON object when `Content-Type` is
+  `application/json` / `application/*+json`), raw `body` (default
+  `text/plain; charset=utf-8`), fail-closed `${ENV_VAR}` expansion (`$$` literal
+  escape), per-step `chill` pacing, smart `follow-redirects` (auto-`false` when
+  `want-status` expects exclusively `3xx`), `stop-on-fail` (exit reason
+  `plan-failed`), and `loop`.
+- **Deep response assertions.** Supports `want-status` (int, string, ranges,
+  `2xx`, or YAML list; defaults to `2xx`), case-insensitive multi-value
+  `want-headers` (`is`, `contains`, `not-contains`, `begins-with`, `ends-with`,
+  `is-one`, presence-only, sensitive header redaction), jar-backed
+  `want-cookies` (`value`/`is`, `contains`, `not-contains`, `begins-with`,
+  `ends-with`, `is-one`, `absent: true`, presence-only, zero raw cookie values
+  in details), `want-body`, `want-content-type`, `want-title`, `want-selectors`,
+  and automatic `not-blank` skip on `HEAD`, `204`/`304`, or exclusively
+  non-`2xx` `want-status`.
+- **Deterministic weighting, rogue cohort (`-rogue-rate` / `-rr`) & CI gate
+  (`-min-plan-pass-rate` / `-mppr`).** Assigns non-rogue lemmings (default 95%)
+  deterministically across personas in proportion to `weight`, while a
+  deterministic rogue fraction (`floor(n*rate+1e-9) > floor((n-1)*rate+1e-9)`,
+  auto `0.05` when `-plan` is set) wanders via `-navigation` (`links`/`random`).
+  Adds `PlanReport` (cohort pass rate, rogue cohort, per-persona ordered
+  `PlanStepReport` tables) across CLI, Dashboard, JSON, HTML, and Markdown, plus
+  exit code `2` gating via `-min-plan-pass-rate`.
+- **Bundled examples & AI Agent Skill.** Added `SKILL.md` at repository root
+  (`name: lemmings-plans`), exhaustive `docs/plans.md` with 10 user-type persona
+  blueprints, five Neon Arcade example plans under `examples/plans/`
+  (`neon-arcade-auth.yaml`, `neon-arcade-personas.yaml`, `buy-tokens.yaml`,
+  `forensics-demo.yaml`, `known-bad.yaml`), and `make run-plan`.
 
 ### Live Error Forensics & Screenshots
 
@@ -59,8 +107,8 @@ and embeds everything cleanly into final reports.
   service latency from queue wait duration; never follows `/_concert/*` links
   as origin pages.
 - **Opt-in static asset tier (`-assets`, `-assets-per-page 1..64`).** Pure-stdlib
-  HTML and CSS same-origin asset extractor (`journey.ExtractAssets`,
-  `journey.ExtractCSSAssets`, `FuzzExtractAssets`) honoring `<base href>`,
+  HTML and CSS same-origin asset extractor (`plan.ExtractAssets`,
+  `plan.ExtractCSSAssets`, `FuzzExtractAssets`) honoring `<base href>`,
   per-lemming 2048-entry cache, and `concert_admit` pass enforcement — reported
   in `AssetReport` strictly separate from page visits and `-p95-budget`.
 - **Neon Arcade static assets.** Added `/assets/arcade.css` and
@@ -74,21 +122,23 @@ and embeds everything cleanly into final reports.
   Go Semantic Import Versioning (`go install github.com/andreimerlescu/lemmings/v2/cmd/lemmings@latest`).
 - **DDD Package Refactor.** Flat root `package main` refactored into
   `cmd/lemmings/main.go` and 12 cohesive `internal/*` packages (`version`,
-  `secrets`, `events`, `discovery`, `journey`, `forensics`, `swarm`, `report`,
+  `secrets`, `events`, `discovery`, `plan`, `forensics`, `swarm`, `report`,
   `delivery`, `dashboard`, `metrics`, `cli`).
 - **High-Precision Histograms & Report Schema `"2.0"`.** Tightened latency
   histograms to `<= 0.5%` relative error across 4096 `uint64` bins
   (`histogramGrowth = 1.005`), raised exact sample buffers to
   `exactGlobalSamples = 8192` and `exactPathSamples = 1024`, added
   `schema_version: "2.0"`, separated Page vs. Asset telemetry, enriched
-  `RoomReport`, `ConcertReport`, `ScoutReport`, distinct
+  `PlanReport`, `RoomReport`, `ConcertReport`, `ScoutReport`, distinct
   Started/Completed/Unborn counts, prominent `DATA DROPPED` warnings across CLI,
   dashboard, HTML, and Markdown reports, truncated-body detection
   (`ErrTruncatedBody`), and excluded cancelled visits from HTTP status classes.
-- **22 Prometheus Metrics (`-observe`).** Added `lemmings_assets_total`,
-  `lemmings_asset_duration_seconds`, `lemmings_queue_polls_total`,
-  `lemmings_bans_total`, and `lemmings_scout_visits_total` alongside existing
-  metrics, excluding cancelled visits from `lemmings_visits_total{status_class}`.
+- **24 Prometheus Metrics (`-observe`).** Added `lemmings_plan_lemmings_total`
+  (`outcome="passed|failed"`), `lemmings_rogue_lemmings_total`,
+  `lemmings_assets_total`, `lemmings_asset_duration_seconds`,
+  `lemmings_queue_polls_total`, `lemmings_bans_total`, and
+  `lemmings_scout_visits_total` alongside existing metrics, excluding cancelled
+  visits from `lemmings_visits_total{status_class}`.
 - **Hybrid Forensics Reports & Naming.** Self-contained HTML embeds bounded
   base64 screenshots (12 MiB cap for local/S3, 2 MiB cap for email); Local and
   S3 targets also write `.artifacts/<id>.<ext>` files for Markdown relative
@@ -104,8 +154,10 @@ and embeds everything cleanly into final reports.
   generator (`scripts/generate-sbom.py`), `make vulncheck`, `make sbom`, and
   `make checksums` (`bin/SHA256SUMS`), plus `go mod verify`, `govulncheck`, JS
   syntax checks, and SBOM validation in `.github/workflows/go.yml`.
-- **Documentation Suite.** Complete end-user and security documentation under
-  `docs/` and refreshed `README.md`.
+- **Documentation Suite & Agent Skill.** Complete end-user and security
+  documentation under `docs/` (including `docs/plans.md` with 10 user-type
+  persona blueprints), root-level `SKILL.md` agent runbook, and refreshed
+  `README.md`.
 
 ### Security Hardening (`SEC-01`..`SEC-10`)
 
@@ -146,6 +198,13 @@ and embeds everything cleanly into final reports.
   goroutine cleanly on shutdown (`SEC-08`).
 - Scrubbed spawned headless Chromium child environment to a minimal allowlist
   so ambient host tokens never reach the browser process (`SEC-09`).
+- Hardened YAML plan inputs and forensics (`SEC-10`): marked `with-cookies`,
+  `with-headers`, `with-body`, and `body` as `json:"-"` so secrets never appear
+  in reports, traces, or the dashboard; redacted sensitive `want-headers` and
+  all raw `want-cookies` values in check failure details; failed non-GET /
+  request-body plan steps capture HTTP-only forensics (skipping bogus GET CDP
+  replay); and `-scouts` falls back to `URLPool` if any plan contains non-GET
+  steps.
 
 ## 1.0.0 — 2026-09-27
 

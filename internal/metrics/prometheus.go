@@ -24,7 +24,7 @@ import (
 
 const maxURLLabelCardinality = 999
 
-// PrometheusObserver exposes 22 lemmings_* metrics on a loopback /metrics endpoint.
+// PrometheusObserver exposes 24 lemmings_* metrics on a loopback /metrics endpoint.
 type PrometheusObserver struct {
 	cfg      swarm.Config
 	registry *prometheus.Registry
@@ -64,6 +64,8 @@ type PrometheusObserver struct {
 	queuePolls        prometheus.Counter
 	bans              *prometheus.CounterVec
 	scoutVisits       *prometheus.CounterVec
+	planLemmings      *prometheus.CounterVec
+	rogueLemmings     prometheus.Counter
 }
 
 // NewPrometheusObserver creates a PrometheusObserver backed by an isolated registry.
@@ -178,6 +180,14 @@ func NewPrometheusObserver(cfg swarm.Config) *PrometheusObserver {
 		Name: "lemmings_scout_visits_total",
 		Help: "Total real-browser Scout page navigations by outcome.",
 	}, []string{"outcome"})
+	o.planLemmings = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "lemmings_plan_lemmings_total",
+		Help: "Total plan lemmings completed by outcome.",
+	}, []string{"outcome"})
+	o.rogueLemmings = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "lemmings_rogue_lemmings_total",
+		Help: "Total rogue lemmings completed.",
+	})
 
 	reg.MustRegister(
 		o.alive, o.completed, o.failed, o.visits, o.failedVisits, o.cancelledVisits,
@@ -185,6 +195,7 @@ func NewPrometheusObserver(cfg swarm.Config) *PrometheusObserver {
 		o.terrainsOnline, o.droppedLogs, o.overflowLogs,
 		o.artifactsCaptured, o.artifactsDropped, o.jsConsoleErrors, o.scoutsAlive,
 		o.assets, o.assetDuration, o.queuePolls, o.bans, o.scoutVisits,
+		o.planLemmings, o.rogueLemmings,
 	)
 	return o
 }
@@ -311,6 +322,16 @@ func (o *PrometheusObserver) handleEvent(e events.Event) {
 	case events.LemmingDied:
 		o.alive.Dec()
 		o.completed.Inc()
+		switch e.Role {
+		case swarm.RolePlan:
+			outcome := "failed"
+			if e.PlanPassed {
+				outcome = "passed"
+			}
+			o.planLemmings.With(prometheus.Labels{"outcome": outcome}).Inc()
+		case swarm.RoleRogue:
+			o.rogueLemmings.Inc()
+		}
 	case events.LemmingFailed:
 		o.failed.Inc()
 	case events.VisitComplete, events.VisitError:

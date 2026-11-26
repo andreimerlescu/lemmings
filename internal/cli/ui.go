@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
+	"github.com/andreimerlescu/lemmings/v2/internal/plan"
 	"github.com/andreimerlescu/lemmings/v2/internal/report"
 	"github.com/andreimerlescu/lemmings/v2/internal/swarm"
 	"golang.org/x/term"
@@ -130,6 +131,13 @@ func (u *UI) key(label string) string {
 	return u.paint(toneMuted, fmt.Sprintf("  %-18s", label))
 }
 
+func pluralWord(n int, singular, plural string) string {
+	if n == 1 {
+		return singular
+	}
+	return plural
+}
+
 func (u *UI) printf(format string, args ...any) {
 	_, _ = fmt.Fprintf(u.out, format, args...)
 }
@@ -162,10 +170,34 @@ func (u *UI) PrintBootSummary(cfg swarm.Config, browserStatus string) {
 		limitStr = u.paint(toneRed, "UNLIMITED (⚠ danger zone)")
 	}
 	u.printf("%s%s\n", u.key("limit:"), limitStr)
-	if cfg.Journey != nil {
-		u.printf("%s%s (%d steps)\n", u.key("journey:"), cfg.Journey.Name, len(cfg.Journey.Steps))
+	if cfg.Plan != nil && len(cfg.Plan.Plans) > 0 {
+		if len(cfg.Plan.Plans) == 1 {
+			p := cfg.Plan.Plans[0]
+			u.printf("%s%s (%d %s)\n", u.key("plan:"), p.Name, len(p.Items), pluralWord(len(p.Items), "step", "steps"))
+		} else {
+			names := cfg.Plan.Names()
+			nameSummary := strings.Join(names, ", ")
+			if len(names) > 6 {
+				nameSummary = fmt.Sprintf("%s, +%d more", strings.Join(names[:5], ", "), len(names)-5)
+			}
+			u.printf("%s%d personas (%s; %d total %s)\n",
+				u.key("plan:"),
+				len(cfg.Plan.Plans),
+				nameSummary,
+				cfg.Plan.TotalSteps,
+				pluralWord(cfg.Plan.TotalSteps, "step", "steps"),
+			)
+		}
+		rogueRate := cfg.RogueRate
+		if rogueRate < 0 {
+			rogueRate = 0.05
+		}
+		u.printf("%s%.1f%% rogue · %.1f%% plan\n", u.key("rogue rate:"), rogueRate*100, (1-rogueRate)*100)
 	} else {
 		u.printf("%s%s\n", u.key("navigation:"), cfg.Navigation)
+	}
+	if cfg.MaxPlanItems > 0 && cfg.MaxPlanItems != plan.DefaultMaxPlanItems {
+		u.printf("%s%s\n", u.key("max plan items:"), report.FormatInt(int64(cfg.MaxPlanItems)))
 	}
 	u.printf("%s%s – %s between pages\n", u.key("think:"), cfg.ThinkMin, cfg.ThinkMax)
 	if cfg.MaxPages > 0 {
@@ -212,6 +244,9 @@ func (u *UI) PrintBootSummary(cfg swarm.Config, browserStatus string) {
 	}
 	if cfg.P95Budget > 0 {
 		gates = append(gates, "p95 ≤ "+cfg.P95Budget.String())
+	}
+	if cfg.PlanPassGate {
+		gates = append(gates, fmt.Sprintf("plan pass rate ≥ %.2f%%", cfg.MinPlanPassRate*100))
 	}
 	if len(gates) > 0 {
 		u.printf("%s%s\n", u.key("gates:"), strings.Join(gates, ", "))
@@ -288,11 +323,31 @@ func (u *UI) PrintDryRun(cfg swarm.Config, pool *discovery.URLPool, browserStatu
 	if len(pool.URLs) > limit {
 		u.printf("    ... and %d more URLs\n", len(pool.URLs)-limit)
 	}
-	if cfg.Journey != nil {
-		u.println()
-		u.printf("%s%s (%d steps)\n", u.key("journey:"), cfg.Journey.Name, len(cfg.Journey.Steps))
-		for i, st := range cfg.Journey.Steps {
-			u.printf("    %2d. %-18s %s\n", i+1, st.Name, st.Path)
+	if cfg.Plan != nil && len(cfg.Plan.Plans) > 0 {
+		for _, p := range cfg.Plan.Plans {
+			u.println()
+			u.printf("%s%s (weight %d, %d %s, stop-on-fail=%v, loop=%v)\n",
+				u.key("plan:"),
+				u.bold(p.Name),
+				p.Weight,
+				len(p.Items),
+				pluralWord(len(p.Items), "step", "steps"),
+				p.StopOnFail,
+				p.Loop,
+			)
+			for i, st := range p.Items {
+				chillStr := ""
+				if st.Chill != nil {
+					chillStr = "  " + u.paint(toneMuted, fmt.Sprintf("(chill %s)", *st.Chill))
+				}
+				u.printf("    %2d. %s %-28s %s%s\n",
+					i+1,
+					u.paint(toneCyan, fmt.Sprintf("%-7s", st.EffectiveMethod())),
+					discovery.SafeURL(st.Path),
+					st.Name,
+					chillStr,
+				)
+			}
 		}
 	}
 	u.println()
@@ -471,6 +526,60 @@ func (u *UI) PrintFinalSummary(cfg swarm.Config, startedAt time.Time, m *swarm.M
 	u.printf("%s%s\n", u.key("5xx:"), u.paint(toneRed, report.FormatInt(d.Total5xx)))
 	u.println()
 	u.printf("%sp50 %s · p95 %s · p99 %s\n", u.key("page latency:"), report.FormatMillis(d.P50), report.FormatMillis(d.P95), report.FormatMillis(d.P99))
+
+	if d.Plan != nil {
+		u.println()
+		passTone := toneGreen
+		if d.Plan.PlanFailed > 0 {
+			if d.Plan.PlanPassed == 0 {
+				passTone = toneRed
+			} else {
+				passTone = toneYellow
+			}
+		}
+		u.printf("%s%s/%s (%s) · rogue: %s (%s flawless)\n",
+			u.key("plan cohort:"),
+			u.paint(passTone, report.FormatInt(d.Plan.PlanPassed)),
+			report.FormatInt(d.Plan.PlanLemmings),
+			u.paint(passTone, fmt.Sprintf("%.1f%%", d.Plan.PlanPassRate)),
+			report.FormatInt(d.Plan.RogueLemmings),
+			report.FormatInt(d.Plan.RogueFlawless),
+		)
+		for _, p := range d.Plan.Personas {
+			pTone := toneGreen
+			if p.Failed > 0 {
+				if p.Passed == 0 {
+					pTone = toneRed
+				} else {
+					pTone = toneYellow
+				}
+			}
+			line := fmt.Sprintf("    • %-20s %s/%s passed (%s)",
+				p.Name,
+				u.paint(pTone, report.FormatInt(p.Passed)),
+				report.FormatInt(p.Lemmings),
+				u.paint(pTone, fmt.Sprintf("%.1f%%", p.PassRate)),
+			)
+			if p.Failed > 0 {
+				line += fmt.Sprintf(" · %s failed", u.paint(toneRed, report.FormatInt(p.Failed)))
+			}
+			var worst *report.PlanStepReport
+			for i := range p.Steps {
+				st := &p.Steps[i]
+				if st.Failed > 0 && (worst == nil || st.Failed > worst.Failed) {
+					worst = st
+				}
+			}
+			if worst != nil {
+				detail := fmt.Sprintf("#%d %s", worst.Index, worst.Name)
+				if worst.TopFailure != "" {
+					detail += ": " + worst.TopFailure
+				}
+				line += fmt.Sprintf("  [top failure: %s]", u.paint(toneRed, detail))
+			}
+			u.println(line)
+		}
+	}
 
 	if d.Assets.Requests > 0 || cfg.Assets {
 		u.println()

@@ -17,8 +17,10 @@ import (
 	"flag"
 	"fmt"
 	"html"
+	"io"
 	"log"
 	"math/rand/v2"
+	"mime"
 	"net/http"
 	"os"
 	"os/signal"
@@ -210,10 +212,73 @@ window.arcadeCabinet.insertCoin();
 		http.Redirect(w, r, "/games", http.StatusMovedPermanently)
 	})
 	mux.HandleFunc("GET /about", func(w http.ResponseWriter, r *http.Request) {
-		a.page(w, r, "About", `<h1>About</h1><p>Neon Arcade is a demo target for lemmings. Nothing here is real, including the high scores.</p><p><a href="/old-arcade">The old arcade</a> · <a href="/blank">The back room</a> · <a href="/arcade-glitch">CRT Diagnostics</a> · <a href="/api/tokens">Token API</a> · <a href="/logout">Log out</a></p>`)
+		a.page(w, r, "About", `<h1>About</h1><p>Neon Arcade is a demo target for lemmings. Nothing here is real, including the high scores.</p><p><a href="/old-arcade">The old arcade</a> · <a href="/blank">The back room</a> · <a href="/arcade-glitch">CRT Diagnostics</a> · <a href="/api/tokens">Token API</a> · <a href="/login">Sign in</a> · <a href="/profile">Profile</a> · <a href="/logout">Log out</a></p>`)
+	})
+	mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) {
+		a.page(w, r, "Sign in", `<h1>Sign in</h1><p class="lead">Enter your arcade handle and password.</p><form method="post" action="/login"><p><label>Username <input type="text" name="username" autocomplete="username"></label></p><p><label>Password <input type="password" name="password" autocomplete="current-password"></label></p><p><button type="submit">Insert Coin &amp; Sign In</button></p></form>`)
+	})
+	mux.HandleFunc("POST /login", func(w http.ResponseWriter, r *http.Request) {
+		var username, password string
+		mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if strings.EqualFold(mediaType, "application/json") || strings.HasSuffix(strings.ToLower(mediaType), "+json") {
+			var payload struct {
+				Username string `json:"username"`
+				Password string `json:"password"`
+			}
+			if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&payload); err != nil {
+				w.WriteHeader(http.StatusUnauthorized)
+				a.page(w, r, "Unauthorized", `<div class="errbox"><h1>401 — Sign in failed</h1><p>Invalid login payload.</p></div>`)
+				return
+			}
+			username, password = payload.Username, payload.Password
+		} else {
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+			if err := r.ParseForm(); err != nil {
+				w.WriteHeader(http.StatusUnauthorized)
+				a.page(w, r, "Unauthorized", `<div class="errbox"><h1>401 — Sign in failed</h1><p>Invalid form payload.</p></div>`)
+				return
+			}
+			username = r.FormValue("username")
+			password = r.FormValue("password")
+		}
+		username = strings.TrimSpace(username)
+		if username == "" || password == "" || strings.ContainsAny(username, "\r\n\x00;") {
+			w.WriteHeader(http.StatusUnauthorized)
+			a.page(w, r, "Unauthorized", `<div class="errbox"><h1>401 — Sign in failed</h1><p>Username and password are required.</p></div>`)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     "cookiejar_identity",
+			Value:    "user-" + username,
+			Path:     "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
+		http.SetCookie(w, &http.Cookie{
+			Name:     "member_logged_in",
+			Value:    "1",
+			Path:     "/",
+			SameSite: http.SameSiteLaxMode,
+		})
+		w.Header().Set("X-Arcade-Session", "arcade-"+username)
+		a.page(w, r, "Welcome", fmt.Sprintf(`<h1>Welcome %s!</h1><p class="lead">You are signed in to Neon Arcade.</p><p><a href="/profile">View profile</a> · <a href="/tokens">Tokens</a> · <a href="/logout">Log out</a></p>`, html.EscapeString(username)))
+	})
+	mux.HandleFunc("GET /profile", func(w http.ResponseWriter, r *http.Request) {
+		loggedIn, errLogged := r.Cookie("member_logged_in")
+		identity, errID := r.Cookie("cookiejar_identity")
+		if errLogged == nil && loggedIn.Value == "1" && errID == nil && strings.HasPrefix(identity.Value, "user-") {
+			user := strings.TrimPrefix(identity.Value, "user-")
+			if user != "" {
+				a.page(w, r, "Profile", fmt.Sprintf(`<h1>Welcome %s!</h1><p class="lead">Arcade member profile.</p><p><a href="/tokens">Tokens</a> · <a href="/logout">Log out</a></p>`, html.EscapeString(user)))
+				return
+			}
+		}
+		a.page(w, r, "Profile", `<h1>Profile</h1><p>You must be signed in to perform this action.</p><p><a href="/login">Sign in</a></p>`)
 	})
 	mux.HandleFunc("GET /logout", func(w http.ResponseWriter, r *http.Request) {
-		http.SetCookie(w, &http.Cookie{Name: "player", Value: "", Path: "/", MaxAge: -1})
+		for _, name := range []string{"player", "cookiejar_identity", "member_logged_in"} {
+			http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1})
+		}
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
 	mux.HandleFunc("GET /assets/arcade.css", func(w http.ResponseWriter, _ *http.Request) {
@@ -291,7 +356,7 @@ main{max-width:860px;margin:0 auto;padding:36px 28px}h1{font-style:italic;letter
 a{color:#fede5d}.lead{color:#b893ce}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
 .tile{display:block;padding:16px;border:1px solid #36f9f666;border-radius:12px;text-decoration:none;color:#f7f1ff}.tile b{display:block;color:#36f9f6}
 .errbox{padding:20px 24px;border:1px solid #fe4450aa;border-radius:12px;background:#3a1426cc}
-</style></head><body><nav><img class="arcade-logo" src="/assets/logo.svg" alt="Neon Arcade" width="24" height="24"><a href="/">Neon Arcade</a><a href="/games">Games</a><a href="/scores">Leaderboard</a><a href="/tokens">Tokens</a><a href="/checkout">Checkout</a><a href="/arcade-glitch">Diagnostics</a><a href="/about">About</a></nav>
+</style></head><body><nav><img class="arcade-logo" src="/assets/logo.svg" alt="Neon Arcade" width="24" height="24"><a href="/">Neon Arcade</a><a href="/games">Games</a><a href="/scores">Leaderboard</a><a href="/tokens">Tokens</a><a href="/checkout">Checkout</a><a href="/arcade-glitch">Diagnostics</a><a href="/login">Sign in</a><a href="/profile">Profile</a><a href="/about">About</a></nav>
 <main>%s</main></body></html>`
 
 const arcadeCSS = `/* Neon Arcade Synthwave static stylesheet */

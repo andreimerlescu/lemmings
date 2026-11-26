@@ -20,16 +20,18 @@ lemmings compare [flags] <baseline.json> <candidate.json>
 | `-ramp-shape` | `-rs` | `linear` | `linear`, `fibonacci`, `step` | Terrain launch curve across `-ramp`. |
 | `-crawl` | `-c` | `false` | `bool` | Crawl origin HTML links when no sitemap is available. |
 | `-crawl-depth` | `-cd` | `3` | `1..100` | Maximum link depth when `-crawl` is enabled. |
-| `-dry-run` | — | `false` | `bool` | Validate config, probe browser, index target URL pool, print plan, and exit `0` without sending load. |
+| `-dry-run` | — | `false` | `bool` | Validate config (including YAML `-plan` schema and `${ENV_VAR}` expansion), probe browser, index target URL pool, print execution summary, and exit `0` without sending load. |
 
 ---
 
-## Visitor Behaviour, Journeys & Bounds
+## Visitor Behaviour, Plans & Bounds
 
 | Flag | Alias | Default | Range / Values | Description |
 | --- | --- | --- | --- | --- |
-| `-navigation` | `-nav` | `links` | `links`, `random` | Follow links on each visited page (`links`) or sample the indexed pool (`random`). |
-| `-journey` | `-j` | `""` | file path | Ordered JSON journey file with per-step assertions. |
+| `-navigation` | `-nav` | `links` | `links`, `random` | Follow links on each visited page (`links`) or sample the indexed pool (`random`). Also controls how rogue lemmings roam when `-plan` is active. |
+| `-plan` | `-pl` | `""` | file, dir, or comma-separated list | YAML plan file, directory of `*.yaml`/`*.yml` files (loaded lexicographically), or comma-separated list of files/directories (up to 100 unique plans per suite). |
+| `-max-plan-items` | `-mpi` | `999` | `1..1000000` | Maximum `PlanItem` steps per plan (exits `1` if exceeded). Loader file read cap scales up to `64 MiB`. |
+| `-rogue-rate` | `-rr` | `-1` *(auto)* | `-1` or `0..1` | Fraction of lemmings assigned to wander sitemap/crawled links (`-navigation` `links`/`random`) instead of following a plan. Auto (`-1`) resolves to `0.05` when `-plan` is set and `0` otherwise. Deterministic by global lemming number (`floor(n*rate+1e-9) > floor((n-1)*rate+1e-9)`). |
 | `-think-min` | `-tmin` | `300ms` | `>= 0` | Minimum pause between pages (`0` with `-think-max 0` saturates). |
 | `-think-max` | `-tmax` | `1200ms` | `>= -think-min` | Maximum pause between pages. |
 | `-max-pages` | `-mpg` | `0` | `0..1000000` | Maximum pages visited per lemming (`0` browses until `-until`). |
@@ -54,7 +56,7 @@ lemmings compare [flags] <baseline.json> <candidate.json>
 | `-chrome-bin` | — | `""` | executable path | Explicit path to Chrome/Chromium binary (overrides auto-detection; fails closed if unusable). |
 | `-cdp-url` | — | `""` | `ws://`, `wss://`, `http://`, `https://` | Connect to a Chrome DevTools Protocol endpoint instead of launching local Chrome. Restricted to loopback hosts (`localhost`, `127.0.0.1`, `::1`) unless `-allow-remote-cdp` is set. |
 | `-allow-remote-cdp` | — | `false` | `bool` | Allow non-loopback `-cdp-url` endpoints. Cloud-metadata, link-local, unspecified, and multicast IPs remain unconditionally blocked by `SafeDialContext`. |
-| `-scouts` | — | `0` | `0..8` | Real-browser Scout lemmings running alongside the HTTP swarm to detect pure JS/render errors on HTTP `200 OK` pages. |
+| `-scouts` | — | `0` | `0..8` | Real-browser Scout lemmings running alongside the HTTP swarm to detect pure JS/render errors on HTTP `200 OK` pages. Walks GET-only `-plan` suites or falls back automatically to the indexed `URLPool` when any plan contains non-GET steps. |
 | `-dashboard-port` | `-dp` | `4000` | `1024..65535` | Loopback (`127.0.0.1`) port for the live Admin Portal. |
 | `-review` | — | `false` | `bool` | Keep the Admin Portal open after the swarm finishes until **Finalize & Write Report** is clicked or Ctrl-C is pressed. |
 | `-reveal-session-cookies` | — | `false` | `bool` | Allow the authenticated localhost portal to show raw session cookie values during live inspection (never written to any saved/exported report). |
@@ -71,6 +73,7 @@ lemmings compare [flags] <baseline.json> <candidate.json>
 | `-trace-file` | `-tf` | `""` | new file path | Stream every visit to a new `0600` JSONL file (refuses to overwrite existing files). |
 | `-max-failure-rate` | `-mfr` | `-1` | `-1` or `0..1` | CI gate: exit `2` if failure share exceeds this value (negative disables). |
 | `-p95-budget` | `-p95` | `0` | `>= 0` | CI gate: exit `2` if global p95 **page** visit latency exceeds this duration (`0` disables; excludes waiting-room wait and `-assets` fetches). |
+| `-min-plan-pass-rate` | `-mppr` | `-1` | `-1` or `0..1` | CI gate: exit `2` if plan cohort pass share (`PlanPassed / PlanLemmings`) falls below this value. Requires `-plan` (negative disables). |
 | `-smtp-host` | `-sh` | `""` | hostname | SMTP server hostname (overrides `LEMMINGS_SMTP_HOST`). |
 | `-smtp-port` | `-sp` | `0` | `0..65535` | SMTP server port (`465`=implicit TLS, otherwise STARTTLS; overrides `LEMMINGS_SMTP_PORT`). |
 | `-smtp-user` | `-su` | `""` | string | SMTP username (overrides `LEMMINGS_SMTP_USER`). |
@@ -109,3 +112,4 @@ lemmings compare [flags] <baseline.json> <candidate.json>
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | Region used for `s3://` report delivery alongside standard AWS SDK v2 credential chain. |
 | `NO_COLOR` | Disables ANSI color escapes in terminal output when set (any value). |
 | `COLORTERM` | Enables 24-bit Synthwave truecolor when containing `truecolor` or `24bit`. |
+| Plan `${ENV_VAR}` placeholders | User-defined environment variables (`${[A-Za-z_][A-Za-z0-9_]*}`) expanded inside YAML plan `with-cookies`, `with-headers`, `with-body`, and `body` values (fails closed at startup if unset; escape literal `$` as `$$`). |

@@ -63,10 +63,10 @@ test-fuzz:
 	done
 	@echo "── secrets fuzz targets"
 	@$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^FuzzScrubText$$" -fuzztime=$(FUZZTIME) ./internal/secrets
-	@echo "── journey fuzz targets"
-	@for t in FuzzExtractErrorBody FuzzExtractAssets; do \
+	@echo "── plan fuzz targets"
+	@for t in FuzzParsePlan FuzzExtractErrorBody FuzzExtractAssets; do \
 		echo "   $$t"; \
-		$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^$$t$$" -fuzztime=$(FUZZTIME) ./internal/journey || exit 1; \
+		$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^$$t$$" -fuzztime=$(FUZZTIME) ./internal/plan || exit 1; \
 	done
 	@echo "── swarm fuzz targets"
 	@$(GO) test $(GOFLAGS) -run='^$$' -fuzz="^FuzzDetectWaitingRoom$$" -fuzztime=$(FUZZTIME) ./internal/swarm
@@ -190,21 +190,22 @@ run-forensics:
 		-limit 24 \
 		-until 30s \
 		-ramp 5s \
-		-journey examples/journeys/forensics-demo.json \
+		-plan examples/plans/forensics-demo.yaml \
 		-scouts 1 \
 		-review \
 		-unique-report \
 		-save-to bin/reports
 
-.PHONY: run-journey
-run-journey:
+.PHONY: run-plan
+run-plan:
 	$(GO) run $(CMD_PKG) \
 		-hit http://$(DEMO_ADDR)/ \
 		-terrain 4 \
 		-pack 10 \
 		-until 60s \
 		-ramp 5s \
-		-journey examples/journeys/buy-tokens.json \
+		-plan examples/plans/neon-arcade-auth.yaml \
+		-min-plan-pass-rate 0.95 \
 		-max-failure-rate 0.05 \
 		-p95-budget 750ms \
 		-save-to bin/reports
@@ -246,6 +247,6 @@ help:
 	@echo "  Play"
 	@echo "    make demo           start Neon Arcade demo target on $(DEMO_ADDR)"
 	@echo "    make run            send 72 lemmings to Neon Arcade and open the portal"
-	@echo "    make run-forensics  run forensics journey with browser Scout & -review hold"
-	@echo "    make run-journey    walk the checkout journey with CI gates"
+	@echo "    make run-forensics  run forensics plan with browser Scout & -review hold"
+	@echo "    make run-plan       walk the Neon Arcade auth plan with CI gates"
 	@echo ""

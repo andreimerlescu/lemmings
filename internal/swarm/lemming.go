@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"mime"
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,7 +23,7 @@ import (
 	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
 	"github.com/andreimerlescu/lemmings/v2/internal/events"
 	"github.com/andreimerlescu/lemmings/v2/internal/forensics"
-	"github.com/andreimerlescu/lemmings/v2/internal/journey"
+	"github.com/andreimerlescu/lemmings/v2/internal/plan"
 )
 
 var userAgents = []string{
@@ -77,13 +79,43 @@ var (
 	errQueueNotAdmitted     = errors.New("waiting room reload was not admitted")
 )
 
+// Lemming cohort roles recorded on Identity.Role, Visit.Role, and LifeLog.Role.
+const (
+	RolePlan  = "plan"
+	RoleRogue = "rogue"
+)
+
 // Exit reasons recorded on LifeLog.ExitReason.
 const (
-	ExitLifespan        = "lifespan"
-	ExitPageLimit       = "page-limit"
-	ExitJourneyComplete = "journey-complete"
-	ExitCancelled       = "cancelled"
+	ExitLifespan     = "lifespan"
+	ExitPageLimit    = "page-limit"
+	ExitPlanComplete = "plan-complete"
+	ExitPlanFailed   = "plan-failed"
+	ExitCancelled    = "cancelled"
 )
+
+// IsRogueLemming deterministically reports whether the 1-based global lemming
+// number is assigned to the rogue exploration cohort at the given rate in [0,1].
+func IsRogueLemming(number int64, rate float64) bool {
+	if number <= 0 || rate <= 0 || math.IsNaN(rate) {
+		return false
+	}
+	if rate >= 1 {
+		return true
+	}
+	return int64(math.Floor(float64(number)*rate+1e-9)) > int64(math.Floor(float64(number-1)*rate+1e-9))
+}
+
+// CountRoguesUpTo returns the exact count of rogue lemmings among 1..n for rate.
+func CountRoguesUpTo(n int64, rate float64) int64 {
+	if n <= 0 || rate <= 0 || math.IsNaN(rate) {
+		return 0
+	}
+	if rate >= 1 {
+		return n
+	}
+	return int64(math.Floor(float64(n)*rate + 1e-9))
+}
 
 // Identity is a lemming's immutable persona for its entire lifespan.
 type Identity struct {
@@ -95,6 +127,8 @@ type Identity struct {
 	BornAt    time.Time `json:"born_at"`
 	UserAgent string    `json:"user_agent"`
 	Language  string    `json:"language"`
+	Role      string    `json:"role,omitempty"`
+	PlanName  string    `json:"plan_name,omitempty"`
 }
 
 // WaitingRoomSignal describes a detected waiting-room response across Concert HTML,
@@ -146,7 +180,11 @@ type Visit struct {
 	LemmingID     string
 	LemmingNumber int64
 	Sequence      int
+	Method        string
+	PlanName      string
 	Step          string
+	StepIndex     int
+	Role          string
 	URL           string
 	FinalURL      string
 	Referrer      string
@@ -161,7 +199,7 @@ type Visit struct {
 	Expected      string
 	Match         bool
 	WaitingRoom   WaitingRoomMetric
-	Page          journey.PageEvidence
+	Page          plan.PageEvidence
 	RetryAfter    time.Duration
 	CaptchaHit    bool
 	Error         error
@@ -245,36 +283,43 @@ func triggerReason(v *Visit) string {
 
 // LifeLog is the final record of a lemming's life, sent to the swarm at death.
 type LifeLog struct {
-	Identity        Identity
-	Terrain         int
-	Pack            int
-	Visits          []Visit
-	Error           error
-	BornAt          time.Time
-	DiedAt          time.Time
-	Duration        time.Duration
-	TotalVisits     int64
-	FailedVisits    int64
-	CancelledVisits int64
-	OmittedVisits   int64
-	SlowestVisit    time.Duration
-	LongestWait     time.Duration
-	FirstFailureAt  time.Time
-	ExitReason      string
-	Streamed        bool
+	Identity           Identity
+	Terrain            int
+	Pack               int
+	Role               string
+	PlanName           string
+	PlanStepsCompleted int
+	PlanStepsTotal     int
+	PlanPassed         bool
+	FinalCookieNames   []string
+	Visits             []Visit
+	Error              error
+	BornAt             time.Time
+	DiedAt             time.Time
+	Duration           time.Duration
+	TotalVisits        int64
+	FailedVisits       int64
+	CancelledVisits    int64
+	OmittedVisits      int64
+	SlowestVisit       time.Duration
+	LongestWait        time.Duration
+	FirstFailureAt     time.Time
+	ExitReason         string
+	Streamed           bool
 }
 
 // Lemming is a stateful navigating HTTP agent with its own cookie jar and persona.
 type Lemming struct {
-	identity  Identity
-	cfg       Config
-	pool      *discovery.URLPool
-	client    *http.Client
-	jar       *InspectingJar
-	bus       *events.Bus
-	metrics   *Metrics
-	forensics *forensics.Coordinator
-	rng       *rand.Rand
+	identity     Identity
+	cfg          Config
+	pool         *discovery.URLPool
+	client       *http.Client
+	jar          *InspectingJar
+	bus          *events.Bus
+	metrics      *Metrics
+	forensics    *forensics.Coordinator
+	rng          *rand.Rand
+	assignedPlan *plan.Plan
 
 	referrer   string
 	links      []string
@@ -320,6 +365,22 @@ func NewLemming(
 	}
 	l.identity.UserAgent = userAgents[l.rng.Intn(len(userAgents))]
 	l.identity.Language = acceptLanguages[l.rng.Intn(len(acceptLanguages))]
+	if cfg.Plan != nil && len(cfg.Plan.Plans) > 0 {
+		rogueRate := cfg.RogueRate
+		if rogueRate < 0 {
+			rogueRate = 0.05
+		}
+		if IsRogueLemming(number, rogueRate) {
+			l.identity.Role = RoleRogue
+		} else {
+			l.identity.Role = RolePlan
+			cohortIdx := number - 1 - CountRoguesUpTo(number-1, rogueRate)
+			if p := cfg.Plan.Pick(cohortIdx); p != nil {
+				l.assignedPlan = p
+				l.identity.PlanName = p.Name
+			}
+		}
+	}
 	return l
 }
 
@@ -332,13 +393,20 @@ func (l *Lemming) Run(parent context.Context) LifeLog {
 	ctx, cancel := context.WithTimeout(parent, l.cfg.Until)
 	defer cancel()
 
+	stepsTotal := 0
+	if l.assignedPlan != nil {
+		stepsTotal = len(l.assignedPlan.Items)
+	}
 	ll := LifeLog{
-		Identity:   l.identity,
-		Terrain:    int(l.identity.Terrain),
-		Pack:       int(l.identity.Pack),
-		BornAt:     time.Now(),
-		ExitReason: ExitLifespan,
-		Streamed:   true,
+		Identity:       l.identity,
+		Terrain:        int(l.identity.Terrain),
+		Pack:           int(l.identity.Pack),
+		Role:           l.identity.Role,
+		PlanName:       l.identity.PlanName,
+		PlanStepsTotal: stepsTotal,
+		BornAt:         time.Now(),
+		ExitReason:     ExitLifespan,
+		Streamed:       true,
 	}
 	tail := make([]Visit, 0, 16)
 	head := 0
@@ -348,18 +416,18 @@ func (l *Lemming) Run(parent context.Context) LifeLog {
 			ll.ExitReason = ExitPageLimit
 			break
 		}
-		target, step, ok := l.next(ll.TotalVisits)
+		target, step, stepIdx, ok := l.next(ll.TotalVisits)
 		if !ok {
-			ll.ExitReason = ExitJourneyComplete
+			ll.ExitReason = ExitPlanComplete
 			break
 		}
 
-		visit, links, rawBody, headers, contentType := l.hit(ctx, target, step)
+		visit, links, rawBody, headers, contentType := l.hitStep(ctx, target, step, stepIdx)
 		visit.Sequence = int(ll.TotalVisits) + 1
 		l.remember(&ll, &visit, links)
 
 		if visit.Failed && l.forensics != nil {
-			l.submitForensics(&ll, &visit, rawBody, headers, contentType)
+			l.submitForensics(&ll, &visit, step, rawBody, headers, contentType)
 		}
 
 		if len(tail) < lifeTailSize {
@@ -368,6 +436,37 @@ func (l *Lemming) Run(parent context.Context) LifeLog {
 			tail[head] = visit
 			head = (head + 1) % lifeTailSize
 			ll.OmittedVisits++
+		}
+
+		if l.assignedPlan != nil && step != nil {
+			if visit.Cancelled {
+				break
+			}
+			ll.PlanStepsCompleted = max(ll.PlanStepsCompleted, stepIdx)
+			if visit.Failed && step.ShouldStopOnFail(l.assignedPlan.StopOnFail) {
+				ll.ExitReason = ExitPlanFailed
+				break
+			}
+			if l.step >= len(l.assignedPlan.Items) {
+				if l.assignedPlan.Loop {
+					l.step = 0
+					if !l.pauseAfterStep(ctx, step, &visit) {
+						break
+					}
+					continue
+				}
+				if step.Chill != nil && *step.Chill > 0 {
+					if !l.sleepContext(ctx, *step.Chill) {
+						break
+					}
+				}
+				ll.ExitReason = ExitPlanComplete
+				break
+			}
+			if !l.pauseAfterStep(ctx, step, &visit) {
+				break
+			}
+			continue
 		}
 
 		if !l.think(ctx, &visit) {
@@ -381,10 +480,63 @@ func (l *Lemming) Run(parent context.Context) LifeLog {
 	ll.Visits = append(tail[head:len(tail):len(tail)], tail[:head]...)
 	ll.DiedAt = time.Now()
 	ll.Duration = ll.DiedAt.Sub(ll.BornAt)
+	ll.FinalCookieNames = l.finalCookieNames()
+	ll.PlanPassed = ll.Role == RolePlan &&
+		ll.Error == nil &&
+		ll.FailedVisits == 0 &&
+		ll.CancelledVisits == 0 &&
+		ll.PlanStepsTotal > 0 &&
+		ll.PlanStepsCompleted >= ll.PlanStepsTotal &&
+		ll.ExitReason != ExitPlanFailed &&
+		ll.ExitReason != ExitCancelled
 	return ll
 }
 
-func (l *Lemming) submitForensics(ll *LifeLog, v *Visit, body []byte, headers http.Header, contentType string) {
+func (l *Lemming) pauseAfterStep(ctx context.Context, step *plan.PlanItem, v *Visit) bool {
+	if step != nil && step.Chill != nil {
+		if *step.Chill > 0 {
+			return l.sleepContext(ctx, *step.Chill)
+		}
+		return ctx.Err() == nil
+	}
+	return l.think(ctx, v)
+}
+
+func (l *Lemming) finalCookieNames() []string {
+	var cookieJar http.CookieJar
+	if l.jar != nil {
+		cookieJar = l.jar
+	} else if l.client != nil && l.client.Jar != nil {
+		cookieJar = l.client.Jar
+	}
+	if cookieJar == nil {
+		return nil
+	}
+	hitURL, err := url.Parse(l.cfg.Hit)
+	if err != nil || hitURL.Scheme == "" || hitURL.Host == "" {
+		return nil
+	}
+	cookies := cookieJar.Cookies(hitURL)
+	if len(cookies) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(cookies))
+	names := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		if c == nil || c.Name == "" {
+			continue
+		}
+		if _, dup := seen[c.Name]; dup {
+			continue
+		}
+		seen[c.Name] = struct{}{}
+		names = append(names, c.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (l *Lemming) submitForensics(ll *LifeLog, v *Visit, step *plan.PlanItem, body []byte, headers http.Header, contentType string) {
 	targetURL := v.FinalURL
 	if targetURL == "" {
 		targetURL = v.URL
@@ -408,10 +560,13 @@ func (l *Lemming) submitForensics(ll *LifeLog, v *Visit, body []byte, headers ht
 	copy(ownedBody, bodyCopy)
 
 	navMode := l.cfg.Navigation
-	journeyName := ""
-	if l.cfg.Journey != nil {
-		navMode = "journey"
-		journeyName = l.cfg.Journey.Name
+	planName := ""
+	switch {
+	case l.assignedPlan != nil:
+		navMode = "plan"
+		planName = l.assignedPlan.Name
+	case l.identity.Role == RoleRogue:
+		navMode = "rogue"
 	}
 
 	origin := ""
@@ -422,19 +577,23 @@ func (l *Lemming) submitForensics(ll *LifeLog, v *Visit, body []byte, headers ht
 		origin, _ = discovery.ParseOrigin(l.cfg.Hit)
 	}
 
+	skipBrowserReplay := (v.Method != "" && v.Method != http.MethodGet) || (step != nil && step.HasRequestBody())
+
 	req := forensics.CaptureRequest{
-		URL:           targetURL,
-		SafeURL:       discovery.SafeURL(targetURL),
-		Origin:        origin,
-		Path:          discovery.PathOf(targetURL),
-		StatusCode:    v.StatusCode,
-		LatencyMS:     float64(v.EffectiveLatency()) / float64(time.Millisecond),
-		TriggerReason: triggerReason(v),
-		ContentType:   contentType,
-		Headers:       headers,
-		RawBody:       ownedBody,
-		ReplayCookies: replayCookies,
-		Mobile:        IsMobileUA(l.identity.UserAgent),
+		URL:               targetURL,
+		SafeURL:           discovery.SafeURL(targetURL),
+		Origin:            origin,
+		Path:              discovery.PathOf(targetURL),
+		Method:            v.Method,
+		SkipBrowserReplay: skipBrowserReplay,
+		StatusCode:        v.StatusCode,
+		LatencyMS:         float64(v.EffectiveLatency()) / float64(time.Millisecond),
+		TriggerReason:     triggerReason(v),
+		ContentType:       contentType,
+		Headers:           headers,
+		RawBody:           ownedBody,
+		ReplayCookies:     replayCookies,
+		Mobile:            IsMobileUA(l.identity.UserAgent),
 		Session: forensics.SessionSnapshot{
 			LemmingNumber:  l.identity.Number,
 			LemmingID:      l.identity.ID,
@@ -446,8 +605,10 @@ func (l *Lemming) submitForensics(ll *LifeLog, v *Visit, body []byte, headers ht
 			UserAgent:      l.identity.UserAgent,
 			Language:       l.identity.Language,
 			NavigationMode: navMode,
-			JourneyName:    journeyName,
-			JourneyStep:    v.Step,
+			PlanName:       planName,
+			PlanStep:       v.Step,
+			Method:         v.Method,
+			Role:           l.identity.Role,
 			VisitSequence:  v.Sequence,
 			SessionAgeMS:   float64(time.Since(ll.BornAt)) / float64(time.Millisecond),
 			TotalVisits:    ll.TotalVisits,
@@ -462,24 +623,25 @@ func (l *Lemming) submitForensics(ll *LifeLog, v *Visit, body []byte, headers ht
 	l.forensics.Submit(req)
 }
 
-func (l *Lemming) next(visited int64) (string, *journey.Step, bool) {
-	if j := l.cfg.Journey; j != nil {
-		if l.step >= len(j.Steps) {
-			return "", nil, false
+func (l *Lemming) next(visited int64) (string, *plan.PlanItem, int, bool) {
+	if p := l.assignedPlan; p != nil {
+		if l.step >= len(p.Items) {
+			return "", nil, 0, false
 		}
-		step := &j.Steps[l.step]
+		step := &p.Items[l.step]
+		stepIdx := l.step + 1
 		l.step++
-		return discovery.ResolveURL(l.cfg.Hit, step.Path), step, true
+		return discovery.ResolveURL(l.cfg.Hit, step.Path), step, stepIdx, true
 	}
-	if l.cfg.Navigation == journey.NavigationLinks {
+	if l.cfg.Navigation == plan.NavigationLinks {
 		if visited == 0 {
-			return l.cfg.Hit, nil, true
+			return l.cfg.Hit, nil, 0, true
 		}
 		if len(l.links) > 0 {
-			return l.links[l.rng.Intn(len(l.links))], nil, true
+			return l.links[l.rng.Intn(len(l.links))], nil, 0, true
 		}
 	}
-	return l.pickURL(), nil, true
+	return l.pickURL(), nil, 0, true
 }
 
 func (l *Lemming) remember(ll *LifeLog, v *Visit, links []string) {
@@ -523,6 +685,7 @@ func (l *Lemming) remember(ll *LifeLog, v *Visit, links []string) {
 			LemmingNumber: l.identity.Number,
 			Terrain:       int(l.identity.Terrain),
 			Pack:          int(l.identity.Pack),
+			Method:        v.Method,
 			URL:           v.URL,
 			StatusCode:    v.StatusCode,
 			BytesIn:       v.BytesIn,
@@ -532,6 +695,9 @@ func (l *Lemming) remember(ll *LifeLog, v *Visit, links []string) {
 			QueuePolls:    v.QueuePolls,
 			Banned:        v.Banned,
 			AdmitPass:     v.ConcertAdmit,
+			PlanName:      v.PlanName,
+			StepIndex:     v.StepIndex,
+			Role:          v.Role,
 			Payload:       v,
 			Err:           v.Error,
 		})
@@ -567,27 +733,37 @@ func (l *Lemming) think(ctx context.Context, v *Visit) bool {
 	}
 }
 
-func (l *Lemming) hit(ctx context.Context, targetURL string, step *journey.Step) (Visit, []string, []byte, http.Header, string) {
+func (l *Lemming) hit(ctx context.Context, targetURL string, step *plan.PlanItem) (Visit, []string, []byte, http.Header, string) {
+	return l.hitStep(ctx, targetURL, step, 0)
+}
+
+func (l *Lemming) hitStep(ctx context.Context, targetURL string, step *plan.PlanItem, stepIdx int) (Visit, []string, []byte, http.Header, string) {
 	expected := ""
 	if l.pool != nil {
 		expected = l.pool.Checksums[targetURL]
 	}
+	method := http.MethodGet
+	if step != nil {
+		method = step.EffectiveMethod()
+	}
 	visit := Visit{
 		LemmingID:     l.identity.ID,
 		LemmingNumber: l.identity.Number,
+		Method:        method,
+		PlanName:      l.identity.PlanName,
+		StepIndex:     stepIdx,
+		Role:          l.identity.Role,
 		URL:           targetURL,
 		Referrer:      l.referrer,
 		Expected:      expected,
 		Timestamp:     time.Now(),
 	}
-	var expect journey.Expectations
 	if step != nil {
 		visit.Step = step.Name
-		expect = step.Expect
 	}
 
 	start := time.Now()
-	resp := l.fetch(ctx, targetURL)
+	resp := l.fetch(ctx, targetURL, step)
 	resp.applyTo(&visit)
 	visit.BytesIn = resp.bytes
 	visit.Hops = resp.hops
@@ -604,7 +780,7 @@ func (l *Lemming) hit(ctx context.Context, targetURL string, step *journey.Step)
 
 	if resp.err == nil {
 		if sig, inRoom := DetectWaitingRoomResponse(resp.status, contentType, headers, body); inRoom {
-			body, headers, contentType = l.waitInRoom(ctx, targetURL, &visit, sig, headers, contentType)
+			body, headers, contentType = l.waitInRoom(ctx, targetURL, step, &visit, sig, headers, contentType)
 		} else {
 			if resp.status == http.StatusServiceUnavailable && isConcertBreaker503(contentType, body) {
 				visit.WaitingRoom.Rejected503 = true
@@ -642,11 +818,28 @@ func (l *Lemming) hit(ctx context.Context, targetURL string, step *journey.Step)
 
 	var links []string
 	if !visit.Cancelled && visit.Error == nil && !visit.WaitingRoom.Denied && !visit.WaitingRoom.Expired {
-		visit.Page, links = journey.InspectPage(body, contentType, visit.StatusCode, expect, finalURL)
+		var activeCookies []*http.Cookie
+		if parsedFinal != nil {
+			if l.jar != nil {
+				activeCookies = l.jar.Cookies(parsedFinal)
+			} else if l.client != nil && l.client.Jar != nil {
+				activeCookies = l.client.Jar.Cookies(parsedFinal)
+			}
+		}
+		visit.Page, links = plan.InspectResponse(plan.ResponseInput{
+			Method:      visit.Method,
+			Body:        body,
+			ContentType: contentType,
+			Status:      visit.StatusCode,
+			Headers:     headers,
+			Cookies:     activeCookies,
+			Step:        step,
+			Base:        finalURL,
+		})
 		links = filterSiteLinks(links)
 		visit.Page.LinkCount = len(links)
 		if l.cfg.StrictChecksum {
-			visit.Page.Checks = append(visit.Page.Checks, journey.CheckResult{
+			visit.Page.Checks = append(visit.Page.Checks, plan.CheckResult{
 				Name:   "checksum",
 				Passed: visit.Expected != "" && visit.Match,
 				Detail: "body must match the index-time checksum (-strict-checksum)",
@@ -675,6 +868,7 @@ type queueStatusResponse struct {
 func (l *Lemming) waitInRoom(
 	ctx context.Context,
 	targetURL string,
+	step *plan.PlanItem,
 	visit *Visit,
 	sig WaitingRoomSignal,
 	lastHeaders http.Header,
@@ -824,7 +1018,7 @@ func (l *Lemming) waitInRoom(
 		// so WaitingRoom.Duration and Visit.Latency stay cleanly separated.
 		visit.WaitingRoom.ExitedAt = time.Now()
 
-		reload := l.fetch(ctx, targetURL)
+		reload := l.fetch(ctx, targetURL, step)
 		visit.BytesIn += reload.bytes
 		visit.Hops = AppendHops(visit.Hops, reload.hops...)
 		reload.applyTo(visit)
@@ -912,7 +1106,7 @@ func (l *Lemming) pollQueueStatus(ctx context.Context, pollURL string) ([]byte, 
 }
 
 func (l *Lemming) loadPageAssets(ctx context.Context, pageURL *url.URL, htmlBody []byte) {
-	refs := journey.ExtractAssets(pageURL, htmlBody)
+	refs := plan.ExtractAssets(pageURL, htmlBody)
 	if len(refs) == 0 {
 		return
 	}
@@ -921,7 +1115,7 @@ func (l *Lemming) loadPageAssets(ctx context.Context, pageURL *url.URL, htmlBody
 	}
 
 	pageURLStr := pageURL.String()
-	queue := make([]journey.AssetRef, 0, len(refs))
+	queue := make([]plan.AssetRef, 0, len(refs))
 	seenInPage := make(map[string]struct{}, len(refs))
 	for _, ref := range refs {
 		if _, dup := seenInPage[ref.URL]; dup {
@@ -995,7 +1189,7 @@ func (l *Lemming) loadPageAssets(ctx context.Context, pageURL *url.URL, htmlBody
 		if !av.Failed && av.StatusCode == http.StatusOK && len(cssBody) > 0 && isCSSAsset(contentType, av.Class) {
 			cssBase := assetParsed
 			if cssBase != nil {
-				for _, sub := range journey.ExtractCSSAssets(cssBase, cssBody) {
+				for _, sub := range plan.ExtractCSSAssets(cssBase, cssBody) {
 					if l.assetCache[sub.URL] {
 						continue
 					}
@@ -1013,7 +1207,7 @@ func (l *Lemming) loadPageAssets(ctx context.Context, pageURL *url.URL, htmlBody
 func (l *Lemming) fetchAsset(
 	ctx context.Context,
 	pageURL string,
-	ref journey.AssetRef,
+	ref plan.AssetRef,
 ) (AssetVisit, []byte, string, string, error) {
 	timeout := l.cfg.RequestTimeout
 	if timeout <= 0 {
@@ -1074,7 +1268,7 @@ func (l *Lemming) fetchAsset(
 			finalAssetURL = resp.Request.URL.String()
 		}
 		contentType = resp.Header.Get("Content-Type")
-		if cls := journey.ClassifyAsset(finalAssetURL, contentType); cls != "other" || av.Class == "" {
+		if cls := plan.ClassifyAsset(finalAssetURL, contentType); cls != "other" || av.Class == "" {
 			av.Class = cls
 		}
 
@@ -1122,7 +1316,7 @@ func (l *Lemming) fetchAsset(
 	av.FinishedAt = time.Now()
 	av.Duration = time.Since(start)
 	if av.Class == "" {
-		av.Class = journey.ClassifyAsset(finalAssetURL, contentType)
+		av.Class = plan.ClassifyAsset(finalAssetURL, contentType)
 	}
 	av.ErrorKind = ErrorKind(err)
 	if av.StatusCode == http.StatusForbidden {

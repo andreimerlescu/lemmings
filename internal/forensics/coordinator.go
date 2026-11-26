@@ -118,8 +118,11 @@ func (c *Coordinator) emitDrop(req CaptureRequest, reason string) {
 		LemmingNumber: req.Session.LemmingNumber,
 		Terrain:       req.Session.Terrain,
 		Pack:          req.Session.Pack,
+		Method:        req.Method,
 		URL:           req.SafeURL,
 		StatusCode:    req.StatusCode,
+		PlanName:      req.Session.PlanName,
+		Role:          req.Session.Role,
 		DropReason:    reason,
 	})
 }
@@ -143,14 +146,21 @@ func (c *Coordinator) worker() {
 		}
 		summary := c.store.Save(art)
 		if c.bus != nil {
+			method := art.Session.Method
+			if method == "" {
+				method = req.Method
+			}
 			c.bus.Emit(events.Event{
 				Kind:          events.ArtifactCaptured,
 				LemmingID:     art.Session.LemmingID,
 				LemmingNumber: art.Session.LemmingNumber,
 				Terrain:       art.Session.Terrain,
 				Pack:          art.Session.Pack,
+				Method:        method,
 				URL:           art.URL,
 				StatusCode:    art.StatusCode,
+				PlanName:      art.Session.PlanName,
+				Role:          art.Session.Role,
 				ArtifactID:    art.ID,
 				CaptureMode:   art.CaptureMode,
 				ConsoleErrors: art.ConsoleErrors,

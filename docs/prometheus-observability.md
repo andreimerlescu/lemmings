@@ -14,7 +14,7 @@ lemmings -hit https://staging.example.com/ \
 
 ---
 
-## Metric Catalog (22 Metrics)
+## Metric Catalog (24 Metrics)
 
 ### Swarm & Lifecycle
 
@@ -27,12 +27,19 @@ lemmings -hit https://staging.example.com/ \
 | `lemmings_overflow_logs_total` | Counter | — | Completed `LifeLog`s routed to the overflow channel. |
 | `lemmings_dropped_logs_total` | Counter | — | Completed `LifeLog`s dropped because both primary and overflow channels were full. |
 
+### Plans & Rogue Cohort (`-plan`)
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `lemmings_plan_lemmings_total` | Counter | `outcome` | Completed plan-following lemmings grouped by outcome (`passed`, `failed`). |
+| `lemmings_rogue_lemmings_total` | Counter | — | Completed rogue lemmings assigned to wander via `-navigation` (`links`/`random`) instead of following a plan. |
+
 ### Traffic, Latency & Waiting Rooms
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
 | `lemmings_visits_total` | Counter | `status_class` | Completed non-cancelled page visits grouped by `2xx`, `3xx`, `4xx`, `5xx`, or `000` (cancelled mid-visit reads are excluded and counted exclusively in `lemmings_cancelled_visits_total`). |
-| `lemmings_failed_visits_total` | Counter | — | Page visits failing HTTP status, transport, truncation, blank-page, or journey checks. |
+| `lemmings_failed_visits_total` | Counter | — | Page visits failing HTTP status, transport, truncation, blank-page, or plan checks. |
 | `lemmings_cancelled_visits_total` | Counter | — | Page visits interrupted because a lemming's lifespan or the run ended. |
 | `lemmings_visit_duration_seconds` | Histogram | `url` *(omitted when `-metrics-url-label none`)* | End-to-end page visit latency distribution in seconds (excludes waiting-room wait and asset fetches). |
 | `lemmings_bytes_total` | Counter | — | Total decoded page response bytes transferred. |
@@ -91,4 +98,8 @@ sum by (class, status_class) (rate(lemmings_assets_total[15s]))
 # Concert queue poll rate & ban rate
 rate(lemmings_queue_polls_total[15s])
 sum by (status) (rate(lemmings_bans_total[30s]))
+
+# Plan cohort pass ratio & rogue lemming completions (when -plan is enabled)
+lemmings_plan_lemmings_total{outcome="passed"} / clamp_min(sum(lemmings_plan_lemmings_total), 1)
+lemmings_rogue_lemmings_total
 ```

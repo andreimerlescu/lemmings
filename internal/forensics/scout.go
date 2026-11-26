@@ -12,7 +12,7 @@ import (
 
 	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
 	"github.com/andreimerlescu/lemmings/v2/internal/events"
-	"github.com/andreimerlescu/lemmings/v2/internal/journey"
+	"github.com/andreimerlescu/lemmings/v2/internal/plan"
 	"github.com/andreimerlescu/lemmings/v2/internal/secrets"
 )
 
@@ -22,7 +22,7 @@ type ScoutConfig struct {
 	Origin         string
 	Hit            string
 	URLs           []string
-	Journey        *journey.Journey
+	Plan           *plan.Suite
 	Until          time.Duration
 	ThinkMin       time.Duration
 	ThinkMax       time.Duration
@@ -31,10 +31,10 @@ type ScoutConfig struct {
 }
 
 // RunScouts launches cfg.Count real-browser Scout lemmings inside isolated CDP
-// incognito BrowserContexts. Each Scout walks the target pages/journey and
+// incognito BrowserContexts. Each Scout walks the target pages/plan and
 // captures screenshots + JS console + cookies + DOM body whenever it detects
 // a frontend JS error, uncaught exception, failed subresource, blank render,
-// HTTP >= 400 response, or failed journey check — even on HTTP 200 OK pages.
+// HTTP >= 400 response, or failed plan check — even on HTTP 200 OK pages.
 func RunScouts(
 	ctx context.Context,
 	cfg ScoutConfig,
@@ -91,6 +91,7 @@ func runOneScout(
 			LemmingNumber: num,
 			Terrain:       -1,
 			Pack:          idx,
+			Role:          "scout",
 		})
 		defer func() {
 			bus.Emit(events.Event{
@@ -100,6 +101,7 @@ func runOneScout(
 				Terrain:       -1,
 				Pack:          idx,
 				Duration:      time.Since(bornAt),
+				Role:          "scout",
 			})
 		}()
 	}
@@ -169,13 +171,13 @@ func runOneScout(
 	if len(targets) == 0 {
 		return
 	}
-	isJourney := cfg.Journey != nil && len(cfg.Journey.Steps) > 0
+	isPlan := cfg.Plan != nil && len(cfg.Plan.Plans) > 0 && !cfg.Plan.HasNonGET()
 	var trail []string
 	var totalVisits, failedVisits int64
 	referrer := ""
 
 	for seq := 0; ctx.Err() == nil; seq++ {
-		if isJourney && seq >= len(targets) {
+		if isPlan && seq >= len(targets) {
 			break
 		}
 		target := targets[seq%len(targets)]
@@ -269,8 +271,10 @@ func runOneScout(
 							UserAgent:      ua,
 							Language:       lang,
 							NavigationMode: "scout",
-							JourneyName:    target.journeyName,
-							JourneyStep:    target.stepName,
+							PlanName:       target.planName,
+							PlanStep:       target.stepName,
+							Method:         "GET",
+							Role:           "scout",
 							VisitSequence:  seq + 1,
 							SessionAgeMS:   float64(time.Since(bornAt)) / float64(time.Millisecond),
 							TotalVisits:    totalVisits,
@@ -279,7 +283,7 @@ func runOneScout(
 							RecentTrail:    append([]string(nil), trail...),
 							CookieJar:      CookieJarSnapshot{Health: "empty"},
 						},
-						ErrorBody: journey.ExtractedError{
+						ErrorBody: plan.ExtractedError{
 							Format:     "empty",
 							StatusCode: docStatus,
 							Summary:    warnMsg,
@@ -294,8 +298,11 @@ func runOneScout(
 							LemmingNumber: num,
 							Terrain:       -1,
 							Pack:          idx,
+							Method:        "GET",
 							URL:           art.URL,
 							StatusCode:    docStatus,
+							PlanName:      target.planName,
+							Role:          "scout",
 							ArtifactID:    art.ID,
 							CaptureMode:   ModeCDPScout,
 							ReviewStatus:  string(ReviewUnreviewed),
@@ -309,8 +316,11 @@ func runOneScout(
 						LemmingNumber: num,
 						Terrain:       -1,
 						Pack:          idx,
+						Method:        "GET",
 						URL:           safeTargetURL,
 						StatusCode:    docStatus,
+						PlanName:      target.planName,
+						Role:          "scout",
 						DropReason:    reason,
 					})
 				}
@@ -322,17 +332,20 @@ func runOneScout(
 					LemmingNumber: num,
 					Terrain:       -1,
 					Pack:          idx,
+					Method:        "GET",
 					URL:           safeTargetURL,
 					StatusCode:    docStatus,
 					Duration:      dur,
 					Failed:        true,
+					PlanName:      target.planName,
+					Role:          "scout",
 					Err:           visitErr,
 				})
 			}
 			referrer = safeTargetURL
 			visitCancel()
 
-			if isJourney && seq+1 >= len(targets) {
+			if isPlan && seq+1 >= len(targets) {
 				break
 			}
 			if !scoutThink(ctx, cfg.ThinkMin, cfg.ThinkMax) {
@@ -347,7 +360,7 @@ func runOneScout(
 		}
 		consoleEntries := evRes.entries
 		consoleErrs := countConsoleErrors(consoleEntries)
-		evid, _ := journey.InspectPage([]byte(pageBody), docCT, docStatus, target.expect, target.url)
+		evid, _ := plan.InspectPage([]byte(pageBody), docCT, docStatus, target.step, target.url)
 
 		trigger := scoutTriggerReason(navErrorText, docStatus, consoleEntries, consoleErrs, evid)
 		visitFailed := trigger != ""
@@ -366,7 +379,7 @@ func runOneScout(
 				if ok, reason := store.TryReserve(fp); ok {
 					shot, _ := captureScreenshot(visitCtx, cdp.browser.conn, sid, cdp.format, 1280, 800)
 					cookies := fetchCDPCookies(visitCtx, cdp.browser.conn, sid, target.url, cfg.FingerprintKey)
-					ex := journey.ExtractErrorBody(docStatus, docCT, nil, []byte(pageBody))
+					ex := plan.ExtractErrorBody(docStatus, docCT, nil, []byte(pageBody))
 					var capWarn string
 					if navErrorText != "" {
 						capWarn = "navigation error: " + navErrorText
@@ -393,8 +406,10 @@ func runOneScout(
 							UserAgent:      ua,
 							Language:       lang,
 							NavigationMode: "scout",
-							JourneyName:    target.journeyName,
-							JourneyStep:    target.stepName,
+							PlanName:       target.planName,
+							PlanStep:       target.stepName,
+							Method:         "GET",
+							Role:           "scout",
 							VisitSequence:  seq + 1,
 							SessionAgeMS:   float64(time.Since(bornAt)) / float64(time.Millisecond),
 							TotalVisits:    totalVisits,
@@ -417,8 +432,11 @@ func runOneScout(
 							LemmingNumber: num,
 							Terrain:       -1,
 							Pack:          idx,
+							Method:        "GET",
 							URL:           art.URL,
 							StatusCode:    docStatus,
+							PlanName:      target.planName,
+							Role:          "scout",
 							ArtifactID:    art.ID,
 							CaptureMode:   ModeCDPScout,
 							ConsoleErrors: consoleErrs,
@@ -433,8 +451,11 @@ func runOneScout(
 						LemmingNumber: num,
 						Terrain:       -1,
 						Pack:          idx,
+						Method:        "GET",
 						URL:           safeTargetURL,
 						StatusCode:    docStatus,
+						PlanName:      target.planName,
+						Role:          "scout",
 						DropReason:    reason,
 					})
 				}
@@ -447,18 +468,21 @@ func runOneScout(
 				LemmingNumber: num,
 				Terrain:       -1,
 				Pack:          idx,
+				Method:        "GET",
 				URL:           safeTargetURL,
 				StatusCode:    docStatus,
 				Duration:      dur,
 				Failed:        visitFailed,
 				Cancelled:     ctx.Err() != nil && navErr != nil,
+				PlanName:      target.planName,
+				Role:          "scout",
 				Err:           visitErr,
 			})
 		}
 		referrer = safeTargetURL
 		visitCancel()
 
-		if isJourney && seq+1 >= len(targets) {
+		if isPlan && seq+1 >= len(targets) {
 			break
 		}
 		if !scoutThink(ctx, cfg.ThinkMin, cfg.ThinkMax) {
@@ -468,34 +492,46 @@ func runOneScout(
 }
 
 type scoutTarget struct {
-	url         string
-	journeyName string
-	stepName    string
-	expect      journey.Expectations
+	url      string
+	planName string
+	stepName string
+	step     *plan.PlanItem
 }
 
 func buildScoutTargets(cfg ScoutConfig, idx int) []scoutTarget {
-	if cfg.Journey != nil && len(cfg.Journey.Steps) > 0 {
-		out := make([]scoutTarget, 0, len(cfg.Journey.Steps))
-		for _, s := range cfg.Journey.Steps {
-			if u := discovery.ResolveURL(cfg.Hit, s.Path); u != "" {
-				out = append(out, scoutTarget{
-					url:         u,
-					journeyName: cfg.Journey.Name,
-					stepName:    s.Name,
-					expect:      s.Expect,
-				})
+	if cfg.Plan != nil && len(cfg.Plan.Plans) > 0 && !cfg.Plan.HasNonGET() {
+		if p := cfg.Plan.Pick(int64(idx)); p != nil && len(p.Items) > 0 {
+			out := make([]scoutTarget, 0, len(p.Items))
+			for i := range p.Items {
+				item := &p.Items[i]
+				if u := discovery.ResolveURL(cfg.Hit, item.Path); u != "" {
+					out = append(out, scoutTarget{
+						url:      u,
+						planName: p.Name,
+						stepName: item.Name,
+						step:     item,
+					})
+				}
 			}
+			return out
 		}
-		return out
 	}
 	urls := append([]string(nil), cfg.URLs...)
 	if len(urls) == 0 {
-		urls = []string{cfg.Hit}
+		if cfg.Hit != "" {
+			urls = []string{cfg.Hit}
+		} else {
+			return nil
+		}
 	}
 	// Rotate starting offset per scout so scouts cover different pages immediately.
 	start := idx % len(urls)
-	ordered := append(urls[start:], urls[:start]...)
+	if start < 0 {
+		start += len(urls)
+	}
+	ordered := make([]string, 0, len(urls))
+	ordered = append(ordered, urls[start:]...)
+	ordered = append(ordered, urls[:start]...)
 	out := make([]scoutTarget, 0, len(ordered))
 	for _, u := range ordered {
 		out = append(out, scoutTarget{url: u})
@@ -665,7 +701,7 @@ func collectScoutVisitEvents(ctx context.Context, evCh <-chan cdpEvent, mainFram
 	}
 }
 
-func scoutTriggerReason(navError string, status int, entries []ConsoleEntry, consoleErrs int, evid journey.PageEvidence) string {
+func scoutTriggerReason(navError string, status int, entries []ConsoleEntry, consoleErrs int, evid plan.PageEvidence) string {
 	if navError != "" || status == 0 {
 		return "nav-error"
 	}

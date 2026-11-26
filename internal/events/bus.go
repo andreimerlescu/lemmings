@@ -76,6 +76,7 @@ type Event struct {
 	Pack          int    `json:"pack"`
 
 	// Visit summary fields.
+	Method     string        `json:"method,omitempty"`
 	URL        string        `json:"url,omitempty"`
 	StatusCode int           `json:"status_code,omitempty"`
 	BytesIn    int64         `json:"bytes_in,omitempty"`
@@ -85,6 +86,12 @@ type Event struct {
 	AssetClass string        `json:"asset_class,omitempty"`
 	Banned     bool          `json:"banned,omitempty"`
 	AdmitPass  bool          `json:"admit_pass,omitempty"`
+
+	// Plan & cohort fields.
+	PlanName   string `json:"plan_name,omitempty"`
+	StepIndex  int    `json:"step_index,omitempty"`
+	Role       string `json:"role,omitempty"` // "plan", "rogue", "scout", or ""
+	PlanPassed bool   `json:"plan_passed,omitempty"`
 
 	// Waiting room queue position and polling count.
 	Position   int `json:"position,omitempty"`

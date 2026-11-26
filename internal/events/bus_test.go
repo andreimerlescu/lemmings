@@ -214,6 +214,45 @@ func TestBus_ConcertAssetQueueAndScoutEvents(t *testing.T) {
 	}
 }
 
+func TestEvent_PlanAndCohortScalarFieldsJSON(t *testing.T) {
+	ev := Event{
+		Kind:       VisitComplete,
+		Method:     "POST",
+		URL:        "https://example.com/api/checkout",
+		StatusCode: 201,
+		PlanName:   "buyer",
+		StepIndex:  3,
+		Role:       "plan",
+		PlanPassed: true,
+	}
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("json.Unmarshal map: %v", err)
+	}
+	for k, want := range map[string]any{
+		"method":      "POST",
+		"plan_name":   "buyer",
+		"step_index":  float64(3),
+		"role":        "plan",
+		"plan_passed": true,
+	} {
+		if m[k] != want {
+			t.Errorf("JSON key %q = %#v, want %#v", k, m[k], want)
+		}
+	}
+	var decoded Event
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal Event: %v", err)
+	}
+	if decoded.Method != "POST" || decoded.PlanName != "buyer" || decoded.StepIndex != 3 || decoded.Role != "plan" || !decoded.PlanPassed {
+		t.Errorf("decoded mismatch: %+v", decoded)
+	}
+}
+
 func BenchmarkBus_Emit_Concurrent(b *testing.B) {
 	bus := NewBus()
 	defer bus.Close()

@@ -28,7 +28,8 @@ At startup, Lemmings generates a cryptographically random 256-bit boot token and
 - **KPI Strip:** Live `alive` (`started` of planned total), `rescued %`, `completed` (`started` / `unborn`), `visits` + requests/sec, `failed visits`, `p95`/`p50`/`p99` page latency, `assets` (requests, bytes, p95, `403` denials when `-assets` is active), `waiting room` (held, admitted, queue polls, p95 wait, expired/denied), `bans / passes` (`429`/`403` bans and Concert `concert_admit` passes), `scouts` (visits, live scouts, failures), `error artifacts`, and `transferred` bytes.
 - **Data Integrity Banner:** Automatically alerts in the header whenever `dropped_logs > 0` or `forensics.dropped_queue > 0` under backpressure.
 - **Animated Lemmings Stage:** Up to 160 active visitors drop from the entrance hatch onto the synthwave terrain and visually react to every page (`2xx` hop, `3xx` bounce, `4xx`/check stumble, `5xx` knockback, transport glitch, waiting room queue badge, exit hatch).
-- **Follow a Lemming:** Click any lemming on the stage (or press `f`) to open the **Lemming Inspector**, showing its sequential `#Number`, name, browser persona, language, every visited path, status, TTFB, redirect hops, queue wait, and direct links to any captured error artifact.
+- **Plan Execution Section (`#plan-section`):** Dedicated card section below the stage (shown when `-plan` is active) displaying plan cohort pass rate, passed/failed counts, rogue cohort count, and per-persona progress.
+- **Follow a Lemming:** Click any lemming on the stage (or press `f`) to open the **Lemming Inspector**, showing its sequential `#Number`, name, assigned persona/plan (or rogue mode), browser persona, language, every visited path, status, TTFB, redirect hops, queue wait, exit reason (including `plan-failed`), and direct links to any captured error artifact.
 - **Live Charts & Terrain Map:** Real-time traffic/failure/alive/latency curves, per-terrain ramp grid, busiest paths table, and a rate-limited **Happenings** event feed.
 
 ### Keyboard Shortcuts
@@ -57,8 +58,8 @@ As soon as any lemming or browser Scout triggers an error capture, the new artif
 
 Clicking any gallery card opens the 4-panel forensic modal backed by `GET /api/artifacts/{id}` and `GET /api/artifacts/{id}/image`:
 
-1. **Screenshot Tab:** Full-resolution captured screenshot (click to zoom/fit), viewport dimensions, capture mode (`cdp-replay`, `cdp-scout`, or `http-only` warning), and SHA-256 checksum.
-2. **Session & Cookie Jar Tab:** Lemming `#Number`, ID, friendly name, terrain/pack, User-Agent, persona, language, active journey step, `Referer`, navigation breadcrumb trail, and the complete **Cookie Jar table** (name, domain/path, flags, expiry/health, value byte size, HMAC fingerprint — plus raw cookie value *only* if `-reveal-session-cookies` was passed).
+1. **Screenshot Tab:** Full-resolution captured screenshot (click to zoom/fit), viewport dimensions, capture mode (`cdp-replay`, `cdp-scout`, or `http-only` — including failed non-GET / request-body plan steps where CDP replay is intentionally skipped), and SHA-256 checksum.
+2. **Session & Cookie Jar Tab:** Lemming `#Number`, ID, friendly name, terrain/pack, User-Agent, persona, language, active plan & step (or rogue navigation), `Referer`, navigation breadcrumb trail, and the complete **Cookie Jar table** (name, domain/path, flags, expiry/health, value byte size, HMAC fingerprint — plus raw cookie value *only* if `-reveal-session-cookies` was passed). Plan `with-cookies`, `with-headers`, `with-body`, and `body` request inputs are never exposed in portal APIs (`json:"-"`).
 3. **Extracted Error & Body Tab:** Detected format (`html`/`json`/`xml`/`text`), summary headline, error code, request ID, extracted detail bullets, stack trace block, allowlisted diagnostic response headers, and secret-scrubbed body excerpt.
 4. **JS Console Tab:** Filterable table of all `exception`, `error`, `warning`, `network`, and `log` entries captured from Chromium with source file, line/column, and stack traces.
 
@@ -79,7 +80,7 @@ Normally, Lemmings writes its reports and shuts down the portal as soon as the s
 ```bash
 lemmings -hit http://127.0.0.1:8080/ \
   -terrain 4 -pack 6 -until 30s -ramp 5s \
-  -journey examples/journeys/forensics-demo.json \
+  -plan examples/plans/forensics-demo.yaml \
   -scouts 1 -review -save-to ./reports
 ```
 
@@ -97,7 +98,7 @@ When the swarm finishes:
 | `/` | `GET` | Login page (unauthenticated) or Admin Portal HTML (authenticated). |
 | `/auth` | `POST` | Validates boot token (`application/x-www-form-urlencoded`), sets HMAC session cookie, rate-limited (`429` after 15 failures/min per remote IP from `r.RemoteAddr` ignoring `X-Forwarded-For`, capped at 1024 tracked IPs, plus a 60/min global ceiling). |
 | `/events` | `GET` | Server-Sent Events stream (`frame`, `metrics`, `artifact`, `artifact_review`). |
-| `/metrics` | `GET` | Live JSON counter snapshot (`alive`, `lemmings_started`, `completed`, `failed`, `total_visits`, `asset_requests`, `asset_failed`, `asset_denied_403`, `asset_bytes`, `waiting_room`, `queue_polls`, `bans_429`, `bans_403`, `scout_visits`, `scout_failures`, status classes, drop counters). |
+| `/metrics` | `GET` | Live JSON counter snapshot (`alive`, `lemmings_started`, `completed`, `failed`, `plan_passed`, `plan_failed`, `rogue_lemmings`, `total_visits`, `asset_requests`, `asset_failed`, `asset_denied_403`, `asset_bytes`, `waiting_room`, `queue_polls`, `bans_429`, `bans_403`, `scout_visits`, `scout_failures`, status classes, drop counters). |
 | `/replay` | `GET` | Recent ring-buffer event history for cold-join browser tabs. |
 | `/api/state` | `GET` | Complete stage snapshot, feed, metrics, and forensics stats. |
 | `/api/lemming?id=...` | `GET` | Full visit-by-visit life log for one lemming. |

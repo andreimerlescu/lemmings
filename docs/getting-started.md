@@ -55,24 +55,30 @@ Neon Arcade listens only on `http://127.0.0.1:8080`.
 
 ### 2. Validate your run with `-dry-run` (optional)
 
-Before sending load to any site, preview the indexed URL surface, ramp estimate, and browser probe without launching a single lemming:
+Before sending load to any site, validate your YAML plan(s) and `${ENV_VAR}` placeholders, preview the indexed URL surface, ramp estimate, and browser probe without launching a single lemming:
 
 ```bash
 go run ./cmd/lemmings \
   -hit http://127.0.0.1:8080/ \
-  -journey examples/journeys/forensics-demo.json \
+  -plan examples/plans/forensics-demo.yaml \
   -dry-run
 ```
 
-### 3. Run a live forensics swarm with Admin Review Mode
+### 3. Run a live forensics swarm (or YAML auth plan)
 
-In terminal 2:
+In terminal 2, launch the forensics showcase with Admin Review Mode:
 
 ```bash
 make run-forensics
 ```
 
-Or run the equivalent command directly:
+Or walk the bundled Neon Arcade auth plan (`examples/plans/neon-arcade-auth.yaml`) with CI gates (`-min-plan-pass-rate`, `-max-failure-rate`, `-p95-budget`):
+
+```bash
+make run-plan
+```
+
+The equivalent direct command for `make run-forensics`:
 
 ```bash
 go run ./cmd/lemmings \
@@ -82,7 +88,7 @@ go run ./cmd/lemmings \
   -limit 24 \
   -until 30s \
   -ramp 5s \
-  -journey examples/journeys/forensics-demo.json \
+  -plan examples/plans/forensics-demo.yaml \
   -scouts 1 \
   -review \
   -unique-report \
@@ -116,6 +122,7 @@ Open that link in your browser to:
 | **Concurrency Limit** | `-limit` | Global semaphore capping how many lemmings run simultaneously (`-1` disables cap). |
 | **Lifespan** | `-until` | Maximum time each individual lemming browses before exiting. |
 | **Ramp & Shape** | `-ramp`, `-ramp-shape` | Duration and pacing curve (`linear`, `fibonacci`, `step`) for bringing terrains online. |
+| **YAML Plans & Rogues** | `-plan`, `-rogue-rate` | Weighted multi-persona YAML suites (`GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS`) with cookies, headers, bodies, and assertions. By default 95% follow plans while 5% roam freely as rogues (`-rogue-rate 0` for 100% plan adherence). |
 | **Browser Scouts** | `-scouts` | Optional real-browser lemmings running alongside the HTTP swarm to catch pure JS/render errors on HTTP `200 OK` pages. |
 | **Rescued Score** | *(report)* | Percentage of lemmings that lived their entire session with zero failed pages. |
 
@@ -128,16 +135,17 @@ Lemmings uses deterministic exit codes for CI pipelines and automation:
 | Code | Meaning |
 | --- | --- |
 | `0` | Run (or `lemmings compare`) completed and all configured gates passed. |
-| `1` | Configuration error, origin indexing failure, browser initialization error (when explicitly required), or report delivery failure. |
-| `2` | Run completed, but a CI gate (`-max-failure-rate`, `-p95-budget`) or `lemmings compare` regression threshold failed. |
+| `1` | Configuration or YAML plan validation error (including unset `${ENV_VAR}` or exceeded `-max-plan-items`), origin indexing failure, browser initialization error (when explicitly required), or report delivery failure. |
+| `2` | Run completed, but a CI gate (`-max-failure-rate`, `-p95-budget`, `-min-plan-pass-rate`) or `lemmings compare` regression threshold failed. |
 | `130` | Interrupted by `SIGINT` (Ctrl-C) or `SIGTERM` during the swarm run; partial reports were still saved. |
 
 ---
 
 ## Next Steps
 
+- [Plans, Personas & Page Checks](plans.md) — full YAML `-plan` specification, multi-persona weights, rogue split, assertions, and 10 ready-to-adapt persona blueprints.
+- [Agent Skill (`SKILL.md`)](../SKILL.md) — step-by-step runbook for coding agents to inspect any website and author 10+ user-type YAML plans.
 - [Error Forensics & Screenshots](error-forensics-and-screenshots.md) — understand all 4 captured error artifacts, headless CDP replay, and Scouts.
 - [Admin Portal Guide](dashboard-guide.md) — live gallery, 4-panel inspector, triage tags, and `-review` hold mode.
-- [Journeys & Checks](journeys-and-checks.md) — assert page content, selectors, titles, and catch `200 OK` soft errors.
-- [Reports, Delivery & CI Gates](reports-and-ci-gates.md) — HTML/Markdown/JSON formats, S3/SMTP delivery, and `lemmings compare`.
+- [Reports, Delivery & CI Gates](reports-and-ci-gates.md) — HTML/Markdown/JSON formats, `PlanReport`, S3/SMTP delivery, and `lemmings compare`.
 - [CLI Reference](cli-reference.md) — every flag, alias, default, and environment variable.

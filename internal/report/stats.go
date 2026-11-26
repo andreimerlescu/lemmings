@@ -270,6 +270,9 @@ type VisitTrace struct {
 	Lemming       string              `json:"lemming"`
 	LemmingNumber int64               `json:"lemming_number,omitempty"`
 	Sequence      int                 `json:"seq"`
+	Method        string              `json:"method,omitempty"`
+	PlanName      string              `json:"plan_name,omitempty"`
+	Role          string              `json:"role,omitempty"`
 	Step          string              `json:"step,omitempty"`
 	URL           string              `json:"url"`
 	FinalURL      string              `json:"final_url,omitempty"`
@@ -301,6 +304,9 @@ func traceOf(v *swarm.Visit) VisitTrace {
 		Lemming:       v.LemmingID,
 		LemmingNumber: v.LemmingNumber,
 		Sequence:      v.Sequence,
+		Method:        v.Method,
+		PlanName:      v.PlanName,
+		Role:          v.Role,
 		Step:          v.Step,
 		URL:           discovery.SafeURL(v.URL),
 		FinalURL:      discovery.SafeURL(v.FinalURL),
@@ -372,6 +378,9 @@ func traceOfScout(e events.Event) VisitTrace {
 		Kind:          "scout",
 		Lemming:       e.LemmingID,
 		LemmingNumber: e.LemmingNumber,
+		Method:        e.Method,
+		PlanName:      e.PlanName,
+		Role:          e.Role,
 		URL:           discovery.SafeURL(e.URL),
 		Status:        e.StatusCode,
 		Bytes:         e.BytesIn,

@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
-	"github.com/andreimerlescu/lemmings/v2/internal/journey"
+	"github.com/andreimerlescu/lemmings/v2/internal/plan"
 	"github.com/andreimerlescu/lemmings/v2/internal/secrets"
 )
 
@@ -46,9 +46,11 @@ func DefaultConfig() Config {
 		RampShape:       RampLinear,
 		RequestTimeout:  DefaultRequestTimeout,
 		MaxBodyBytes:    DefaultMaxBodyBytes,
-		Navigation:      journey.NavigationLinks,
+		Navigation:      plan.NavigationLinks,
 		Assets:          false,
 		AssetsPerPage:   DefaultAssetsPerPage,
+		MaxPlanItems:    plan.DefaultMaxPlanItems,
+		RogueRate:       -1,
 		CaptureMax:      50,
 		CapturePerError: 3,
 		CaptureWorkers:  2,
@@ -91,18 +93,20 @@ type Config struct {
 	SMTPRequireTLS bool           `json:"-"`
 
 	// Lemming behaviour.
-	ThinkMin       time.Duration    `json:"think_min_ns"`
-	ThinkMax       time.Duration    `json:"think_max_ns"`
-	RequestTimeout time.Duration    `json:"request_timeout_ns"`
-	MaxBodyBytes   int64            `json:"max_body_bytes"`
-	MaxPages       int              `json:"max_pages"`
-	Navigation     string           `json:"navigation"`
-	StrictChecksum bool             `json:"strict_checksum"`
-	Assets         bool             `json:"assets"`
-	AssetsPerPage  int              `json:"assets_per_page"`
-	JourneyFile    string           `json:"-"`
-	Journey        *journey.Journey `json:"-"`
-	TraceFile      string           `json:"-"`
+	ThinkMin       time.Duration `json:"think_min_ns"`
+	ThinkMax       time.Duration `json:"think_max_ns"`
+	RequestTimeout time.Duration `json:"request_timeout_ns"`
+	MaxBodyBytes   int64         `json:"max_body_bytes"`
+	MaxPages       int           `json:"max_pages"`
+	Navigation     string        `json:"navigation"`
+	StrictChecksum bool          `json:"strict_checksum"`
+	Assets         bool          `json:"assets"`
+	AssetsPerPage  int           `json:"assets_per_page"`
+	PlanFile       string        `json:"-"`
+	Plan           *plan.Suite   `json:"-"`
+	MaxPlanItems   int           `json:"max_plan_items,omitempty"`
+	RogueRate      float64       `json:"rogue_rate,omitempty"`
+	TraceFile      string        `json:"-"`
 
 	// Error forensics, CDP screenshots, browser Scouts & Admin Portal review.
 	CaptureEnabled       bool          `json:"capture_enabled"`
@@ -120,9 +124,11 @@ type Config struct {
 	DryRun               bool          `json:"-"`
 
 	// CI gates.
-	FailureGate    bool          `json:"failure_gate"`
-	MaxFailureRate float64       `json:"max_failure_rate"`
-	P95Budget      time.Duration `json:"p95_budget_ns"`
+	FailureGate     bool          `json:"failure_gate"`
+	MaxFailureRate  float64       `json:"max_failure_rate"`
+	P95Budget       time.Duration `json:"p95_budget_ns"`
+	PlanPassGate    bool          `json:"plan_pass_gate,omitempty"`
+	MinPlanPassRate float64       `json:"min_plan_pass_rate,omitempty"`
 }
 
 // Validate applies safe defaults and rejects impossible configurations.
@@ -153,6 +159,8 @@ func (c *Config) Validate() error {
 		return errors.New("-max-pages must not be negative")
 	case c.AssetsPerPage < 0 || c.AssetsPerPage > 64:
 		return fmt.Errorf("-assets-per-page must be 0..64, got %d", c.AssetsPerPage)
+	case c.MaxPlanItems < 0 || c.MaxPlanItems > 1_000_000:
+		return fmt.Errorf("-max-plan-items must be 0..1000000, got %d", c.MaxPlanItems)
 	case c.P95Budget < 0:
 		return errors.New("-p95-budget must not be negative")
 	case c.FailureGate && (math.IsNaN(c.MaxFailureRate) || c.MaxFailureRate < 0 || c.MaxFailureRate > 1):
@@ -171,10 +179,10 @@ func (c *Config) Validate() error {
 
 	switch c.Navigation {
 	case "":
-		c.Navigation = journey.NavigationLinks
-	case journey.NavigationLinks, journey.NavigationRandom:
+		c.Navigation = plan.NavigationLinks
+	case plan.NavigationLinks, plan.NavigationRandom:
 	default:
-		return fmt.Errorf("-navigation must be %q or %q, got %q", journey.NavigationLinks, journey.NavigationRandom, c.Navigation)
+		return fmt.Errorf("-navigation must be %q or %q, got %q", plan.NavigationLinks, plan.NavigationRandom, c.Navigation)
 	}
 
 	switch strings.ToLower(c.RampShape) {
@@ -200,6 +208,9 @@ func (c *Config) Validate() error {
 	if c.AssetsPerPage == 0 {
 		c.AssetsPerPage = DefaultAssetsPerPage
 	}
+	if c.MaxPlanItems == 0 {
+		c.MaxPlanItems = plan.DefaultMaxPlanItems
+	}
 	if c.CaptureMax == 0 {
 		c.CaptureMax = 50
 	}
@@ -219,12 +230,32 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.JourneyFile != "" && c.Journey == nil {
-		j, err := journey.Load(c.JourneyFile, c.Hit)
+	if c.PlanFile != "" && c.Plan == nil {
+		suite, err := plan.LoadSuite(c.PlanFile, c.Hit, c.MaxPlanItems)
 		if err != nil {
 			return err
 		}
-		c.Journey = j
+		c.Plan = suite
+	}
+
+	if math.IsNaN(c.RogueRate) || c.RogueRate < -1 || c.RogueRate > 1 {
+		return fmt.Errorf("-rogue-rate must be -1 (auto) or 0..1, got %v", c.RogueRate)
+	}
+	if c.RogueRate < 0 {
+		if c.Plan != nil {
+			c.RogueRate = 0.05
+		} else {
+			c.RogueRate = 0
+		}
+	}
+
+	if c.PlanPassGate {
+		if c.Plan == nil {
+			return errors.New("-min-plan-pass-rate requires -plan")
+		}
+		if math.IsNaN(c.MinPlanPassRate) || c.MinPlanPassRate < 0 || c.MinPlanPassRate > 1 {
+			return fmt.Errorf("-min-plan-pass-rate must be 0..1, got %v", c.MinPlanPassRate)
+		}
 	}
 	return nil
 }

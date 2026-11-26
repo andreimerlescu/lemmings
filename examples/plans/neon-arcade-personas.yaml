@@ -1,0 +1,83 @@
+# Weighted multi-persona suite runnable against Neon Arcade (examples/demo).
+plans:
+  - name: casual-browser
+    weight: 5
+    plan:
+      - name: home
+        path: /
+        want-status: 200
+        want-body:
+          - contains: Insert coin
+      - name: games
+        path: /games
+        want-status: 200
+        want-body:
+          - contains: Outrun Horizon
+      - name: outrun
+        path: /games/outrun
+        want-status: 200
+        want-title: Outrun Horizon
+      - name: about
+        path: /about
+        want-status: 200
+        want-title: About
+
+  - name: token-buyer
+    weight: 3
+    stop-on-fail: true
+    plan:
+      - name: home
+        path: /
+        want-status: 200
+      - name: games
+        path: /games
+        want-status: 200
+      - name: checkout
+        path: /checkout
+        want-status: 200
+        want-body:
+          - contains: Tokens are on the way
+      - name: tokens
+        path: /tokens
+        want-status: 200
+        want-body:
+          - contains: 10 tokens
+          - not-contains: Something went wrong
+
+  - name: returning-member
+    weight: 2
+    stop-on-fail: true
+    plan:
+      - name: login-page
+        path: /login
+        method: GET
+        want-status: 200
+      - name: sign-in
+        path: /login
+        method: POST
+        with-body:
+          - key: username
+            value: arcade-vip
+          - key: password
+            value: synthwave-84
+        want-status: 200
+        want-headers:
+          - key: X-Arcade-Session
+            begins-with: arcade-
+        want-cookies:
+          - name: cookiejar_identity
+          - name: member_logged_in
+            value: 1
+      - name: profile
+        path: /profile
+        method: GET
+        want-status: 200
+        want-body:
+          - contains: Welcome arcade-vip!
+      - name: logout
+        path: /logout
+        method: GET
+        want-status: 200
+        want-cookies:
+          - name: member_logged_in
+            absent: true
