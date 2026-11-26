@@ -131,6 +131,8 @@ type Config struct {
 	P95Budget       time.Duration `json:"p95_budget_ns"`
 	PlanPassGate    bool          `json:"plan_pass_gate,omitempty"`
 	MinPlanPassRate float64       `json:"min_plan_pass_rate,omitempty"`
+	MinQueueHeld    int64         `json:"min_queue_held,omitempty"`
+	MaxQueueWait    time.Duration `json:"max_queue_wait_ns,omitempty"`
 }
 
 // Validate applies safe defaults and rejects impossible configurations.
@@ -165,6 +167,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("-max-plan-items must be 0..1000000, got %d", c.MaxPlanItems)
 	case c.P95Budget < 0:
 		return errors.New("-p95-budget must not be negative")
+	case c.MinQueueHeld < 0:
+		return errors.New("-min-queue-held must not be negative")
+	case c.MaxQueueWait < 0:
+		return errors.New("-max-queue-wait must not be negative")
 	case c.FailureGate && (math.IsNaN(c.MaxFailureRate) || c.MaxFailureRate < 0 || c.MaxFailureRate > 1):
 		return fmt.Errorf("-max-failure-rate must be 0..1, got %v", c.MaxFailureRate)
 	case c.CaptureMax < 0 || c.CaptureMax > 500:

@@ -77,6 +77,8 @@ const (
 	argTraceFile, aliasTraceFile             = "trace-file", "tf"
 	argMaxFailureRate, aliasMaxFailureRate   = "max-failure-rate", "mfr"
 	argP95Budget, aliasP95Budget             = "p95-budget", "p95"
+	argMinQueueHeld, aliasMinQueueHeld       = "min-queue-held", "mqh"
+	argMaxQueueWait, aliasMaxQueueWait       = "max-queue-wait", "mqw"
 
 	// v2.0 forensics, scouts, admin review, and dry-run flags.
 	argCapture                               = "capture"
@@ -527,6 +529,13 @@ func loadConfig() (swarm.Config, bool, error) {
 	figs.NewDuration(argP95Budget, 0, "CI gate: exit 2 if p95 visit latency exceeds this; 0 disables").
 		WithAlias(argP95Budget, aliasP95Budget)
 
+	figs.NewInt64(argMinQueueHeld, 0, "CI gate: exit 2 if waiting-room held visits fall below this count; 0 disables").
+		WithAlias(argMinQueueHeld, aliasMinQueueHeld).
+		WithValidator(argMinQueueHeld, figtree.AssureInt64InRange(0, 1_000_000_000))
+
+	figs.NewDuration(argMaxQueueWait, 0, "CI gate: exit 2 if p95 waiting-room wait duration exceeds this; 0 disables").
+		WithAlias(argMaxQueueWait, aliasMaxQueueWait)
+
 	figs.NewList(argSaveTo, []string{defaultSaveTo}, "Report destinations: comma-separated local paths, s3:// URIs, or mailto: URIs").
 		WithAlias(argSaveTo, aliasSaveTo).
 		WithValidator(argSaveTo, figtree.AssureListNotEmpty)
@@ -697,6 +706,8 @@ func loadConfig() (swarm.Config, bool, error) {
 		P95Budget:                *figs.Duration(argP95Budget),
 		PlanPassGate:             minPlanPass >= 0,
 		MinPlanPassRate:          max(minPlanPass, 0),
+		MinQueueHeld:             *figs.Int64(argMinQueueHeld),
+		MaxQueueWait:             *figs.Duration(argMaxQueueWait),
 	}
 	if cfg.Assets && (cfg.AssetsPerPage < 1 || cfg.AssetsPerPage > 64) {
 		return swarm.Config{}, false, fmt.Errorf("-assets-per-page must be 1..64 when -assets is enabled, got %d", cfg.AssetsPerPage)

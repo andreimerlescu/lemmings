@@ -375,6 +375,8 @@ func ErrorKind(err error) string {
 		return "queue-expired"
 	case errors.Is(err, errQueueNotAdmitted):
 		return "queue-not-admitted"
+	case errors.Is(err, errQueueTimeout):
+		return "queue-timeout"
 	case errors.As(err, &dnsErr):
 		return "dns"
 	case errors.As(err, &certErr), errors.As(err, &unknownAuthority), errors.As(err, &hostnameErr):

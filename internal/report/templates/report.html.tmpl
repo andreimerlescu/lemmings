@@ -193,7 +193,7 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
   <div class="persona-head">
     <span class="pill {{if and .Lemmings (eq .Failed 0)}}c2xx{{else if .Failed}}c5xx{{else}}rev-unreviewed{{end}}">weight {{.Weight}}</span>
     <h3>{{.Name}}</h3>
-    <span class="meta">{{formatInt .Passed}} / {{formatInt .Lemmings}} passed ({{pct100 .PassRate}}) · {{.TotalSteps}} step{{if ne .TotalSteps 1}}s{{end}}</span>
+    <span class="meta">{{formatInt .Passed}} / {{formatInt .Lemmings}} passed ({{pct100 .PassRate}}) · {{.TotalSteps}} step{{if ne .TotalSteps 1}}s{{end}}{{if .QueueHeld}} · queued {{formatInt .QueueHeld}} ({{formatInt .QueueAdmitted}} admitted{{if .QueueDied}}, {{formatInt .QueueDied}} died{{end}}, p95 wait {{round .QueueP95Wait}}){{end}}</span>
   </div>
   {{if .Steps}}
   <div class="scroll"><table>
@@ -369,7 +369,8 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
 <section class="kpis">
   <div class="kpi"><span>held</span><strong>{{formatInt .Room.Held}}</strong><em>visits queued</em></div>
   <div class="kpi"><span>admitted</span><strong>{{formatInt .Room.Admitted}}</strong><em>passed into origin</em></div>
-  <div class="kpi"><span>died in line</span><strong{{if .Room.DiedInLine}} class="fail-text"{{end}}>{{formatInt .Room.DiedInLine}}</strong><em>cancelled / error</em></div>
+  <div class="kpi"><span>died in line</span><strong{{if .Room.DiedInLine}} class="fail-text"{{end}}>{{formatInt .Room.DiedInLine}}</strong><em>queue timeout / cancelled</em></div>
+  {{if or .Room.NotAdmitted .Room.ReloadErrors}}<div class="kpi"><span>reload issues</span><strong class="fail-text">{{formatInt .Room.NotAdmitted}} / {{formatInt .Room.ReloadErrors}}</strong><em>not admitted · reload err</em></div>{{end}}
   <div class="kpi"><span>expired / denied</span><strong{{if or .Room.Expired .Room.Denied}} class="fail-text"{{end}}>{{formatInt .Room.Expired}} / {{formatInt .Room.Denied}}</strong><em>evicted · 403 denied</em></div>
   <div class="kpi"><span>rejected 503</span><strong{{if .Room.Rejected503}} class="fail-text"{{end}}>{{formatInt .Room.Rejected503}}</strong><em>breaker / capacity</em></div>
   <div class="kpi"><span>queue polls</span><strong>{{formatInt .Room.TotalPolls}}</strong><em>status checks</em></div>
@@ -429,7 +430,7 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
   <tr><th>path</th><th class="num">hits</th><th></th><th class="num">p50</th><th class="num">p95</th><th class="num">p99</th><th class="num">2xx</th><th class="num">3xx</th><th class="num">4xx</th><th class="num">5xx</th><th class="num">failed</th><th class="num">bytes</th></tr>
   {{range .Paths}}<tr>
     <td class="url">{{.URL}}</td><td class="num">{{formatInt .Hits}}</td><td style="width:90px"><div class="bar" style="width:{{width .HitShare}}"></div></td>
-    <td class="num">{{ms .P50}}</td><td class="num">{{ms .P95}}</td><td class="num">{{ms .P99}}</td>
+    <td class="num">{{ms .P50}}{{if .ColdHits}}<br><span class="muted">{{if .WarmP50}}warm {{ms .WarmP50}} · {{end}}setup {{ms .SetupP50}} ({{formatInt .ColdHits}} cold)</span>{{end}}</td><td class="num">{{ms .P95}}</td><td class="num">{{ms .P99}}</td>
     <td class="num c2xx">{{formatInt .XX2}}</td><td class="num c3xx">{{formatInt .XX3}}</td><td class="num c4xx">{{formatInt .XX4}}</td><td class="num c5xx">{{formatInt .XX5}}</td>
     <td class="num{{if .Failed}} fail-text{{end}}">{{formatInt .Failed}}</td><td class="num muted">{{.Bytes}}</td>
   </tr>{{end}}

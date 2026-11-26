@@ -90,8 +90,10 @@ lemmings -hit https://staging.example.com/ \
 | Gate Flag | Default | Condition to Pass |
 | --- | --- | --- |
 | `-max-failure-rate` (`-mfr`) | `-1` *(disabled)* | Observed `failed_visits / (total_visits - cancelled_visits) <= value` (`0..1`). |
-| `-p95-budget` (`-p95`) | `0` *(disabled)* | Observed global `p95` **page** visit latency `<= duration` (excludes waiting-room wait and `-assets` fetches). |
+| `-p95-budget` (`-p95`) | `0` *(disabled)* | Observed global `p95` **page** visit latency `<= duration` (excludes admitted waiting-room wait and `-assets` fetches; includes `queue-timeout` visits that starved in line). |
 | `-min-plan-pass-rate` (`-mppr`) | `-1` *(disabled)* | Observed plan cohort pass share `PlanPassed / PlanLemmings >= value` (`0..1`). Requires `-plan` (rogue lemmings are tracked separately in `PlanReport` and do not affect this ratio). |
+| `-min-queue-held` (`-mqh`) | `0` *(disabled)* | Observed `waiting_room.held >= value`. Fails vacuously green fast-lane runs when the waiting room never actually filled. |
+| `-max-queue-wait` (`-mqw`) | `0` *(disabled)* | Observed `waiting_room.p95_wait <= duration` (includes both admitted and `DiedInLine` waits). |
 
 ---
 

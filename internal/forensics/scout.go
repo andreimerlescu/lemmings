@@ -65,11 +65,15 @@ func runOneScout(
 	store *Store,
 	bus *events.Bus,
 ) {
-	until := cfg.Until
-	if until <= 0 {
-		until = 30 * time.Second
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if cfg.Until > 0 {
+		ctx, cancel = context.WithTimeout(parent, cfg.Until)
+	} else {
+		ctx, cancel = context.WithCancel(parent)
 	}
-	ctx, cancel := context.WithTimeout(parent, until)
 	defer cancel()
 
 	var num int64

@@ -73,8 +73,10 @@ lemmings compare [flags] <baseline.json> <candidate.json>
 | `-report-name` | `-rn` | `""` | `[a-zA-Z0-9._-]+` | Custom base filename slug (no `..` or slashes). |
 | `-trace-file` | `-tf` | `""` | new file path | Stream every visit to a new `0600` JSONL file (refuses to overwrite existing files). |
 | `-max-failure-rate` | `-mfr` | `-1` | `-1` or `0..1` | CI gate: exit `2` if failure share exceeds this value (negative disables). |
-| `-p95-budget` | `-p95` | `0` | `>= 0` | CI gate: exit `2` if global p95 **page** visit latency exceeds this duration (`0` disables; excludes waiting-room wait and `-assets` fetches). |
+| `-p95-budget` | `-p95` | `0` | `>= 0` | CI gate: exit `2` if global p95 **page** visit latency exceeds this duration (`0` disables; excludes waiting-room wait of admitted visits and `-assets` fetches; includes `queue-timeout` visits that starved in line). |
 | `-min-plan-pass-rate` | `-mppr` | `-1` | `-1` or `0..1` | CI gate: exit `2` if plan cohort pass share (`PlanPassed / PlanLemmings`) falls below this value. Requires `-plan` (negative disables). |
+| `-min-queue-held` | `-mqh` | `0` | `0..1000000000` | CI gate: exit `2` if waiting-room held visits (`waiting_room.held`) fall below this floor (`0` disables). Prevents vacuous fast-lane bypass tests when the room never fills. |
+| `-max-queue-wait` | `-mqw` | `0` | `>= 0` | CI gate: exit `2` if p95 waiting-room wait duration (`waiting_room.p95_wait`) exceeds this budget (`0` disables). |
 | `-smtp-host` | `-sh` | `""` | hostname | SMTP server hostname (overrides `LEMMINGS_SMTP_HOST`). |
 | `-smtp-port` | `-sp` | `0` | `0..65535` | SMTP server port (`465`=implicit TLS, otherwise STARTTLS; overrides `LEMMINGS_SMTP_PORT`). |
 | `-smtp-user` | `-su` | `""` | string | SMTP username (overrides `LEMMINGS_SMTP_USER`). |
@@ -94,7 +96,7 @@ lemmings compare [flags] <baseline.json> <candidate.json>
 | `-metrics-url-label` | `-mul` | `path` | `full`, `path`, `none` | URL label granularity on `lemmings_visit_duration_seconds` (capped at 999 unique URLs). |
 | `-tty` | — | `true` | `bool` | Use carriage-return live updates on stdout (`-tty=false` for CI logs). |
 | `-color` | — | `true` | `bool` | Synthwave truecolor terminal output (automatically disabled if `NO_COLOR` is set or stdout is not a TTY). |
-| `-version` | `-v` | `false` | `bool` | Print version string (`v2.0.0`) and exit `0`. |
+| `-version` | `-v` | `false` | `bool` | Print version string (`v2.0.1`) and exit `0`. |
 
 ---
 
