@@ -135,10 +135,15 @@ func TestResolveOptional_Precedence(t *testing.T) {
 func TestScrubText_RedactsSensitiveTokens(t *testing.T) {
 	fakeJWT := "eyJ" + "hbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9." + "eyJ" + "zdWIiOiIxMjM0NTY3ODkwIn0.abc123def456"
 	fakeAWS := "AKIA" + strings.Repeat("A", 16)
+	fakeAWSSecret := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 	fakeGH := "ghp_" + strings.Repeat("1", 36)
+	fakeGL := "glpat-" + strings.Repeat("a", 22)
+	fakeGoogle := "AIza" + strings.Repeat("B", 35)
 	fakePass := "synthetic_db_val_123"
 	fakeCookie := "synthetic_cookie_999"
 	fakeURLPass := "synthetic_url_val"
+	fakeOpaqueToken := "opaque_tok_987654"
+	fakeOpaqueJWT := "opaque_jwt_value_42"
 
 	cases := []struct {
 		name   string
@@ -148,7 +153,14 @@ func TestScrubText_RedactsSensitiveTokens(t *testing.T) {
 		{"bearer", "Authorization: Bearer " + fakeJWT, "eyJ"},
 		{"aws_key", "error connecting with " + fakeAWS + " to bucket", fakeAWS},
 		{"github_pat", "token=" + fakeGH, fakeGH},
+		{"gitlab_pat", "gitlab error using " + fakeGL + " on clone", fakeGL},
+		{"google_api_key", "maps init failed key " + fakeGoogle + " denied", fakeGoogle},
 		{"kv_password", `{"password":"` + fakePass + `"}`, fakePass},
+		{"kv_token", `{"token":"` + fakeOpaqueToken + `"}`, fakeOpaqueToken},
+		{"kv_jwt", `jwt=` + fakeOpaqueJWT + `&next=/home`, fakeOpaqueJWT},
+		{"kv_aws_secret", `{"aws_secret_access_key":"` + fakeAWSSecret + `"}`, fakeAWSSecret},
+		{"kv_db_pass", `db_pass=` + fakePass + ` host=db.internal`, fakePass},
+		{"kv_smtp_pass", `{"smtp_pass":"` + fakePass + `"}`, fakePass},
 		{"cookie_hdr", "Cookie: session=" + fakeCookie + "; theme=dark", fakeCookie},
 		{"url_creds", "https://" + "alice:" + fakeURLPass + "@internal.example.com/api", fakeURLPass},
 	}
@@ -162,6 +174,12 @@ func TestScrubText_RedactsSensitiveTokens(t *testing.T) {
 				t.Errorf("ScrubText(%q) expected REDACTED marker -> %q", tc.input, got)
 			}
 		})
+	}
+
+	// Ensure benign pass-related fields are not falsely redacted.
+	benign := `{"plan_pass_rate":"99.5%","bypass":"true","tests_passed":"1000"}`
+	if got := ScrubText(benign); got != benign {
+		t.Errorf("ScrubText falsely modified benign input:\n got: %s\nwant: %s", got, benign)
 	}
 }
 

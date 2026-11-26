@@ -389,3 +389,84 @@ func TestS3Target_RejectsUnsafeComponents(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteTargets_OmitScreenshotsByDefaultAndAllowOptIn(t *testing.T) {
+	rendered := report.Rendered{
+		Filename:       "lemmings.2026.11.26.example.com",
+		Domain:         "example.com",
+		Markdown:       "# report\n![shot](lemmings.2026.11.26.example.com.artifacts/a1.jpg)",
+		HTML:           `<html><img src="data:image/jpeg;base64,/9j/LOCAL"></html>`,
+		HTMLForEmail:   `<html><img src="data:image/jpeg;base64,/9j/EMAIL"></html>`,
+		JSON:           []byte(`{"image_path":"lemmings.2026.11.26.example.com.artifacts/a1.jpg"}`),
+		RemoteMarkdown: "# report\n- **Screenshot:** omitted from remote report",
+		RemoteHTML:     `<html><p>Screenshot omitted from remote report</p></html>`,
+		RemoteJSON:     []byte(`{"image_path":""}`),
+		Artifacts: []report.ArtifactAsset{
+			{Filename: "a1.jpg", MIMEType: "image/jpeg", Data: []byte{0xff, 0xd8, 0xff, 0xd9}},
+		},
+	}
+
+	// MailTarget defaults to screenshot-free RemoteHTML and RemoteMarkdown.
+	mt := &MailTarget{
+		to:      []string{"ops@example.com"},
+		subject: "SEC-10 Test",
+		smtpCfg: SMTPConfig{From: "lemmings@example.com"},
+	}
+	mdDefault, htmlDefault := mt.selectBodies(rendered)
+	if strings.Contains(htmlDefault, "data:image/jpeg;base64,") {
+		t.Errorf("SEC-10 violation: MailTarget included screenshot by default: %s", htmlDefault)
+	}
+	if strings.Contains(mdDefault, ".artifacts/a1.jpg") {
+		t.Errorf("SEC-10 violation: MailTarget linked screenshot in Markdown by default: %s", mdDefault)
+	}
+
+	// MailTarget opt-in includes HTMLForEmail and full Markdown.
+	mt.SetIncludeScreenshots(true)
+	mdOptIn, htmlOptIn := mt.selectBodies(rendered)
+	if !strings.Contains(htmlOptIn, "/9j/EMAIL") || !strings.Contains(mdOptIn, ".artifacts/a1.jpg") {
+		t.Errorf("MailTarget opt-in did not include email screenshots: md=%q html=%q", mdOptIn, htmlOptIn)
+	}
+
+	// S3Target defaults to screenshot-free payloads and zero .artifacts/ uploads.
+	st, err := NewS3Target("s3://ops-bucket/reports", nil)
+	if err != nil {
+		t.Fatalf("NewS3Target: %v", err)
+	}
+	defaultUploads, err := st.buildUploads(rendered)
+	if err != nil {
+		t.Fatalf("buildUploads default: %v", err)
+	}
+	if len(defaultUploads) != 3 {
+		t.Fatalf("S3 default upload count = %d, want 3 (md/html/json only, no artifacts)", len(defaultUploads))
+	}
+	for _, u := range defaultUploads {
+		if u.isArtifact || strings.Contains(u.key, ".artifacts/") {
+			t.Errorf("SEC-10 violation: S3Target scheduled screenshot artifact upload by default: %s", u.key)
+		}
+		if strings.Contains(string(u.body), "data:image/jpeg;base64,") || strings.Contains(string(u.body), ".artifacts/a1.jpg") {
+			t.Errorf("SEC-10 violation: S3Target default payload %s contained screenshot data/link: %s", u.key, string(u.body))
+		}
+	}
+
+	// S3Target opt-in uploads full HTML/Markdown/JSON plus .artifacts/ files.
+	st.SetIncludeScreenshots(true)
+	optInUploads, err := st.buildUploads(rendered)
+	if err != nil {
+		t.Fatalf("buildUploads opt-in: %v", err)
+	}
+	if len(optInUploads) != 4 {
+		t.Fatalf("S3 opt-in upload count = %d, want 4 (md/html/json + 1 artifact)", len(optInUploads))
+	}
+	var sawArtifact, sawInline bool
+	for _, u := range optInUploads {
+		if u.isArtifact && strings.HasSuffix(u.key, ".artifacts/a1.jpg") {
+			sawArtifact = true
+		}
+		if u.label == "html" && strings.Contains(string(u.body), "/9j/LOCAL") {
+			sawInline = true
+		}
+	}
+	if !sawArtifact || !sawInline {
+		t.Errorf("S3Target opt-in missing expected screenshot upload (sawArtifact=%v, sawInline=%v)", sawArtifact, sawInline)
+	}
+}

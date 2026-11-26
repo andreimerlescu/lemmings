@@ -1035,6 +1035,129 @@ func TestWaitingRoom_ConcertAPIJSON429AndLegacyNeonArcade(t *testing.T) {
 	}
 }
 
+func TestWaitingRoom_Concert503DistinguishedFromBareAndBreaker503(t *testing.T) {
+	origPoll := waitingRoomPollInterval
+	waitingRoomPollInterval = 15 * time.Millisecond
+	t.Cleanup(func() { waitingRoomPollInterval = origPoll })
+
+	var pageHits, pagePolls, requeueHits, requeuePolls atomic.Int32
+	mux := http.NewServeMux()
+	// 1. Concert waiting-room HTML served with HTTP 503 + Set-Cookie: room_ticket.
+	mux.HandleFunc("/concert-503", func(w http.ResponseWriter, r *http.Request) {
+		if pageHits.Add(1) == 1 {
+			http.SetCookie(w, &http.Cookie{Name: "room_ticket", Value: "tkt-503", Path: "/"})
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, `<!doctype html><html><head><title>Your place is saved · Concert</title></head><body><h1>Good things. Worth the wait.</h1><div id="position">355</div><p>Your place is saved</p></body></html>`)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: "concert_admit", Value: "pass-503", Path: "/", HttpOnly: true})
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<!doctype html><html><head><title>Home</title></head><body>Welcome in!</body></html>`)
+	})
+	mux.HandleFunc("/queue/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("requeue") == "1" {
+			requeuePolls.Add(1)
+			fmt.Fprint(w, `{"ready":true,"position":0,"waiting":false}`)
+			return
+		}
+		if pagePolls.Add(1) == 1 {
+			fmt.Fprint(w, `{"ready":false,"position":120,"waiting":true}`)
+			return
+		}
+		fmt.Fprint(w, `{"ready":true,"position":0,"waiting":false}`)
+	})
+	// 2. Bare upstream 503 HTML (must remain a failure even though lemming already holds room_ticket).
+	mux.HandleFunc("/bare-503", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `<html><head><title>503 Service Temporarily Unavailable</title></head><body><h1>503 Service Temporarily Unavailable</h1></body></html>`)
+	})
+	// 3. Reload after admission returns another Concert 503 queue page -> errQueueNotAdmitted (not Rejected503).
+	mux.HandleFunc("/requeue-503", func(w http.ResponseWriter, _ *http.Request) {
+		requeueHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `{"queued":true,"status_url":"/queue/status?requeue=1","retry_after_seconds":0,"position":42}`)
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	key, _ := secrets.NewEphemeralKey()
+	jar, _ := NewInspectingJar(key)
+	client := &http.Client{Jar: jar, Timeout: 2 * time.Second}
+	cfg := Config{Hit: srv.URL + "/", RequestTimeout: 2 * time.Second}
+	lem := NewLemming(1, 0, 0, cfg, &discovery.URLPool{Origin: srv.URL}, client, jar, nil, nil, nil)
+
+	// Concert HTML 503 waiting room is detected, polled, and admitted without failing.
+	vQueue, _, _, _, _ := lem.hit(context.Background(), srv.URL+"/concert-503", nil)
+	if vQueue.Failed || !vQueue.WaitingRoom.Detected || vQueue.WaitingRoom.Mode != WaitingRoomModeConcertHTML ||
+		!vQueue.WaitingRoom.Admitted || vQueue.WaitingRoom.Rejected503 || vQueue.WaitingRoom.Position != 355 ||
+		vQueue.WaitingRoom.Polls != 2 || !vQueue.ConcertAdmit || vQueue.StatusCode != http.StatusOK {
+		t.Fatalf("Concert HTML 503 waiting room not handled properly: failed=%v status=%d admit=%v wr=%+v",
+			vQueue.Failed, vQueue.StatusCode, vQueue.ConcertAdmit, vQueue.WaitingRoom)
+	}
+
+	// Bare 503 HTML must still fail and must NOT be misclassified as a waiting room even with room_ticket in jar.
+	vBare, _, _, _, _ := lem.hit(context.Background(), srv.URL+"/bare-503", nil)
+	if !vBare.Failed || vBare.WaitingRoom.Detected || vBare.WaitingRoom.Rejected503 || vBare.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("bare 503 misclassified: failed=%v status=%d wr=%+v", vBare.Failed, vBare.StatusCode, vBare.WaitingRoom)
+	}
+
+	// Re-queued 503 on reload after ready:true must report errQueueNotAdmitted, not breaker Rejected503.
+	vRequeue, _, _, _, _ := lem.hit(context.Background(), srv.URL+"/requeue-503", nil)
+	if !vRequeue.Failed || !vRequeue.WaitingRoom.Detected || vRequeue.WaitingRoom.Admitted ||
+		vRequeue.WaitingRoom.Rejected503 || !errors.Is(vRequeue.Error, errQueueNotAdmitted) {
+		t.Errorf("re-queued 503 reload misclassified: failed=%v err=%v wr=%+v", vRequeue.Failed, vRequeue.Error, vRequeue.WaitingRoom)
+	}
+}
+
+func TestDetectWaitingRoomResponse_ExplicitConcertHeaderTakesPrecedence(t *testing.T) {
+	// 1. Custom copy/markup with zero HTML markers still detects via X-Concert-Queue: 1 + Retry-After.
+	hdr := http.Header{
+		"X-Concert-Queue":      []string{"1"},
+		"Retry-After":          []string{"4"},
+		"X-Concert-Position":   []string{"88"},
+		"X-Concert-Status-Url": []string{"/custom/queue"},
+	}
+	sig, ok := DetectWaitingRoomResponse(http.StatusServiceUnavailable, "text/html", hdr, []byte(`<html><body>Totally custom brand copy</body></html>`))
+	if !ok || sig.Mode != WaitingRoomModeConcertHTML || sig.Position != 88 || sig.StatusURL != "/custom/queue" || sig.RetryAfter != 4*time.Second {
+		t.Fatalf("explicit X-Concert-Queue header failed: ok=%v sig=%+v", ok, sig)
+	}
+
+	// 2. Header-only 503 with empty body still detects via X-Concert-Queue: 1.
+	sigEmpty, ok := DetectWaitingRoomResponse(http.StatusServiceUnavailable, "", http.Header{"X-Concert-Queue": []string{"1"}}, nil)
+	if !ok || sigEmpty.StatusURL != "/queue/status" {
+		t.Fatalf("header-only empty body failed: ok=%v sig=%+v", ok, sigEmpty)
+	}
+
+	// 3. Off-origin X-Concert-Status-Url is sanitized back to /queue/status.
+	sigEvil, ok := DetectWaitingRoomResponse(http.StatusServiceUnavailable, "text/html", http.Header{
+		"X-Concert-Queue":      []string{"true"},
+		"X-Concert-Status-Url": []string{"https://evil.example/steal"},
+	}, nil)
+	if !ok || sigEvil.StatusURL != "/queue/status" {
+		t.Fatalf("off-origin X-Concert-Status-Url not sanitized: ok=%v sig=%+v", ok, sigEvil)
+	}
+
+	// 4. Explicit {"queued":false} breaker JSON is never misclassified as queued even if header is set.
+	if _, ok := DetectWaitingRoomResponse(http.StatusServiceUnavailable, "application/json", http.Header{
+		"X-Concert-Queue": []string{"1"},
+	}, []byte(`{"queued":false,"error":"room full"}`)); ok {
+		t.Error("breaker JSON queued:false must not be treated as queued")
+	}
+
+	// 5. X-Concert-Queue: 0 on a bare 503 does not trigger detection.
+	if _, ok := DetectWaitingRoomResponse(http.StatusServiceUnavailable, "text/html", http.Header{
+		"X-Concert-Queue": []string{"0"},
+	}, []byte(`<html><body>503 Service Unavailable</body></html>`)); ok {
+		t.Error("X-Concert-Queue: 0 must not trigger waiting room detection")
+	}
+}
+
 func TestWaitingRoom_Poll429Backoff403BanEvictionCookiesAndCancel(t *testing.T) {
 	origPoll := waitingRoomPollInterval
 	orig429 := waitingRoom429Backoff

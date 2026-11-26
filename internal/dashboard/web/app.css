@@ -368,7 +368,7 @@ td.good { color: var(--green); font-weight: 600; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; color: var(--muted); margin-top: 6px; }
 .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
 .lg-cyan { background: var(--cyan); color: var(--cyan); } .lg-red { background: var(--red); color: var(--red); }
-.lg-yellow { color: var(--yellow); } .lg-pink { background: var(--pink); }
+.lg-yellow { color: var(--yellow); } .lg-orange { background: var(--orange); color: var(--orange); } .lg-pink { background: var(--pink); }
 .legend i.dash { background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 7px) !important; height: 2px; }
 .tip {
   position: absolute; pointer-events: none; background: var(--raised); border: 1px solid var(--line-strong);

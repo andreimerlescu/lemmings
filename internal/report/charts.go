@@ -33,6 +33,7 @@ func TimelineSVG(points []TimelinePoint) htmltemplate.HTML {
 	rate := make([]float64, len(points))
 	fail := make([]float64, len(points))
 	alive := make([]float64, len(points))
+	queued := make([]float64, len(points))
 	p50 := make([]float64, len(points))
 	p95 := make([]float64, len(points))
 	width := 1.0
@@ -42,21 +43,33 @@ func TimelineSVG(points []TimelinePoint) htmltemplate.HTML {
 			width = 1.0
 		}
 	}
+	hasQueued := false
 	for i, p := range points {
 		xs[i] = p.OffsetSeconds
 		rate[i] = p.RatePerSecond
 		fail[i] = float64(p.Failed) / width
 		alive[i] = float64(p.Alive)
+		queued[i] = float64(p.Queued)
+		if p.Queued > 0 {
+			hasQueued = true
+		}
 		p50[i] = p.P50Millis
 		p95[i] = p.P95Millis
 	}
 
+	trafficSeries := []chartSeries{
+		{values: rate, class: "s-rate", kind: "area"},
+		{values: fail, class: "s-fail", kind: "bars"},
+		{values: alive, class: "s-alive", kind: "dash", right: true},
+	}
+	rightUnit := "alive"
+	if hasQueued {
+		trafficSeries = append(trafficSeries, chartSeries{values: queued, class: "s-queued", kind: "dash", right: true})
+		rightUnit = "alive / queued"
+	}
+
 	var b strings.Builder
-	b.WriteString(chart("Traffic over time", "visits/s", "alive", xs,
-		chartSeries{values: rate, class: "s-rate", kind: "area"},
-		chartSeries{values: fail, class: "s-fail", kind: "bars"},
-		chartSeries{values: alive, class: "s-alive", kind: "dash", right: true},
-	))
+	b.WriteString(chart("Traffic over time", "visits/s", rightUnit, xs, trafficSeries...))
 	b.WriteString(chart("Latency over time", "ms", "", xs,
 		chartSeries{values: p95, class: "s-p95", kind: "line"},
 		chartSeries{values: p50, class: "s-p50", kind: "line"},

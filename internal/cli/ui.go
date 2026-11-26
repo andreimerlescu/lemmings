@@ -276,6 +276,9 @@ func (u *UI) PrintBootSummary(cfg swarm.Config, browserStatus string) {
 	if cfg.AllowRemoteCDP {
 		warn("  ⚠  -allow-remote-cdp is ON: non-loopback -cdp-url endpoints are permitted\n              (link-local, multicast, unspecified, and cloud-metadata IPs remain blocked).")
 	}
+	if cfg.IncludeRemoteScreenshots {
+		warn("  ⚠  -include-remote-screenshots is ON: unscrubbed error screenshots will be\n              included in remote email (mailto:) and S3 (s3://) reports.")
+	}
 	if warned {
 		u.println()
 	}

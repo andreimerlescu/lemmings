@@ -1198,13 +1198,20 @@
       const tl = (live && live.timeline) || [];
       const xs = tl.map((p) => p.t);
       const width = tl.length > 1 ? Math.max(tl[1].t - tl[0].t, 0.1) : 1;
+      const hasQueued = tl.some((p) => (p.queued || 0) > 0);
+      const qLeg = $('queued-legend');
+      if (qLeg) qLeg.hidden = !hasQueued;
+      const trafficSeries = [
+        { label: 'visits/s', values: tl.map((p) => p.rps), color: P.cyan, kind: 'area', tip: (v) => v.toFixed(1) },
+        { label: 'failures/s', values: tl.map((p) => p.failed / width), color: P.red, kind: 'bars', tip: (v) => v.toFixed(1) },
+        { label: 'alive', values: tl.map((p) => p.alive), color: P.yellow, kind: 'dash', right: true, tip: (v) => fmtInt(v) },
+      ];
+      if (hasQueued) {
+        trafficSeries.push({ label: 'queued', values: tl.map((p) => p.queued || 0), color: P.orange, kind: 'dash', right: true, tip: (v) => fmtInt(v) });
+      }
       this.draw('chart-traffic', {
         xs, right: true, fmt: (v) => fmtInt(v), rfmt: (v) => fmtInt(v),
-        series: [
-          { label: 'visits/s', values: tl.map((p) => p.rps), color: P.cyan, kind: 'area', tip: (v) => v.toFixed(1) },
-          { label: 'failures/s', values: tl.map((p) => p.failed / width), color: P.red, kind: 'bars', tip: (v) => v.toFixed(1) },
-          { label: 'alive', values: tl.map((p) => p.alive), color: P.yellow, kind: 'dash', right: true, tip: (v) => fmtInt(v) },
-        ],
+        series: trafficSeries,
       });
       const budget = CFG.p95_gate > 0 ? [{ value: CFG.p95_gate * 1000, color: P.red }] : [];
       $('budget-legend').hidden = !budget.length;

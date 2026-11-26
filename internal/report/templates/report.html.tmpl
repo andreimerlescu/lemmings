@@ -96,7 +96,7 @@ tr.failed td { background:rgba(254,68,80,.07); }
 .chart .dash { stroke-dasharray:6 5; }
 .chart .area { stroke:none; opacity:.18; }
 .s-rate { stroke:var(--cyan); fill:var(--cyan); } .s-fail { fill:var(--red); opacity:.85; }
-.s-alive { stroke:var(--yellow); } .s-p95 { stroke:var(--pink); } .s-p50 { stroke:var(--cyan); }
+.s-alive { stroke:var(--yellow); } .s-queued { stroke:var(--orange); } .s-p95 { stroke:var(--pink); } .s-p50 { stroke:var(--cyan); }
 .legend { display:flex; flex-wrap:wrap; gap:16px; font-size:13px; color:var(--muted); }
 .legend i { display:inline-block; width:18px; height:3px; border-radius:2px; vertical-align:middle; margin-right:6px; }
 
@@ -223,6 +223,7 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
     <span><i style="background:var(--cyan)"></i>visits / s</span>
     <span><i style="background:var(--red)"></i>failures / s</span>
     <span><i style="background:var(--yellow)"></i>lemmings alive</span>
+    {{if or .Room.Held .Room.TotalPolls}}<span><i style="background:var(--orange)"></i>queued</span>{{end}}
     <span><i style="background:var(--pink)"></i>p95 latency</span>
     <span><i style="background:var(--cyan)"></i>p50 latency</span>
   </div>
@@ -277,7 +278,11 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
             <div class="shot-meta">{{$a.Screenshot.Width}}×{{$a.Screenshot.Height}} · {{$a.Screenshot.MIMEType}} · {{formatBytesInt (add $a.Screenshot.Bytes 0)}} · sha256:{{shortID $a.Screenshot.SHA256}}</div>
           </div>
         {{else if $a.Screenshot}}
+          {{if $.OmitScreenshots}}
+          <div class="shot-box"><p class="muted">Screenshot omitted from remote report (screenshots are not scrubbed; pass <code>-include-remote-screenshots</code> to opt in, or view in local report / Admin Portal).</p></div>
+          {{else}}
           <div class="shot-box"><p class="muted">Screenshot saved externally at <code>{{$a.Screenshot.RelativePath}}</code> (omitted inline to respect HTML size budget).</p></div>
+          {{end}}
         {{else}}
           <div class="shot-box"><p class="muted">No screenshot captured ({{$a.CaptureMode}}).</p></div>
         {{end}}

@@ -56,14 +56,20 @@ type ArtifactAsset struct {
 }
 
 // Rendered is a report rendered in every output format plus standalone assets.
+// RemoteMarkdown, RemoteHTML, and RemoteJSON hold screenshot-free variants used
+// by default for remote delivery targets (email and S3) under SEC-10 unless the
+// operator explicitly opts in with -include-remote-screenshots.
 type Rendered struct {
-	Filename     string
-	Domain       string
-	Markdown     string
-	HTML         string
-	HTMLForEmail string
-	JSON         []byte
-	Artifacts    []ArtifactAsset
+	Filename       string
+	Domain         string
+	Markdown       string
+	HTML           string
+	HTMLForEmail   string
+	JSON           []byte
+	Artifacts      []ArtifactAsset
+	RemoteMarkdown string
+	RemoteHTML     string
+	RemoteJSON     []byte
 }
 
 // ForensicsReport embeds capture statistics and all redacted error artifacts
@@ -489,9 +495,10 @@ type Reporter struct {
 	unsub      func()
 	onErrorLog func(targetName string, err error)
 
-	latency  LatencySeries
-	ttfb     Histogram
-	timeline *Timeline
+	latency        LatencySeries
+	ttfb           Histogram
+	timeline       *Timeline
+	queuedLemmings map[string]struct{}
 
 	visits, failed, cancelled  int64
 	checksumChanges, htmlPages int64
@@ -537,7 +544,8 @@ func New(cfg swarm.Config) *Reporter {
 		assetLatency:  LatencySeries{exactCap: exactGlobalSamples},
 		assetsByClass: make(map[string]*assetClassStats),
 		personas:      make(map[string]*personaStats),
-		timeline:      NewTimeline(),
+		timeline:       NewTimeline(),
+		queuedLemmings: make(map[string]struct{}),
 		statusCodes:   make(map[int]int64),
 		errorKinds:    make(map[string]int64),
 		failedChecks:  make(map[string]int64),
@@ -614,6 +622,7 @@ func (r *Reporter) Attach(bus *events.Bus) {
 	r.unsub = bus.Subscribe(events.Filter(r.handleEvent,
 		events.VisitComplete, events.VisitError,
 		events.AssetComplete, events.AssetError,
+		events.WaitingRoomQueued, events.WaitingRoom,
 		events.QueuePoll,
 		events.ScoutVisit,
 		events.LemmingBorn, events.LemmingDied,
@@ -649,6 +658,24 @@ func (r *Reporter) handleEvent(e events.Event) {
 			}
 		}
 		r.recordAsset(av, e.AdmitPass)
+	case events.WaitingRoomQueued:
+		r.mu.Lock()
+		if e.LemmingID == "" {
+			r.timeline.bucket(e.OccurredAt.Sub(r.startedAt)).QueueEntered++
+		} else if _, already := r.queuedLemmings[e.LemmingID]; !already {
+			r.queuedLemmings[e.LemmingID] = struct{}{}
+			r.timeline.bucket(e.OccurredAt.Sub(r.startedAt)).QueueEntered++
+		}
+		r.mu.Unlock()
+	case events.WaitingRoom:
+		r.mu.Lock()
+		if e.LemmingID == "" {
+			r.timeline.bucket(e.OccurredAt.Sub(r.startedAt)).QueueExited++
+		} else if _, wasQueued := r.queuedLemmings[e.LemmingID]; wasQueued {
+			delete(r.queuedLemmings, e.LemmingID)
+			r.timeline.bucket(e.OccurredAt.Sub(r.startedAt)).QueueExited++
+		}
+		r.mu.Unlock()
 	case events.QueuePoll:
 		r.mu.Lock()
 		r.roomPollEvents++
@@ -662,6 +689,10 @@ func (r *Reporter) handleEvent(e events.Event) {
 			b.Born++
 		} else {
 			b.Died++
+			if _, wasQueued := r.queuedLemmings[e.LemmingID]; wasQueued {
+				delete(r.queuedLemmings, e.LemmingID)
+				b.QueueExited++
+			}
 		}
 		r.mu.Unlock()
 	}
@@ -1594,11 +1625,17 @@ func countRows[K comparable](m map[K]int64, label func(K) string) []CountRow {
 
 type htmlTemplateModel struct {
 	Data
-	InlineImages map[string]htmltemplate.URL
+	InlineImages    map[string]htmltemplate.URL
+	OmitScreenshots bool
+}
+
+type mdTemplateModel struct {
+	Data
+	OmitScreenshots bool
 }
 
 // RenderData renders data into Markdown, self-contained HTML, SMTP-safe HTML,
-// JSON, and standalone screenshot assets.
+// JSON, standalone screenshot assets, and screenshot-free remote variants.
 func RenderData(data Data, filename, domain string) (Rendered, error) {
 	if domain == "" {
 		domain = discovery.DomainFromURL(data.Config.Hit)
@@ -1637,7 +1674,7 @@ func RenderData(data Data, filename, domain string) (Rendered, error) {
 		}
 	}
 
-	md, err := renderMarkdown(data)
+	md, err := renderMarkdown(mdTemplateModel{Data: data})
 	if err != nil {
 		return Rendered{}, fmt.Errorf("render markdown: %w", err)
 	}
@@ -1656,15 +1693,56 @@ func RenderData(data Data, filename, domain string) (Rendered, error) {
 	if err != nil {
 		return Rendered{}, fmt.Errorf("render json: %w", err)
 	}
+
+	remoteMD := md
+	remoteHTML := htmlFull
+	remoteJSON := js
+	if len(assets) > 0 {
+		remoteData := cloneDataWithoutScreenshotPaths(data)
+		remoteMD, err = renderMarkdown(mdTemplateModel{Data: remoteData, OmitScreenshots: true})
+		if err != nil {
+			return Rendered{}, fmt.Errorf("render remote markdown: %w", err)
+		}
+		remoteHTML, err = renderHTML(htmlTemplateModel{Data: remoteData, OmitScreenshots: true})
+		if err != nil {
+			return Rendered{}, fmt.Errorf("render remote html: %w", err)
+		}
+		remoteJSON, err = json.MarshalIndent(remoteData, "", "  ")
+		if err != nil {
+			return Rendered{}, fmt.Errorf("render remote json: %w", err)
+		}
+	}
+
 	return Rendered{
-		Filename:     filename,
-		Domain:       domain,
-		Markdown:     md,
-		HTML:         htmlFull,
-		HTMLForEmail: htmlEmail,
-		JSON:         js,
-		Artifacts:    assets,
+		Filename:       filename,
+		Domain:         domain,
+		Markdown:       md,
+		HTML:           htmlFull,
+		HTMLForEmail:   htmlEmail,
+		JSON:           js,
+		Artifacts:      assets,
+		RemoteMarkdown: remoteMD,
+		RemoteHTML:     remoteHTML,
+		RemoteJSON:     remoteJSON,
 	}, nil
+}
+
+func cloneDataWithoutScreenshotPaths(data Data) Data {
+	if len(data.Forensics.Artifacts) == 0 {
+		return data
+	}
+	arts := make([]forensics.Artifact, len(data.Forensics.Artifacts))
+	copy(arts, data.Forensics.Artifacts)
+	for i := range arts {
+		if arts[i].Screenshot != nil {
+			sc := *arts[i].Screenshot
+			sc.Data = nil
+			sc.RelativePath = ""
+			arts[i].Screenshot = &sc
+		}
+	}
+	data.Forensics.Artifacts = arts
+	return data
 }
 
 func safeImageDataURI(sc *forensics.Screenshot) (htmltemplate.URL, bool) {
@@ -1784,9 +1862,9 @@ var (
 			ParseFS(reportTemplates, "templates/report.html.tmpl"))
 )
 
-func renderMarkdown(data Data) (string, error) {
+func renderMarkdown(model mdTemplateModel) (string, error) {
 	var buf bytes.Buffer
-	if err := markdownTemplate.Execute(&buf, data); err != nil {
+	if err := markdownTemplate.Execute(&buf, model); err != nil {
 		return "", err
 	}
 	return buf.String(), nil

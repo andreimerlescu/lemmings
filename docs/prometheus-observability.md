@@ -9,7 +9,9 @@ lemmings -hit https://staging.example.com/ \
 ```
 
 - **Isolated Registry:** Uses a dedicated `prometheus.NewRegistry()` without global Go/process collector pollution.
-- **DNS-Rebinding Protection:** Bound exclusively to `127.0.0.1` and guarded by a `Host` allowlist (`localhost`, `127.0.0.1`, `::1`); non-loopback `Host` headers return `403 Forbidden`.
+- **Loopback-Only Binding & DNS-Rebinding Protection (`SEC-04`):** Bound exclusively to `127.0.0.1` (there is no remote-bind flag) and guarded by a `Host` allowlist (`localhost`, `127.0.0.1`, `::1`); non-loopback `Host` headers return `403 Forbidden`. A Prometheus server on another machine cannot scrape `/metrics` directly:
+  - **SSH tunnel (works as-is):** `ssh -L 9090:127.0.0.1:9090 <loadgen-host>` lets a remote Prometheus scrape `localhost:9090` directly because it sends `Host: localhost:9090`.
+  - **Reverse proxy:** If you front `/metrics` with nginx, Caddy, or Envoy on the loadgen host, the proxy **must rewrite the `Host` header** to a loopback host (e.g., `proxy_set_header Host 127.0.0.1:9090;`) or Lemmings will return `403 Forbidden`.
 - **Cardinality Protection:** `-metrics-url-label` (`path`, `full`, or `none`) caps distinct URL label values at **999**; any URL beyond the cap is grouped under `url="other"` to protect your Prometheus TSDB.
 
 ---

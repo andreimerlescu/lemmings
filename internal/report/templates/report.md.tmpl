@@ -1,6 +1,6 @@
 # lemmings v{{.Version}} report
 
-**{{rescueLine .}}** {{if .Sessions}}You rescued **{{pct100 .RescuedPercent}}** — {{formatInt .Rescued}} of {{formatInt .Sessions}} lemmings finished without a single failed page.{{end}}
+**{{rescueLine .Data}}** {{if .Sessions}}You rescued **{{pct100 .RescuedPercent}}** — {{formatInt .Rescued}} of {{formatInt .Sessions}} lemmings finished without a single failed page.{{end}}
 
 **target:**    {{.Config.Hit}}
 **generated:** {{.GeneratedAt.Format "2006-01-02 15:04:05 MST"}}
@@ -116,6 +116,8 @@ Triage: **{{formatInt .Forensics.Stats.Bug}}** bug · **{{formatInt .Forensics.S
 - **Admin Triage Note:** {{.ReviewNote}}{{end}}{{if and .Screenshot .Screenshot.RelativePath}}
 
 ![Artifact #{{.Sequence}} screenshot]({{.Screenshot.RelativePath}})
+{{else if and $.OmitScreenshots .Screenshot}}
+- **Screenshot:** omitted from remote report (screenshots are not scrubbed; pass `-include-remote-screenshots` to opt in, or inspect locally / in Admin Portal)
 {{end}}{{if .Console}}
 **JS Console ({{len .Console}} entries):**
 {{range .Console}}- **[{{upper .Level}}]** `{{.Text}}`{{if .SourceURL}} ({{.SourceURL}}{{if .Line}}:{{.Line}}{{end}}){{end}}

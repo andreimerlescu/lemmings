@@ -12,10 +12,10 @@ For every target directory or S3 prefix, Lemmings writes:
 
 | File | Description |
 | --- | --- |
-| `<name>.html` | Self-contained Synthwave '84 dark/light interactive report with inline SVG traffic/latency charts, `PlanReport` (plan cohort pass rate, rogue cohort breakdown, and per-persona ordered `PlanStepReport` tables when `-plan` is set), separated Page vs. Asset class tables, enriched Waiting Room / Concert pass & ban metrics, Browser Scout totals, notable lemmings, prominent `DATA DROPPED` integrity warnings when backpressure drops occur, and inline base64 screenshots (capped at `12 MiB` for Local/S3; `2 MiB` for SMTP email). |
-| `<name>.md` | GitHub-friendly Markdown report with ASCII sparklines, `mdCell`-escaped tables (including `PlanReport` persona & ordered step tables), adaptive `mdFence`-escaped error body excerpts, extracted error details, JS console summaries, and relative image links (`./<name>.artifacts/<id>.jpg`) so screenshots render directly in PRs and repositories. |
-| `<name>.json` | Machine-readable report (`schema_version: "2.0"`) for CI pipelines, archival, and `lemmings compare`. Contains exact counters (`lemmings_started`, `lemmings_completed`, `lemmings_not_started`), high-precision percentiles (`exactGlobalSamples = 8192`, `exactPathSamples = 1024`, then `<= 0.5%` 4096-bin `uint64` histogram), `PlanReport` (cohort pass rate, rogue cohort, and per-persona ordered `PlanStepReport` tables), `assets`, `waiting_room`, `concert`, `scouts`, gates, and forensics metadata (`image_path`, `sha256`, triage verdicts, console entries, extracted errors) with **zero base64 blobs** and **zero secrets, plan `with-*`/`body` inputs, or raw cookie values**. |
-| `<name>.artifacts/<id>.jpg` | Standalone compressed screenshot images written beside Local and S3 reports. |
+| `<name>.html` | Self-contained Synthwave '84 dark/light interactive report with inline SVG traffic/latency charts, `PlanReport` (plan cohort pass rate, rogue cohort breakdown, and per-persona ordered `PlanStepReport` tables when `-plan` is set), separated Page vs. Asset class tables, enriched Waiting Room / Concert pass & ban metrics, Browser Scout totals, notable lemmings, prominent `DATA DROPPED` integrity warnings when backpressure drops occur, and inline base64 screenshots on local reports (capped at `12 MiB`; omitted on remote S3/email reports by default unless `-include-remote-screenshots` is passed, where email uses a `2 MiB` cap). |
+| `<name>.md` | GitHub-friendly Markdown report with ASCII sparklines, `mdCell`-escaped tables (including `PlanReport` persona & ordered step tables), adaptive `mdFence`-escaped error body excerpts, extracted error details, JS console summaries, and relative image links (`./<name>.artifacts/<id>.jpg`) on local reports (and remote S3/email reports when `-include-remote-screenshots` is passed) so screenshots render directly in PRs and repositories. |
+| `<name>.json` | Machine-readable report (`schema_version: "2.0"`) for CI pipelines, archival, and `lemmings compare`. Contains exact counters (`lemmings_started`, `lemmings_completed`, `lemmings_not_started`), high-precision percentiles (`exactGlobalSamples = 8192`, `exactPathSamples = 1024`, then `<= 0.5%` 4096-bin `uint64` histogram), `PlanReport` (cohort pass rate, rogue cohort, and per-persona ordered `PlanStepReport` tables), `assets`, `waiting_room`, `concert`, `scouts`, gates, and forensics metadata (`image_path` when screenshots are delivered, `sha256`, triage verdicts, console entries, extracted errors) with **zero base64 blobs** and **zero plan `with-*`/`body` inputs or raw cookie values** (note: error body and console text scrubbing is best-effort regex matching). |
+| `<name>.artifacts/<id>.jpg` | Standalone compressed screenshot images written beside Local reports (and uploaded to S3 only when `-include-remote-screenshots` is passed). |
 
 ### Report Naming
 
@@ -42,7 +42,7 @@ Specify one or more comma-separated destinations via `-save-to` (and/or `LEMMING
 Writes `.md`, `.html`, `.json`, and `<name>.artifacts/` inside `<path>/lemmings/<domain>/` using atomic temp-file + `Sync` + `Close` + `Rename` writes confined inside Go's `os.OpenRoot` (`0750` dirs, `0640` files) with strict `validateSafeComponent` checks so partial writes, path traversal, or symlink escapes are impossible.
 
 ### 2. Amazon S3 (`s3://bucket/prefix`)
-Validates `Domain`, `Filename`, and every artifact filename with `validateSafeComponent` before uploading `.md`, `.html`, `.json`, and all `<name>.artifacts/<id>.<ext>` objects using the standard AWS SDK v2 credential chain (`AWS_PROFILE`, IAM role, `AWS_REGION` / `AWS_DEFAULT_REGION`).
+Validates `Domain`, `Filename`, and every artifact filename with `validateSafeComponent` before uploading `.md`, `.html`, and `.json` using the standard AWS SDK v2 credential chain (`AWS_PROFILE`, IAM role, `AWS_REGION` / `AWS_DEFAULT_REGION`). Because screenshots are not scrubbed, `.artifacts/<id>.<ext>` objects and inline base64 images are **omitted by default** on S3; pass `-include-remote-screenshots` to upload them.
 
 ```bash
 AWS_REGION=us-east-1 lemmings -hit https://staging.example.com/ \
@@ -50,7 +50,7 @@ AWS_REGION=us-east-1 lemmings -hit https://staging.example.com/ \
 ```
 
 ### 3. Hardened SMTP Email (`mailto:ops@example.com?cc=dev@example.com&subject=Nightly%20Run`)
-Sends a MIME `multipart/mixed` email with the `2 MiB`-bounded inline HTML report plus the Markdown report attached.
+Sends a MIME `multipart/mixed` email with the inline HTML report plus the Markdown report attached. Because screenshots are not scrubbed, inline screenshots are **omitted by default** on emailed reports; pass `-include-remote-screenshots` to embed screenshots (capped at `2 MiB` for SMTP deliverability).
 
 > **Security Note (v2.0):** Lemmings never accepts an SMTP password as a CLI flag so credentials never appear in `ps aux` or shell history. Provide SMTP credentials via `-smtp-pass-file` (must be `0600`), `-smtp-pass-stdin`, `LEMMINGS_SMTP_PASS_FILE`, or `LEMMINGS_SMTP_PASS`.
 

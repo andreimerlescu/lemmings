@@ -88,6 +88,7 @@ const (
 	argChromeBin                             = "chrome-bin"
 	argCDPURL                                = "cdp-url"
 	argAllowRemoteCDP                        = "allow-remote-cdp"
+	argIncludeRemoteScreenshots              = "include-remote-screenshots"
 	argScouts                                = "scouts"
 	argRevealSessionCookies                  = "reveal-session-cookies"
 	argReview                                = "review"
@@ -230,6 +231,10 @@ func run() int {
 		}
 		if mt, ok := t.(*delivery.MailTarget); ok {
 			delivery.ApplyFlagSMTPOverrides(mt, cfg)
+			mt.SetIncludeScreenshots(cfg.IncludeRemoteScreenshots)
+		}
+		if st, ok := t.(*delivery.S3Target); ok {
+			st.SetIncludeScreenshots(cfg.IncludeRemoteScreenshots)
 		}
 		rep.AddTarget(t)
 	}
@@ -582,6 +587,8 @@ func loadConfig() (swarm.Config, bool, error) {
 
 	figs.NewBool(argAllowRemoteCDP, false, "Allow non-loopback -cdp-url endpoints (cloud metadata and link-local IPs remain blocked)")
 
+	figs.NewBool(argIncludeRemoteScreenshots, false, "Include unscrubbed error screenshots in remote reports (mailto: and s3:// targets); local reports and Admin Portal always include screenshots")
+
 	figs.NewInt(argScouts, 0, "Real-browser Scout lemmings running alongside HTTP swarm to catch JS/render errors (0..8)").
 		WithValidator(argScouts, figtree.AssureIntInRange(0, 8))
 
@@ -678,9 +685,10 @@ func loadConfig() (swarm.Config, bool, error) {
 		CaptureTimeout:       *figs.Duration(argCaptureTimeout),
 		CaptureFormat:        *figs.String(argCaptureFormat),
 		ChromeBin:            *figs.String(argChromeBin),
-		CDPURL:               *figs.String(argCDPURL),
-		AllowRemoteCDP:       *figs.Bool(argAllowRemoteCDP),
-		Scouts:               *figs.Int(argScouts),
+		CDPURL:                   *figs.String(argCDPURL),
+		AllowRemoteCDP:           *figs.Bool(argAllowRemoteCDP),
+		IncludeRemoteScreenshots: *figs.Bool(argIncludeRemoteScreenshots),
+		Scouts:                   *figs.Int(argScouts),
 		RevealSessionCookies: *figs.Bool(argRevealSessionCookies),
 		ReviewMode:           *figs.Bool(argReview),
 		DryRun:               *figs.Bool(argDryRun),
