@@ -139,6 +139,10 @@ func (c *CDPCapturer) Close() error {
 func (c *CDPCapturer) Capture(ctx context.Context, req CaptureRequest) (Artifact, error) {
 	ex := plan.ExtractErrorBody(req.StatusCode, req.ContentType, req.Headers, req.RawBody)
 	if req.SkipBrowserReplay {
+		warn := req.SkipBrowserReason
+		if warn == "" {
+			warn = "CDP replay skipped for non-GET request; captured HTTP-only forensics"
+		}
 		return Artifact{
 			ID:             newArtifactID(),
 			Fingerprint:    Fingerprint(req.Path, req.StatusCode, req.TriggerReason),
@@ -147,7 +151,7 @@ func (c *CDPCapturer) Capture(ctx context.Context, req CaptureRequest) (Artifact
 			Path:           req.Path,
 			TriggerReason:  req.TriggerReason,
 			CaptureMode:    ModeHTTPOnly,
-			CaptureWarning: "CDP replay skipped for non-GET request; captured HTTP-only forensics",
+			CaptureWarning: warn,
 			StatusCode:     req.StatusCode,
 			LatencyMS:      req.LatencyMS,
 			Session:        req.Session,

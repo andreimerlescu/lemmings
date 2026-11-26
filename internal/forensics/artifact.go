@@ -281,6 +281,7 @@ type CaptureRequest struct {
 	Path              string
 	Method            string
 	SkipBrowserReplay bool
+	SkipBrowserReason string
 	StatusCode        int
 	LatencyMS         float64
 	TriggerReason     string

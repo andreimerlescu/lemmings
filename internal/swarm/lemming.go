@@ -80,6 +80,7 @@ var (
 	errQueueCookiesRequired = errors.New("waiting room requires cookies")
 	errQueueExpired         = errors.New("waiting room ticket expired or evicted")
 	errQueueNotAdmitted     = errors.New("waiting room reload was not admitted")
+	errQueueTimeout         = errors.New("waiting room wait exceeded lemming lifespan")
 )
 
 // Lemming cohort roles recorded on Identity.Role, Visit.Role, and LifeLog.Role.
@@ -580,7 +581,19 @@ func (l *Lemming) submitForensics(ll *LifeLog, v *Visit, step *plan.PlanItem, bo
 		origin, _ = discovery.ParseOrigin(l.cfg.Hit)
 	}
 
-	skipBrowserReplay := (v.Method != "" && v.Method != http.MethodGet) || (step != nil && step.HasRequestBody())
+	var skipBrowserReplay bool
+	var skipBrowserReason string
+	switch {
+	case v.Method != "" && v.Method != http.MethodGet:
+		skipBrowserReplay = true
+		skipBrowserReason = "CDP replay skipped for non-GET request; captured HTTP-only forensics"
+	case step != nil && step.HasRequestBody():
+		skipBrowserReplay = true
+		skipBrowserReason = "CDP replay skipped for request with body; captured HTTP-only forensics"
+	case step != nil && len(step.WithHeaders) > 0:
+		skipBrowserReplay = true
+		skipBrowserReason = "CDP replay skipped for request with custom with-headers; captured HTTP-only forensics"
+	}
 
 	req := forensics.CaptureRequest{
 		URL:               targetURL,
@@ -589,6 +602,7 @@ func (l *Lemming) submitForensics(ll *LifeLog, v *Visit, step *plan.PlanItem, bo
 		Path:              discovery.PathOf(targetURL),
 		Method:            v.Method,
 		SkipBrowserReplay: skipBrowserReplay,
+		SkipBrowserReason: skipBrowserReason,
 		StatusCode:        v.StatusCode,
 		LatencyMS:         float64(v.EffectiveLatency()) / float64(time.Millisecond),
 		TriggerReason:     triggerReason(v),
@@ -797,7 +811,7 @@ func (l *Lemming) hitStep(ctx context.Context, targetURL string, step *plan.Plan
 	visit.Duration = time.Since(start)
 	visit.QueuePolls = visit.WaitingRoom.Polls
 	visit.ErrorKind = ErrorKind(visit.Error)
-	visit.Cancelled = visit.Error != nil && ctx.Err() != nil
+	visit.Cancelled = visit.Error != nil && ctx.Err() != nil && !errors.Is(visit.Error, errQueueTimeout)
 
 	finalURL := visit.FinalURL
 	if finalURL == "" {
@@ -898,6 +912,9 @@ func (l *Lemming) waitInRoom(
 			visit.WaitingRoom.ExitedAt = time.Now()
 		}
 		visit.WaitingRoom.Duration = visit.WaitingRoom.ExitedAt.Sub(visit.WaitingRoom.EnteredAt)
+		if errors.Is(visit.Error, errQueueTimeout) {
+			visit.Latency = visit.WaitingRoom.Duration
+		}
 		visit.QueuePolls = visit.WaitingRoom.Polls
 		if l.bus != nil {
 			l.bus.Emit(events.Event{
@@ -925,7 +942,12 @@ func (l *Lemming) waitInRoom(
 
 	for {
 		if !l.sleepContext(ctx, nextWait) {
-			visit.Error = ctx.Err()
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				visit.Error = errQueueTimeout
+				visit.Failed = true
+			} else {
+				visit.Error = ctx.Err()
+			}
 			return nil, lastHeaders, lastContentType
 		}
 
@@ -940,7 +962,12 @@ func (l *Lemming) waitInRoom(
 		if pollErr != nil {
 			l.emitQueuePoll(pollURL, pollStatus, lastPos, visit.WaitingRoom.Polls, pollDur, true, pollErr)
 			if ctx.Err() != nil {
-				visit.Error = ctx.Err()
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					visit.Error = errQueueTimeout
+					visit.Failed = true
+				} else {
+					visit.Error = ctx.Err()
+				}
 				return nil, lastHeaders, lastContentType
 			}
 			netFailures++

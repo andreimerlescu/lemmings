@@ -1559,6 +1559,19 @@ func TestCDPCapturer_SkipBrowserReplay(t *testing.T) {
 			t.Errorf("unexpected mode/warning: mode=%q warning=%q", art.CaptureMode, art.CaptureWarning)
 		}
 	})
+
+	t.Run("custom-skip-reason", func(t *testing.T) {
+		customReq := req
+		customReq.Method = "GET"
+		customReq.SkipBrowserReason = "CDP replay skipped for request with custom with-headers; captured HTTP-only forensics"
+		art, err := (&CDPCapturer{}).Capture(context.Background(), customReq)
+		if err != nil {
+			t.Fatalf("Capture(SkipBrowserReplay=true) returned error: %v", err)
+		}
+		if art.CaptureMode != ModeHTTPOnly || art.CaptureWarning != customReq.SkipBrowserReason {
+			t.Errorf("unexpected mode/warning: mode=%q warning=%q", art.CaptureMode, art.CaptureWarning)
+		}
+	})
 }
 
 // TestBuildScoutTargets_PlanSuiteAndNonGETFallback verifies that Scouts walk
