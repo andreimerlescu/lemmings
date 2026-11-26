@@ -1,21 +1,27 @@
 package swarm
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
+	"github.com/andreimerlescu/lemmings/v2/internal/plan"
 )
 
 const (
@@ -59,6 +65,7 @@ type ResponseHop struct {
 }
 
 type fetchResponse struct {
+	method      string
 	body        []byte
 	status      int
 	bytes       int64
@@ -75,6 +82,7 @@ type fetchResponse struct {
 }
 
 func (r *fetchResponse) applyTo(v *Visit) {
+	v.Method = r.method
 	v.StatusCode = r.status
 	v.FinalURL = r.finalURL
 	v.CookieNames = r.cookieNames
@@ -83,8 +91,30 @@ func (r *fetchResponse) applyTo(v *Visit) {
 	v.Error = r.err
 }
 
-func (l *Lemming) fetch(ctx context.Context, rawURL string) fetchResponse {
-	r := fetchResponse{finalURL: rawURL}
+func hasJSONContentType(headers []plan.PlanHeader) bool {
+	ct := ""
+	for _, h := range headers {
+		if strings.EqualFold(strings.TrimSpace(h.Key), "Content-Type") {
+			ct = h.Value
+		}
+	}
+	if strings.TrimSpace(ct) == "" {
+		return false
+	}
+	media, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return false
+	}
+	media = strings.ToLower(strings.TrimSpace(media))
+	return media == "application/json" || (strings.HasPrefix(media, "application/") && strings.HasSuffix(media, "+json"))
+}
+
+func (l *Lemming) fetch(ctx context.Context, rawURL string, step *plan.PlanItem) fetchResponse {
+	method := http.MethodGet
+	if step != nil {
+		method = step.EffectiveMethod()
+	}
+	r := fetchResponse{finalURL: rawURL, method: method}
 
 	timeout := l.cfg.RequestTimeout
 	if timeout <= 0 {
@@ -95,38 +125,123 @@ func (l *Lemming) fetch(ctx context.Context, rawURL string) fetchResponse {
 		limit = DefaultMaxBodyBytes
 	}
 
+	var bodyBytes []byte
+	var defaultCT string
+	if step != nil && step.Body != "" {
+		bodyBytes = []byte(step.Body)
+		defaultCT = "text/plain; charset=utf-8"
+	} else if step != nil && len(step.WithBody) > 0 {
+		if hasJSONContentType(step.WithHeaders) {
+			payload := make(map[string]string, len(step.WithBody))
+			for _, b := range step.WithBody {
+				payload[b.Key] = b.Value
+			}
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				r.err = fmt.Errorf("marshal request body: %w", err)
+				return r
+			}
+			bodyBytes = encoded
+			defaultCT = "application/json"
+		} else {
+			vals := url.Values{}
+			for _, b := range step.WithBody {
+				vals.Add(b.Key, b.Value)
+			}
+			bodyBytes = []byte(vals.Encode())
+			defaultCT = "application/x-www-form-urlencoded"
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	start := time.Now()
 	tr := &timingTrace{start: start}
-	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, tr.trace()), http.MethodGet, rawURL, nil)
+	var bodyReader io.Reader
+	if len(bodyBytes) > 0 {
+		bodyReader = bytes.NewReader(bodyBytes)
+	}
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, tr.trace()), method, rawURL, bodyReader)
 	if err != nil {
 		r.err = fmt.Errorf("build request: %w", err)
 		return r
 	}
+	if len(bodyBytes) > 0 {
+		req.ContentLength = int64(len(bodyBytes))
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+		}
+	}
+
+	client := *l.client
+	if client.Jar == nil && l.jar != nil {
+		client.Jar = l.jar
+	}
+
+	if step != nil && len(step.WithCookies) > 0 && req.URL != nil && req.URL.Scheme != "" && req.URL.Host != "" {
+		var targetJar http.CookieJar
+		if l.jar != nil {
+			targetJar = l.jar
+		} else if client.Jar != nil {
+			targetJar = client.Jar
+		}
+		if targetJar != nil {
+			originRoot := &url.URL{
+				Scheme: req.URL.Scheme,
+				Host:   req.URL.Host,
+				Path:   "/",
+			}
+			cookies := make([]*http.Cookie, 0, len(step.WithCookies))
+			for _, c := range step.WithCookies {
+				cookies = append(cookies, &http.Cookie{
+					Name:  c.Name,
+					Value: c.Value,
+					Path:  "/",
+				})
+			}
+			targetJar.SetCookies(originRoot, cookies)
+		}
+	}
+
 	req.Header.Set("User-Agent", l.identity.UserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", l.identity.Language)
 	if l.referrer != "" {
 		req.Header.Set("Referer", discovery.SafeURL(l.referrer))
 	}
+	if len(bodyBytes) > 0 && defaultCT != "" {
+		req.Header.Set("Content-Type", defaultCT)
+	}
+	if step != nil {
+		for _, h := range step.WithHeaders {
+			if strings.EqualFold(strings.TrimSpace(h.Key), "Host") {
+				continue
+			}
+			req.Header.Set(h.Key, h.Value)
+		}
+	}
 
-	client := *l.client
-	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
-		if next.Response != nil {
-			r.hops = AppendHops(r.hops, ResponseHop{
-				URL:    discovery.SafeURL(via[len(via)-1].URL.String()),
-				Status: next.Response.StatusCode,
-			})
+	if step != nil && !step.ShouldFollowRedirects() {
+		client.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
 		}
-		if !discovery.SameOrigin(rawURL, next.URL.String()) {
-			return ErrOffsiteRedirect
+	} else {
+		client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+			if next.Response != nil {
+				r.hops = AppendHops(r.hops, ResponseHop{
+					URL:    discovery.SafeURL(via[len(via)-1].URL.String()),
+					Status: next.Response.StatusCode,
+				})
+			}
+			if !discovery.SameOrigin(rawURL, next.URL.String()) {
+				return ErrOffsiteRedirect
+			}
+			if len(via) >= maxRedirects {
+				return ErrTooManyRedirects
+			}
+			return nil
 		}
-		if len(via) >= maxRedirects {
-			return ErrTooManyRedirects
-		}
-		return nil
 	}
 
 	resp, err := client.Do(req)

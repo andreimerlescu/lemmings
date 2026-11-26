@@ -146,6 +146,8 @@ func (t *Terrain) live(ctx context.Context, packIndex int64) {
 			LemmingNumber: ident.Number,
 			Terrain:       int(t.id),
 			Pack:          int(packIndex),
+			Role:          ident.Role,
+			PlanName:      ident.PlanName,
 			Payload:       &ident,
 		})
 	}
@@ -155,6 +157,7 @@ func (t *Terrain) live(ctx context.Context, packIndex int64) {
 	if t.metrics != nil {
 		t.metrics.LemmingsAlive.Add(-1)
 		t.metrics.LemmingsCompleted.Add(1)
+		t.metrics.recordDeath(&ll)
 	}
 	if t.send != nil {
 		t.send(ll)
@@ -167,6 +170,9 @@ func (t *Terrain) live(ctx context.Context, packIndex int64) {
 			Terrain:       int(t.id),
 			Pack:          int(packIndex),
 			Duration:      ll.Duration,
+			Role:          ll.Role,
+			PlanName:      ll.PlanName,
+			PlanPassed:    ll.PlanPassed,
 			Payload:       &ll,
 		})
 	}

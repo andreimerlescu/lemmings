@@ -1,0 +1,88 @@
+# Full authenticated visitor lifecycle against Neon Arcade (examples/demo).
+# Tip: For real targets, inject credentials via ${ENV_VAR} instead of literals.
+name: neon-arcade-auth
+stop-on-fail: true
+plan:
+  - name: home
+    path: /
+    want-status: 200
+    want-title: Neon Arcade
+    want-body:
+      - contains: Insert coin
+
+  - name: about
+    path: /about
+    want-status: 200
+    want-title: About
+
+  - name: login-page
+    path: /login
+    method: GET
+    want-status: 200
+    want-selectors:
+      - form
+
+  - name: profile-unauthenticated
+    path: /profile
+    method: GET
+    want-status: 200
+    want-cookies:
+      - name: member_logged_in
+        absent: true
+    want-body:
+      - contains: You must be signed in to perform this action.
+
+  - name: submit-login
+    path: /login
+    method: POST
+    with-body:
+      - key: username
+        value: player1
+      - key: password
+        value: insert-coin-1984
+    want-status: 200
+    want-headers:
+      - key: X-Arcade-Session
+        begins-with: arcade-
+    want-cookies:
+      - name: cookiejar_identity
+        begins-with: user-
+      - name: member_logged_in
+        value: 1
+    want-body:
+      - contains: Welcome player1!
+
+  - name: home-authenticated
+    path: /
+    method: GET
+    chill: 200ms
+    want-status: 200
+    want-cookies:
+      - name: cookiejar_identity
+      - name: member_logged_in
+        value: 1
+    want-body:
+      - contains: Insert coin
+
+  - name: profile-authenticated
+    path: /profile
+    method: GET
+    want-status: 200
+    want-body:
+      - contains: Welcome player1!
+      - not-contains: You must be signed in to perform this action.
+
+  - name: logout
+    path: /logout
+    method: GET
+    want-status: 200
+    want-cookies:
+      - name: cookiejar_identity
+        absent: true
+      - name: member_logged_in
+        absent: true
+
+  - name: missing-endpoint
+    path: /magic-unicorn-pixie-dust
+    method: POST
+    want-status: 404

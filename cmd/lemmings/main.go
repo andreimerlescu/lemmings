@@ -25,8 +25,8 @@ import (
 	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
 	"github.com/andreimerlescu/lemmings/v2/internal/events"
 	"github.com/andreimerlescu/lemmings/v2/internal/forensics"
-	"github.com/andreimerlescu/lemmings/v2/internal/journey"
 	"github.com/andreimerlescu/lemmings/v2/internal/metrics"
+	"github.com/andreimerlescu/lemmings/v2/internal/plan"
 	"github.com/andreimerlescu/lemmings/v2/internal/report"
 	"github.com/andreimerlescu/lemmings/v2/internal/secrets"
 	"github.com/andreimerlescu/lemmings/v2/internal/swarm"
@@ -70,7 +70,10 @@ const (
 	argStrictChecksum, aliasStrictChecksum   = "strict-checksum", "sc"
 	argAssets                                = "assets"
 	argAssetsPerPage                         = "assets-per-page"
-	argJourney, aliasJourney                 = "journey", "j"
+	argPlan, aliasPlan                       = "plan", "pl"
+	argMaxPlanItems, aliasMaxPlanItems       = "max-plan-items", "mpi"
+	argRogueRate, aliasRogueRate             = "rogue-rate", "rr"
+	argMinPlanPassRate, aliasMinPlanPassRate = "min-plan-pass-rate", "mppr"
 	argTraceFile, aliasTraceFile             = "trace-file", "tf"
 	argMaxFailureRate, aliasMaxFailureRate   = "max-failure-rate", "mfr"
 	argP95Budget, aliasP95Budget             = "p95-budget", "p95"
@@ -470,12 +473,24 @@ func loadConfig() (swarm.Config, bool, error) {
 	figs.NewDuration(argThinkMax, defaultThinkMax, "Maximum pause between pages").
 		WithAlias(argThinkMax, aliasThinkMax)
 
-	figs.NewString(argNavigation, journey.NavigationLinks, "Page selection: links (follow page links) or random (pick from pool)").
+	figs.NewString(argNavigation, plan.NavigationLinks, "Page selection: links (follow page links) or random (pick from pool)").
 		WithAlias(argNavigation, aliasNavigation).
-		WithValidator(argNavigation, assureStringInSet(journey.NavigationLinks, journey.NavigationRandom))
+		WithValidator(argNavigation, assureStringInSet(plan.NavigationLinks, plan.NavigationRandom))
 
-	figs.NewString(argJourney, "", "JSON file describing an ordered journey with checks per step").
-		WithAlias(argJourney, aliasJourney)
+	figs.NewString(argPlan, "", "YAML plan file, comma-separated list, or directory of *.yaml/*.yml user personas").
+		WithAlias(argPlan, aliasPlan)
+
+	figs.NewInt(argMaxPlanItems, plan.DefaultMaxPlanItems, "Maximum steps allowed per YAML plan (1..1000000)").
+		WithAlias(argMaxPlanItems, aliasMaxPlanItems).
+		WithValidator(argMaxPlanItems, figtree.AssureIntInRange(1, 1_000_000))
+
+	figs.NewFloat64(argRogueRate, -1.0, "Fraction of lemmings wandering sitemap/crawled links instead of following -plan (-1=auto: 0.05 with -plan, 0 otherwise)").
+		WithAlias(argRogueRate, aliasRogueRate).
+		WithValidator(argRogueRate, figtree.AssureFloat64InRange(-1, 1))
+
+	figs.NewFloat64(argMinPlanPassRate, -1.0, "CI gate: exit 2 if plan cohort pass share (0..1) falls below this; negative disables").
+		WithAlias(argMinPlanPassRate, aliasMinPlanPassRate).
+		WithValidator(argMinPlanPassRate, figtree.AssureFloat64InRange(-1, 1))
 
 	figs.NewInt(argMaxPages, 0, "Pages per lemming before exit (0 browses until -until)").
 		WithAlias(argMaxPages, aliasMaxPages).
@@ -616,6 +631,7 @@ func loadConfig() (swarm.Config, bool, error) {
 	}
 
 	failureRate := *figs.Float64(argMaxFailureRate)
+	minPlanPass := *figs.Float64(argMinPlanPassRate)
 	cfg := swarm.Config{
 		Hit:                  *figs.String(argHit),
 		Terrain:              *figs.Int64(argTerrain),
@@ -651,7 +667,9 @@ func loadConfig() (swarm.Config, bool, error) {
 		StrictChecksum:       *figs.Bool(argStrictChecksum),
 		Assets:               *figs.Bool(argAssets),
 		AssetsPerPage:        *figs.Int(argAssetsPerPage),
-		JourneyFile:          *figs.String(argJourney),
+		PlanFile:             *figs.String(argPlan),
+		MaxPlanItems:         *figs.Int(argMaxPlanItems),
+		RogueRate:            *figs.Float64(argRogueRate),
 		TraceFile:            *figs.String(argTraceFile),
 		CaptureEnabled:       *figs.Bool(argCapture),
 		CaptureMax:           *figs.Int(argCaptureMax),
@@ -669,6 +687,8 @@ func loadConfig() (swarm.Config, bool, error) {
 		FailureGate:          failureRate >= 0,
 		MaxFailureRate:       max(failureRate, 0),
 		P95Budget:            *figs.Duration(argP95Budget),
+		PlanPassGate:         minPlanPass >= 0,
+		MinPlanPassRate:      max(minPlanPass, 0),
 	}
 	if cfg.Assets && (cfg.AssetsPerPage < 1 || cfg.AssetsPerPage > 64) {
 		return swarm.Config{}, false, fmt.Errorf("-assets-per-page must be 1..64 when -assets is enabled, got %d", cfg.AssetsPerPage)

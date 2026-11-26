@@ -1,0 +1,21 @@
+name: known-bad
+plan:
+  - name: home
+    path: /
+    want-status: 200
+    want-body:
+      - contains: Insert coin
+
+  - name: coming soon
+    path: /games/lost-highway
+    want-status: 200
+
+  - name: back room
+    path: /blank
+    want-selectors:
+      - main
+
+  - name: old link
+    path: /old-arcade
+    want-status: 200
+    want-title: Games

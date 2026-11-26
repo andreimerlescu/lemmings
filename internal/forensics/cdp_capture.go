@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
-	"github.com/andreimerlescu/lemmings/v2/internal/journey"
+	"github.com/andreimerlescu/lemmings/v2/internal/plan"
 	"github.com/andreimerlescu/lemmings/v2/internal/secrets"
 	"golang.org/x/net/publicsuffix"
 )
@@ -48,7 +48,7 @@ func (c *HTTPFallbackCapturer) BrowserInfo() string { return c.reason }
 func (c *HTTPFallbackCapturer) Close() error        { return nil }
 
 func (c *HTTPFallbackCapturer) Capture(_ context.Context, req CaptureRequest) (Artifact, error) {
-	ex := journey.ExtractErrorBody(req.StatusCode, req.ContentType, req.Headers, req.RawBody)
+	ex := plan.ExtractErrorBody(req.StatusCode, req.ContentType, req.Headers, req.RawBody)
 	return Artifact{
 		ID:             newArtifactID(),
 		Fingerprint:    Fingerprint(req.Path, req.StatusCode, req.TriggerReason),
@@ -116,19 +116,49 @@ func NewCDPCapturer(ctx context.Context, opts CDPOptions) (*CDPCapturer, error) 
 	}, nil
 }
 
-func (c *CDPCapturer) Mode() string        { return ModeCDPReplay }
-func (c *CDPCapturer) BrowserInfo() string { return c.browser.desc }
-func (c *CDPCapturer) Close() error        { return c.browser.Close() }
+func (c *CDPCapturer) Mode() string { return ModeCDPReplay }
+func (c *CDPCapturer) BrowserInfo() string {
+	if c.browser == nil {
+		return ""
+	}
+	return c.browser.desc
+}
+func (c *CDPCapturer) Close() error {
+	if c.browser == nil {
+		return nil
+	}
+	return c.browser.Close()
+}
 
 // Capture replays req.URL inside a freshly created ephemeral incognito
 // BrowserContext carrying the lemming's cookies, UA, Accept-Language, and Referer,
 // collects JS console logs + exceptions + failed subresources, takes a screenshot,
 // and tears down the BrowserContext immediately.
+// When req.SkipBrowserReplay is true (e.g., failed POST/PUT/DELETE or step with
+// request body), CDP replay is skipped and an HTTP-only artifact is returned.
 func (c *CDPCapturer) Capture(ctx context.Context, req CaptureRequest) (Artifact, error) {
+	ex := plan.ExtractErrorBody(req.StatusCode, req.ContentType, req.Headers, req.RawBody)
+	if req.SkipBrowserReplay {
+		return Artifact{
+			ID:             newArtifactID(),
+			Fingerprint:    Fingerprint(req.Path, req.StatusCode, req.TriggerReason),
+			CapturedAt:     time.Now(),
+			URL:            req.SafeURL,
+			Path:           req.Path,
+			TriggerReason:  req.TriggerReason,
+			CaptureMode:    ModeHTTPOnly,
+			CaptureWarning: "CDP replay skipped for non-GET request; captured HTTP-only forensics",
+			StatusCode:     req.StatusCode,
+			LatencyMS:      req.LatencyMS,
+			Session:        req.Session,
+			ErrorBody:      ex,
+			ReviewStatus:   ReviewUnreviewed,
+		}, nil
+	}
+
 	capCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	ex := journey.ExtractErrorBody(req.StatusCode, req.ContentType, req.Headers, req.RawBody)
 	art := Artifact{
 		ID:            newArtifactID(),
 		Fingerprint:   Fingerprint(req.Path, req.StatusCode, req.TriggerReason),
@@ -261,7 +291,7 @@ func (c *CDPCapturer) Capture(ctx context.Context, req CaptureRequest) (Artifact
 	// Capture rendered DOM body if original HTTP body was empty (e.g. client-rendered error).
 	if art.ErrorBody.Format == "empty" || art.ErrorBody.Format == "" {
 		if domHTML := evalString(capCtx, c.browser.conn, sid, "document.documentElement ? document.documentElement.outerHTML.slice(0, 131072) : ''"); domHTML != "" {
-			art.ErrorBody = journey.ExtractErrorBody(req.StatusCode, "text/html", req.Headers, []byte(domHTML))
+			art.ErrorBody = plan.ExtractErrorBody(req.StatusCode, "text/html", req.Headers, []byte(domHTML))
 		}
 	}
 

@@ -80,7 +80,14 @@ td.url { font-family:var(--mono); font-size:13px; overflow-wrap:anywhere; }
 .bar { height:6px; border-radius:3px; background:var(--pink); opacity:.8; min-width:2px; }
 .chip { display:inline-block; font-family:var(--mono); font-size:12px; font-weight:700; padding:1px 7px; border-radius:6px; border:1px solid currentColor; }
 .c2xx { color:var(--green); } .c3xx { color:var(--cyan); } .c4xx { color:var(--yellow); } .c5xx { color:var(--red); } .cunknown { color:var(--purple); }
-.fail-text { color:var(--red); } .warn-text { color:var(--yellow); }
+.m-get,.m-head,.m-options { color:var(--cyan); } .m-post { color:var(--pink); } .m-put,.m-patch { color:var(--yellow); } .m-delete { color:var(--red); }
+.fail-text { color:var(--red); } .warn-text { color:var(--yellow); } .pass-text { color:var(--green); }
+.persona-card { margin-bottom:16px; }
+.persona-card:last-child { margin-bottom:0; }
+.persona-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 14px; margin-bottom:12px; }
+.persona-head h3 { font-size:17px; }
+.persona-head .meta { color:var(--muted); font-size:13px; }
+tr.failed td { background:rgba(254,68,80,.07); }
 
 .chart { width:100%; height:auto; display:block; margin:6px 0 18px; }
 .chart .grid { stroke:var(--line); stroke-width:1; }
@@ -104,7 +111,6 @@ td.url { font-family:var(--mono); font-size:13px; overflow-wrap:anywhere; }
 .life .meta { color:var(--muted); font-size:13px; }
 .steps td { padding:5px 8px; }
 .steps td.bar-cell { width:30%; }
-.steps tr.failed td { background:rgba(254,68,80,.07); }
 .steps .why { color:var(--red); font-size:12px; }
 
 /* ── error forensics & screenshots ──────────────────────────────────────── */
@@ -135,7 +141,7 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
   <div class="floor" aria-hidden="true"></div>
   <h1>LEMMINGS</h1>
   <p class="sub">
-    <a href="{{.Config.Hit}}">{{.Config.Hit}}</a> · {{.GeneratedAt.Format "2006-01-02 15:04 MST"}} · {{round .Duration}}{{if .Journey}} · journey <strong>{{.Journey}}</strong>{{end}}
+    <a href="{{.Config.Hit}}">{{.Config.Hit}}</a> · {{.GeneratedAt.Format "2006-01-02 15:04 MST"}} · {{round .Duration}}{{if .Plan}} · plan <strong>{{with planNames .Plan}}{{.}}{{else}}enabled{{end}}</strong>{{end}}
   </p>
   <div class="hero-pad"></div>
 </header>
@@ -173,6 +179,43 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
   <div class="kpi"><span>transferred</span><strong>{{.TotalBytes | formatBytesInt}}</strong><em>decoded page bodies</em></div>
   <div class="kpi"><span>error artifacts</span><strong{{if .Forensics.Stats.Captured}} class="warn-text"{{end}}>{{formatInt .Forensics.Stats.Captured}}</strong><em>{{formatInt .Forensics.Stats.WithScreenshots}} screenshots</em></div>
 </section>
+
+{{if .Plan}}
+<h2 class="section">Plan execution</h2>
+<section class="kpis">
+  <div class="kpi"><span>plan pass rate</span><strong class="{{if lt .Plan.PlanPassRate 50.0}}fail-text{{else if lt .Plan.PlanPassRate 99.95}}warn-text{{else}}pass-text{{end}}">{{pct100 .Plan.PlanPassRate}}</strong><em>{{formatInt .Plan.PlanPassed}} passed · {{formatInt .Plan.PlanFailed}} failed</em></div>
+  <div class="kpi"><span>plan lemmings</span><strong>{{formatInt .Plan.PlanLemmings}}</strong><em>{{len .Plan.Personas}} persona{{if ne (len .Plan.Personas) 1}}s{{end}}</em></div>
+  <div class="kpi"><span>rogue lemmings</span><strong>{{formatInt .Plan.RogueLemmings}}</strong><em>{{formatInt .Plan.RogueFlawless}} flawless</em></div>
+  <div class="kpi"><span>rogue rate</span><strong>{{pct .Plan.RogueRate}}</strong><em>configured cohort split</em></div>
+</section>
+{{range .Plan.Personas}}
+<div class="card persona-card">
+  <div class="persona-head">
+    <span class="pill {{if and .Lemmings (eq .Failed 0)}}c2xx{{else if .Failed}}c5xx{{else}}rev-unreviewed{{end}}">weight {{.Weight}}</span>
+    <h3>{{.Name}}</h3>
+    <span class="meta">{{formatInt .Passed}} / {{formatInt .Lemmings}} passed ({{pct100 .PassRate}}) · {{.TotalSteps}} step{{if ne .TotalSteps 1}}s{{end}}</span>
+  </div>
+  {{if .Steps}}
+  <div class="scroll"><table>
+    <tr><th class="num">#</th><th>step</th><th>method</th><th>path</th><th class="num">hits</th><th class="num">passed</th><th class="num">failed</th><th class="num">p50</th><th class="num">p95</th><th class="num">p99</th><th>top failure</th></tr>
+    {{range .Steps}}<tr{{if .Failed}} class="failed"{{end}}>
+      <td class="num muted">{{.Index}}</td>
+      <td><strong>{{.Name}}</strong></td>
+      <td><span class="chip m-{{methodClass .Method}}">{{.Method}}</span></td>
+      <td class="url">{{.Path}}</td>
+      <td class="num">{{formatInt .Hits}}</td>
+      <td class="num c2xx">{{formatInt .Passed}}</td>
+      <td class="num{{if .Failed}} fail-text{{end}}">{{formatInt .Failed}}</td>
+      <td class="num">{{if .Hits}}{{ms .P50}}{{else}}<span class="muted">—</span>{{end}}</td>
+      <td class="num">{{if .Hits}}{{ms .P95}}{{else}}<span class="muted">—</span>{{end}}</td>
+      <td class="num">{{if .Hits}}{{ms .P99}}{{else}}<span class="muted">—</span>{{end}}</td>
+      <td>{{if .TopFailure}}<span class="fail-text">{{.TopFailure}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+    </tr>{{end}}
+  </table></div>
+  {{end}}
+</div>
+{{end}}
+{{end}}
 
 <h2 class="section">The run</h2>
 <div class="card">
@@ -215,6 +258,7 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
   <details class="card life"{{if lt $i 3}} open{{end}}>
     <summary>
       <span class="pill rev-{{$a.ReviewStatus}}">{{$a.ReviewStatus}}</span>
+      {{if $a.Session.Method}}<span class="chip m-{{methodClass $a.Session.Method}}">{{$a.Session.Method}}</span>{{end}}
       <span class="chip c{{statusClass $a.StatusCode}}">{{if $a.StatusCode}}{{$a.StatusCode}}{{else}}ERR{{end}}</span>
       <h3>{{$a.Path}} <span class="mono">Lemming #{{$a.Session.LemmingNumber}} · {{$a.Session.LemmingName}}</span></h3>
       <span class="meta">{{$a.TriggerReason}} · {{$a.CaptureMode}} · {{$a.ErrorBody.Summary}}{{if $a.ConsoleErrors}} · <span class="fail-text">{{$a.ConsoleErrors}} JS errors</span>{{end}}</span>
@@ -256,7 +300,8 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
           <tr><td>lemming</td><td><strong>#{{$a.Session.LemmingNumber}}</strong> · {{$a.Session.LemmingName}} (<code>{{shortID $a.Session.LemmingID}}</code>)</td></tr>
           <tr><td>location</td><td>terrain {{$a.Session.Terrain}}, pack {{$a.Session.Pack}} · source: {{$a.Session.Source}}</td></tr>
           <tr><td>persona</td><td>{{$a.Session.Persona}} · {{lang $a.Session.Language}}</td></tr>
-          <tr><td>navigation</td><td>{{$a.Session.NavigationMode}}{{if $a.Session.JourneyStep}} · step "{{$a.Session.JourneyStep}}"{{end}} · visit #{{$a.Session.VisitSequence}}</td></tr>
+          {{if $a.Session.Role}}<tr><td>role</td><td><span class="pill c3xx">{{$a.Session.Role}}</span>{{if $a.Session.PlanName}} · plan <strong>{{$a.Session.PlanName}}</strong>{{end}}</td></tr>{{end}}
+          <tr><td>navigation</td><td>{{$a.Session.NavigationMode}}{{if $a.Session.Method}} · <span class="chip m-{{methodClass $a.Session.Method}}">{{$a.Session.Method}}</span>{{end}}{{if and (not $a.Session.Role) $a.Session.PlanName}} · plan "{{$a.Session.PlanName}}"{{end}}{{if $a.Session.PlanStep}} · step "{{$a.Session.PlanStep}}"{{end}} · visit #{{$a.Session.VisitSequence}}</td></tr>
           {{if $a.Session.RecentTrail}}<tr><td>recent trail</td><td class="mono">{{join $a.Session.RecentTrail " → "}}</td></tr>{{end}}
         </table>
 
@@ -354,12 +399,14 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
   <details class="card life"{{if eq $i 0}} open{{end}}>
     <summary>
       <span class="tag">{{.Title}}</span>
+      {{if .Role}}<span class="pill {{if eq .Role "plan"}}{{if .PlanPassed}}c2xx{{else}}c5xx{{end}}{{else}}c3xx{{end}}">{{.Role}}{{if .PlanName}}: {{.PlanName}}{{end}}</span>{{end}}
       <h3>#{{.Number}} {{.Name}} <span class="mono">{{shortID .ID}}</span></h3>
-      <span class="meta">{{.Why}} · {{.Persona}} · {{lang .Language}} · terrain {{.Terrain}}, pack {{.Pack}} · lived {{round .Lifespan}} · {{formatInt .Visits}} pages{{if .Failed}}, <span class="fail-text">{{formatInt .Failed}} failed</span>{{end}} · left: {{.ExitReason}}</span>
+      <span class="meta">{{.Why}} · {{.Persona}} · {{lang .Language}} · terrain {{.Terrain}}, pack {{.Pack}}{{if .PlanName}} · plan {{.PlanName}} ({{if .PlanPassed}}passed{{else}}failed{{end}}){{end}} · lived {{round .Lifespan}} · {{formatInt .Visits}} pages{{if .Failed}}, <span class="fail-text">{{formatInt .Failed}} failed</span>{{end}} · left: {{.ExitReason}}</span>
     </summary>
     <div class="scroll"><table class="steps">
       {{range .Steps}}<tr{{if .Failed}} class="failed"{{end}}>
         <td class="num muted">{{.Seq}}</td>
+        <td><span class="chip m-{{methodClass .Method}}">{{if .Method}}{{.Method}}{{else}}GET{{end}}</span></td>
         <td class="url">{{if .Step}}<strong>{{.Step}}</strong> {{end}}{{.Path}}{{if .Title}}<br><span class="muted page-title">{{.Title}}</span>{{end}}{{if .Why}}<br><span class="why">{{.Why}}</span>{{end}}</td>
         <td>{{if .Status}}<span class="chip c{{statusClass .Status}}">{{.Status}}</span>{{else}}<span class="chip cunknown">—</span>{{end}}</td>
         <td class="bar-cell"><div class="bar" style="width:{{width .Bar}};{{if .Failed}}background:var(--red){{end}}"></div></td>
@@ -391,7 +438,8 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
       <tr><td>limit</td><td class="num">{{.Config.Limit}}</td></tr>
       <tr><td>until · ramp</td><td class="num">{{.Config.Until}} · {{.Config.Ramp}} ({{.Config.RampShape}})</td></tr>
       <tr><td>think time</td><td class="num">{{.Config.ThinkMin}} – {{.Config.ThinkMax}}</td></tr>
-      <tr><td>navigation</td><td class="num">{{if .Journey}}journey “{{.Journey}}”{{else}}{{.Config.Navigation}}{{end}}</td></tr>
+      <tr><td>navigation</td><td class="num">{{if .Plan}}plan{{with planNames .Plan}} “{{.}}”{{end}}{{else}}{{.Config.Navigation}}{{end}}</td></tr>
+      {{if .Plan}}<tr><td>rogue rate</td><td class="num">{{pct .Plan.RogueRate}}</td></tr>{{end}}
       <tr><td>assets</td><td class="num">{{if .Config.Assets}}enabled ({{.Config.AssetsPerPage}}/page){{else}}disabled{{end}}</td></tr>
       <tr><td>forensics capture</td><td class="num">{{.Forensics.Stats.Mode}}{{if .Forensics.Stats.Browser}} ({{.Forensics.Stats.Browser}}){{end}}</td></tr>
       <tr><td>browser scouts</td><td class="num">{{.Config.Scouts}}</td></tr>

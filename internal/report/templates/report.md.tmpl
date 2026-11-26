@@ -5,8 +5,8 @@
 **target:**    {{.Config.Hit}}
 **generated:** {{.GeneratedAt.Format "2006-01-02 15:04:05 MST"}}
 **duration:**  {{round .Duration}}
-**verdict:**   {{.Verdict}}{{if .Journey}}
-**journey:**   {{.Journey}}{{end}}
+**verdict:**   {{.Verdict}}{{if .Plan}}
+**plan:**      {{with planNames .Plan}}{{mdCell .}}{{else}}enabled{{end}} (pass rate {{pct100 .Plan.PlanPassRate}}, rogue rate {{pct .Plan.RogueRate}}){{end}}
 {{if or .DroppedLogs .TraceDropped .Forensics.Stats.DroppedQueue}}
 > **WARNING — DATA INTEGRITY:** Telemetry drops occurred during this run; affected summaries may be incomplete.
 {{if .DroppedLogs}}> - **{{formatInt .DroppedLogs}}** lemming life records dropped under collector pressure
@@ -38,7 +38,25 @@
 | waiting room      | {{formatInt .TotalWaitingRoom}} lemmings held |
 | checksum changes  | {{formatInt .ChecksumChanges}} |
 | error artifacts   | {{formatInt .Forensics.Stats.Captured}} ({{formatInt .Forensics.Stats.WithScreenshots}} screenshots) |
+{{if .Plan}}
+## plan execution
 
+| cohort metric | value |
+|---------------|-------|
+| plan lemmings  | {{formatInt .Plan.PlanLemmings}} |
+| plan passed    | {{formatInt .Plan.PlanPassed}} |
+| plan failed    | {{formatInt .Plan.PlanFailed}} |
+| plan pass rate | {{pct100 .Plan.PlanPassRate}} |
+| rogue lemmings | {{formatInt .Plan.RogueLemmings}} ({{formatInt .Plan.RogueFlawless}} flawless) |
+| rogue rate     | {{pct .Plan.RogueRate}} |
+{{range .Plan.Personas}}
+### {{mdCell .Name}} (weight {{.Weight}} · {{formatInt .Passed}}/{{formatInt .Lemmings}} passed · {{pct100 .PassRate}})
+{{if .Steps}}
+| # | step | method | path | hits | passed | failed | p50 | p95 | p99 | top failure |
+|---|------|--------|------|------|--------|--------|-----|-----|-----|-------------|
+{{range .Steps -}}
+| {{.Index}} | {{mdCell .Name}} | {{mdCell .Method}} | {{mdCell .Path}} | {{formatInt .Hits}} | {{formatInt .Passed}} | {{formatInt .Failed}} | {{if .Hits}}{{ms .P50}}{{else}}—{{end}} | {{if .Hits}}{{ms .P95}}{{else}}—{{end}} | {{if .Hits}}{{ms .P99}}{{else}}—{{end}} | {{if .TopFailure}}{{mdCell .TopFailure}}{{else}}—{{end}} |
+{{end}}{{end}}{{end}}{{end}}
 ## configuration
 
 | parameter | value |
@@ -50,7 +68,8 @@
 | ramp      | {{.Config.Ramp}} ({{mdCell .Config.RampShape}}) |
 | limit     | {{.Config.Limit}} |
 | think     | {{.Config.ThinkMin}}–{{.Config.ThinkMax}} between pages |
-| navigation | {{if .Journey}}journey ({{mdCell .Journey}}){{else}}{{mdCell .Config.Navigation}}{{end}} |
+| navigation | {{if .Plan}}plan{{with planNames .Plan}} ({{mdCell .}}){{end}}{{else}}{{mdCell .Config.Navigation}}{{end}} |{{if .Plan}}
+| rogue rate | {{pct .Plan.RogueRate}} |{{end}}
 | assets    | {{if .Config.Assets}}enabled (up to {{.Config.AssetsPerPage}}/page){{else}}disabled{{end}} |
 | scouts    | {{.Config.Scouts}} |
 | capture   | {{printf "%s" .Forensics.Stats.Mode | mdCell}}{{if .Forensics.Stats.Browser}} ({{mdCell .Forensics.Stats.Browser}}){{end}} |
@@ -88,9 +107,9 @@
 Captured **{{formatInt .Forensics.Stats.Captured}}** artifacts ({{formatInt .Forensics.Stats.WithScreenshots}} screenshots, {{formatInt .Forensics.Stats.Deduplicated}} deduplicated, {{formatInt .Forensics.Stats.DroppedQueue}} queue-dropped, {{formatInt .Forensics.Stats.DroppedCap}} cap-dropped).
 Triage: **{{formatInt .Forensics.Stats.Bug}}** bug · **{{formatInt .Forensics.Stats.Flaky}}** flaky · **{{formatInt .Forensics.Stats.Expected}}** expected · **{{formatInt .Forensics.Stats.Ignored}}** ignored · **{{formatInt .Forensics.Stats.Unreviewed}}** unreviewed.
 {{range .Forensics.Artifacts}}
-### Artifact #{{.Sequence}}: `{{.Path}}` ({{if .StatusCode}}HTTP {{.StatusCode}}{{else}}transport error{{end}} · {{.TriggerReason}}) — `[{{upper (printf "%s" .ReviewStatus)}}]`
+### Artifact #{{.Sequence}}: {{if .Session.Method}}`{{mdCell .Session.Method}}` {{end}}`{{.Path}}` ({{if .StatusCode}}HTTP {{.StatusCode}}{{else}}transport error{{end}} · {{.TriggerReason}}) — `[{{upper (printf "%s" .ReviewStatus)}}]`
 
-- **Lemming:** #{{.Session.LemmingNumber}} {{.Session.LemmingName}} (`{{shortID .Session.LemmingID}}`), terrain {{.Session.Terrain}}, pack {{.Session.Pack}}, {{.Session.Persona}}, {{lang .Session.Language}}, visit #{{.Session.VisitSequence}}
+- **Lemming:** #{{.Session.LemmingNumber}} {{.Session.LemmingName}} (`{{shortID .Session.LemmingID}}`), terrain {{.Session.Terrain}}, pack {{.Session.Pack}}, {{.Session.Persona}}, {{lang .Session.Language}}{{if .Session.Role}}, role {{mdCell .Session.Role}}{{end}}{{if .Session.PlanName}}, plan {{mdCell .Session.PlanName}}{{if .Session.PlanStep}} / {{mdCell .Session.PlanStep}}{{end}}{{end}}, visit #{{.Session.VisitSequence}}
 - **Cookie Jar:** {{.Session.CookieJar.Health}} ({{.Session.CookieJar.ActiveCookies}} active, {{.Session.CookieJar.ExpiredCookies}} expired){{if .Session.RecentTrail}}
 - **Trail:** `{{join .Session.RecentTrail " -> "}}`{{end}}
 - **Extracted Error ({{.ErrorBody.Format}}):** {{.ErrorBody.Summary}}{{if .ErrorBody.ErrorCode}} (`{{.ErrorBody.ErrorCode}}`){{end}}{{if .ErrorBody.RequestID}} · request `{{.ErrorBody.RequestID}}`{{end}}{{if .ReviewNote}}
@@ -180,12 +199,12 @@ Separated from page visit totals and latency.
 {{range .Notable}}
 ### {{.Title}}: #{{.Number}} {{.Name}}
 
-{{.Why}}. {{.Persona}}, {{lang .Language}}, terrain {{.Terrain}} pack {{.Pack}}; lived {{round .Lifespan}} and visited {{formatInt .Visits}} pages ({{formatInt .Failed}} failed); left because: {{.ExitReason}}.
+{{.Why}}. {{.Persona}}, {{lang .Language}}, terrain {{.Terrain}} pack {{.Pack}}{{if .Role}}, role {{mdCell .Role}}{{end}}{{if .PlanName}} (plan {{mdCell .PlanName}}: {{if .PlanPassed}}passed{{else}}failed{{end}}){{end}}; lived {{round .Lifespan}} and visited {{formatInt .Visits}} pages ({{formatInt .Failed}} failed); left because: {{.ExitReason}}.
 
-| # | path | status | time | note |
-|---|------|--------|------|------|
+| # | method | path | status | time | note |
+|---|--------|------|--------|------|------|
 {{range .Steps -}}
-| {{.Seq}} | {{mdCell .Path}} | {{if .Status}}{{.Status}}{{else}}—{{end}} | {{float1 .Millis}} ms | {{mdCell .Why}} |
+| {{.Seq}} | {{if .Method}}{{mdCell .Method}}{{else}}GET{{end}} | {{if .Step}}**{{mdCell .Step}}** {{end}}{{mdCell .Path}} | {{if .Status}}{{.Status}}{{else}}—{{end}} | {{float1 .Millis}} ms | {{mdCell .Why}} |
 {{end}}{{end}}{{end}}
 ## per-path breakdown
 

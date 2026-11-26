@@ -8,9 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,14 +24,15 @@ import (
 	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
 	"github.com/andreimerlescu/lemmings/v2/internal/events"
 	"github.com/andreimerlescu/lemmings/v2/internal/forensics"
-	"github.com/andreimerlescu/lemmings/v2/internal/journey"
+	"github.com/andreimerlescu/lemmings/v2/internal/plan"
 	"github.com/andreimerlescu/lemmings/v2/internal/secrets"
 	"github.com/andreimerlescu/sema"
 )
 
 func TestConfig_Validate(t *testing.T) {
 	def := DefaultConfig()
-	if def.Assets || def.AssetsPerPage != DefaultAssetsPerPage || def.AllowRemoteCDP {
+	if def.Assets || def.AssetsPerPage != DefaultAssetsPerPage || def.AllowRemoteCDP ||
+		def.MaxPlanItems != plan.DefaultMaxPlanItems || def.RogueRate != -1 || def.Navigation != plan.NavigationLinks {
 		t.Fatalf("unexpected DefaultConfig: %+v", def)
 	}
 
@@ -42,7 +47,8 @@ func TestConfig_Validate(t *testing.T) {
 	if err := base.Validate(); err != nil {
 		t.Fatalf("valid config failed: %v", err)
 	}
-	if base.RampShape != RampLinear || base.CaptureFormat != CaptureFormatJPEG || base.CaptureMax != 50 || base.AssetsPerPage != DefaultAssetsPerPage {
+	if base.RampShape != RampLinear || base.CaptureFormat != CaptureFormatJPEG || base.CaptureMax != 50 ||
+		base.AssetsPerPage != DefaultAssetsPerPage || base.MaxPlanItems != plan.DefaultMaxPlanItems || base.RogueRate != 0 {
 		t.Errorf("defaults not applied: %+v", base)
 	}
 
@@ -70,20 +76,109 @@ func TestConfig_Validate(t *testing.T) {
 		t.Errorf("expected -assets-per-page=64 to succeed, got %v", err)
 	}
 
-	// AllowRemoteCDP must not serialize into JSON reports.
+	// MaxPlanItems bounds.
+	c = base
+	c.MaxPlanItems = -1
+	if err := c.Validate(); err == nil {
+		t.Error("expected error for negative -max-plan-items")
+	}
+	c = base
+	c.MaxPlanItems = 1_000_001
+	if err := c.Validate(); err == nil {
+		t.Error("expected error for -max-plan-items > 1_000_000")
+	}
+
+	// RogueRate validation and auto (-1) resolution.
+	for _, bad := range []float64{math.NaN(), -1.01, 1.01, math.Inf(1), math.Inf(-1)} {
+		c = base
+		c.RogueRate = bad
+		if err := c.Validate(); err == nil {
+			t.Errorf("expected error for invalid RogueRate %v", bad)
+		}
+	}
+	// Auto (-1) without plan resolves to 0.
+	c = base
+	c.RogueRate = -1
+	if err := c.Validate(); err != nil {
+		t.Fatalf("auto RogueRate without plan failed: %v", err)
+	}
+	if c.RogueRate != 0 {
+		t.Errorf("auto RogueRate without plan = %v, want 0", c.RogueRate)
+	}
+
+	// PlanPassGate without plan returns exact error.
+	c = base
+	c.PlanPassGate = true
+	c.MinPlanPassRate = 0.95
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "-min-plan-pass-rate requires -plan") {
+		t.Errorf("expected '-min-plan-pass-rate requires -plan', got %v", err)
+	}
+
+	// PlanFile loading + auto RogueRate (0.05) + programmatic 0 RogueRate + PlanPassGate validation.
+	planPath := filepath.Join(t.TempDir(), "smoke.yaml")
+	if err := os.WriteFile(planPath, []byte("name: smoke\nplan:\n  - path: /\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c = base
+	c.PlanFile = planPath
+	c.RogueRate = -1
+	c.PlanPassGate = true
+	c.MinPlanPassRate = 0.95
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid plan config failed: %v", err)
+	}
+	if c.Plan == nil || c.Plan.PrimaryName() != "smoke" {
+		t.Fatalf("expected loaded plan suite 'smoke', got %+v", c.Plan)
+	}
+	if c.RogueRate != 0.05 {
+		t.Errorf("auto RogueRate with plan = %v, want 0.05", c.RogueRate)
+	}
+
+	// Programmatic zero value RogueRate stays 0 even with a plan.
+	c = base
+	c.PlanFile = planPath
+	c.RogueRate = 0
+	if err := c.Validate(); err != nil {
+		t.Fatalf("zero RogueRate with plan failed: %v", err)
+	}
+	if c.RogueRate != 0 {
+		t.Errorf("explicit 0 RogueRate must stay 0, got %v", c.RogueRate)
+	}
+
+	// PlanPassGate rejects out-of-range MinPlanPassRate.
+	for _, bad := range []float64{math.NaN(), -0.1, 1.1, math.Inf(1)} {
+		c = base
+		c.PlanFile = planPath
+		c.PlanPassGate = true
+		c.MinPlanPassRate = bad
+		if err := c.Validate(); err == nil {
+			t.Errorf("expected error for invalid MinPlanPassRate %v", bad)
+		}
+	}
+
+	// AllowRemoteCDP, PlanFile, and Plan must not serialize into JSON reports.
 	c = base
 	c.Assets = true
 	c.AssetsPerPage = 12
 	c.AllowRemoteCDP = true
+	c.PlanFile = planPath
+	c.PlanPassGate = true
+	c.MinPlanPassRate = 0.9
+	c.RogueRate = 0.05
+	if err := c.Validate(); err != nil {
+		t.Fatalf("validate for JSON test: %v", err)
+	}
 	raw, err := json.Marshal(c)
 	if err != nil {
 		t.Fatalf("marshal config: %v", err)
 	}
-	if strings.Contains(string(raw), "AllowRemoteCDP") || strings.Contains(string(raw), "allow_remote_cdp") {
-		t.Errorf("AllowRemoteCDP leaked into JSON: %s", raw)
+	if strings.Contains(string(raw), "AllowRemoteCDP") || strings.Contains(string(raw), "allow_remote_cdp") ||
+		strings.Contains(string(raw), planPath) || strings.Contains(string(raw), `"Plan"`) {
+		t.Errorf("json:\"-\" fields leaked into JSON: %s", raw)
 	}
-	if !strings.Contains(string(raw), `"assets":true`) || !strings.Contains(string(raw), `"assets_per_page":12`) {
-		t.Errorf("expected assets fields in JSON: %s", raw)
+	if !strings.Contains(string(raw), `"assets":true`) || !strings.Contains(string(raw), `"assets_per_page":12`) ||
+		!strings.Contains(string(raw), `"rogue_rate":0.05`) || !strings.Contains(string(raw), `"plan_pass_gate":true`) {
+		t.Errorf("expected config fields in JSON: %s", raw)
 	}
 
 	// Reject path traversal in report name.
@@ -637,7 +732,7 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestLemming_PersonaRefererJourneyAndStrictChecksum(t *testing.T) {
+func TestLemming_PersonaRefererPlanAndStrictChecksum(t *testing.T) {
 	var seenUA, seenLang, seenReferer []string
 	var bodyVer atomic.Int32
 	var mu sync.Mutex
@@ -664,10 +759,20 @@ func TestLemming_PersonaRefererJourneyAndStrictChecksum(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	j, err := journey.Parse(strings.NewReader(`{"name":"ordered","steps":[
-		{"name":"s1","path":"/","expect":{"status":[200]}},
-		{"name":"s2","path":"/step2","expect":{"status":[200]}}
-	]}`), srv.URL+"/")
+	plans, err := plan.ParsePlanYAML(strings.NewReader(`
+name: ordered
+plan:
+  - name: s1
+    path: /
+    want-status: 200
+  - name: s2
+    path: /step2
+    want-status: 200
+`), "ordered", srv.URL+"/", plan.DefaultMaxPlanItems)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suite, err := plan.NewSuite(plans)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,15 +787,19 @@ func TestLemming_PersonaRefererJourneyAndStrictChecksum(t *testing.T) {
 		Until:          2 * time.Second,
 		ThinkMin:       0,
 		ThinkMax:       0,
-		Navigation:     journey.NavigationLinks,
-		Journey:        j,
+		Navigation:     plan.NavigationLinks,
+		Plan:           suite,
 		StrictChecksum: true,
 	}
 	lem := NewLemming(1, 0, 0, cfg, pool, srv.Client(), nil, nil, nil, nil)
 	ll := lem.Run(context.Background())
 
-	if ll.ExitReason != ExitJourneyComplete || ll.TotalVisits != 2 {
-		t.Fatalf("expected ExitJourneyComplete with 2 visits, got exit=%q visits=%d", ll.ExitReason, ll.TotalVisits)
+	if ll.ExitReason != ExitPlanComplete || ll.TotalVisits != 2 {
+		t.Fatalf("expected ExitPlanComplete with 2 visits, got exit=%q visits=%d", ll.ExitReason, ll.TotalVisits)
+	}
+	if ll.Role != RolePlan || ll.PlanName != "ordered" || ll.PlanStepsCompleted != 2 || ll.PlanStepsTotal != 2 || ll.PlanPassed {
+		t.Errorf("unexpected plan summary: role=%q plan=%q completed=%d/%d passed=%v",
+			ll.Role, ll.PlanName, ll.PlanStepsCompleted, ll.PlanStepsTotal, ll.PlanPassed)
 	}
 	if len(seenUA) != 2 || seenUA[0] != seenUA[1] || seenLang[0] != seenLang[1] {
 		t.Errorf("lemming changed persona mid-life: ua=%v lang=%v", seenUA, seenLang)
@@ -1374,7 +1483,7 @@ func TestTerrain_SemaphoreCapStartedVsCompletedAndCancel(t *testing.T) {
 	bus := events.NewBus()
 	defer bus.Close()
 	m := &Metrics{}
-	cfg := Config{Hit: srv.URL + "/", Pack: 6, Limit: 2, Until: 2 * time.Second, MaxPages: 1, Navigation: journey.NavigationRandom}
+	cfg := Config{Hit: srv.URL + "/", Pack: 6, Limit: 2, Until: 2 * time.Second, MaxPages: 1, Navigation: plan.NavigationRandom}
 	pool := &discovery.URLPool{Origin: srv.URL, URLs: []string{srv.URL + "/"}}
 
 	tr := NewTerrain(0, cfg, pool, nil, bus, sem, m, nil, nil, nil)
@@ -1419,6 +1528,931 @@ func TestTerrain_SemaphoreCapStartedVsCompletedAndCancel(t *testing.T) {
 	if failedEvts.Load() != 3 || m2.LemmingsFailed.Load() != 3 || m2.LemmingsStarted.Load() != 0 || m2.LemmingsCompleted.Load() != 0 {
 		t.Errorf("expected 3 unborn LemmingFailed with 0 started/completed, got evts=%d failed=%d started=%d completed=%d",
 			failedEvts.Load(), m2.LemmingsFailed.Load(), m2.LemmingsStarted.Load(), m2.LemmingsCompleted.Load())
+	}
+}
+
+func mustSuiteFromYAML(t *testing.T, name, hit, yml string) *plan.Suite {
+	t.Helper()
+	plans, err := plan.ParsePlanYAML(strings.NewReader(yml), name, hit, plan.DefaultMaxPlanItems)
+	if err != nil {
+		t.Fatalf("ParsePlanYAML(%s): %v", name, err)
+	}
+	suite, err := plan.NewSuite(plans)
+	if err != nil {
+		t.Fatalf("NewSuite(%s): %v", name, err)
+	}
+	return suite
+}
+
+// TestPlan_FullAuthFlowAndIssue1Assertions covers Issue #1 full auth lifecycle:
+// GET/POST login, form body, cookie jar persistence across steps, want-cookies
+// (value: 1 and presence-only), want-headers, want-body, logout + absent: true,
+// and expected 404 skipping not-blank.
+func TestPlan_FullAuthFlowAndIssue1Assertions(t *testing.T) {
+	var loginCT, loginUser, loginPass, loginCSRF string
+	var accountLoggedIn, accountSession string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			http.SetCookie(w, &http.Cookie{Name: "csrf", Value: "tok-abc-123", Path: "/"})
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("X-Auth-Flow", "ready")
+			fmt.Fprint(w, `<html><head><title>Sign In</title></head><body><h1>Sign In</h1></body></html>`)
+			return
+		}
+		if r.Method == http.MethodPost {
+			loginCT = r.Header.Get("Content-Type")
+			if c, err := r.Cookie("csrf"); err == nil {
+				loginCSRF = c.Value
+			}
+			_ = r.ParseForm()
+			loginUser = r.FormValue("username")
+			loginPass = r.FormValue("password")
+			http.SetCookie(w, &http.Cookie{Name: "logged_in", Value: "1", Path: "/"})
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "sess-secret-999", Path: "/", HttpOnly: true})
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprintf(w, `<html><head><title>Dashboard</title></head><body>Welcome %s</body></html>`, loginUser)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+	mux.HandleFunc("/account", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("logged_in"); err == nil {
+			accountLoggedIn = c.Value
+		}
+		if c, err := r.Cookie("session"); err == nil {
+			accountSession = c.Value
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "private, no-store")
+		fmt.Fprint(w, `<html><head><title>Account</title></head><body>Account Overview</body></html>`)
+	})
+	mux.HandleFunc("/missing-page", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `<html><body></body></html>`)
+	})
+	mux.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: "logged_in", Value: "", Path: "/", MaxAge: -1})
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: "", Path: "/", MaxAge: -1})
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<html><head><title>Goodbye</title></head><body>Signed out</body></html>`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	suite := mustSuiteFromYAML(t, "auth-flow", srv.URL+"/", `
+name: auth-flow
+stop-on-fail: true
+plan:
+  - name: get-login
+    method: GET
+    path: /login
+    want-status: 200
+    want-headers:
+      - key: X-Auth-Flow
+        is: ready
+    want-cookies:
+      - name: csrf
+    want-body:
+      - contains: Sign In
+  - name: post-login
+    method: POST
+    path: /login
+    with-body:
+      - key: username
+        value: alice
+      - key: password
+        value: s3cret
+    want-status: 200
+    want-cookies:
+      - name: logged_in
+        value: 1
+      - name: session
+    want-body:
+      - contains: Welcome alice
+        not-contains: Invalid
+  - name: get-account
+    method: GET
+    path: /account
+    want-status: 200
+    want-headers:
+      - key: Cache-Control
+        contains: private
+    want-cookies:
+      - name: logged_in
+        value: 1
+      - name: session
+    want-body:
+      - contains: Account Overview
+  - name: expected-404
+    method: GET
+    path: /missing-page
+    want-status: 404
+  - name: post-logout
+    method: POST
+    path: /logout
+    want-status: 200
+    want-cookies:
+      - name: logged_in
+        absent: true
+      - name: session
+        absent: true
+`)
+
+	key, err := secrets.NewEphemeralKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	jar, err := NewInspectingJar(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar, Timeout: 2 * time.Second}
+	bus := events.NewBus()
+	defer bus.Close()
+
+	var visitEvts []events.Event
+	var mu sync.Mutex
+	bus.Subscribe(events.Filter(func(e events.Event) {
+		mu.Lock()
+		visitEvts = append(visitEvts, e)
+		mu.Unlock()
+	}, events.VisitComplete, events.VisitError))
+
+	cfg := Config{
+		Hit:            srv.URL + "/",
+		Until:          5 * time.Second,
+		RequestTimeout: 2 * time.Second,
+		Plan:           suite,
+		RogueRate:      0,
+	}
+	lem := NewLemming(1, 0, 0, cfg, &discovery.URLPool{Origin: srv.URL}, client, jar, bus, nil, nil)
+	ll := lem.Run(context.Background())
+
+	if ll.ExitReason != ExitPlanComplete || !ll.PlanPassed || ll.FailedVisits != 0 {
+		t.Fatalf("auth flow failed: exit=%q passed=%v failed=%d visits=%+v", ll.ExitReason, ll.PlanPassed, ll.FailedVisits, ll.Visits)
+	}
+	if ll.Role != RolePlan || ll.PlanName != "auth-flow" || ll.PlanStepsCompleted != 5 || ll.PlanStepsTotal != 5 {
+		t.Fatalf("unexpected plan metadata: role=%q plan=%q steps=%d/%d", ll.Role, ll.PlanName, ll.PlanStepsCompleted, ll.PlanStepsTotal)
+	}
+	if loginCT != "application/x-www-form-urlencoded" || loginUser != "alice" || loginPass != "s3cret" || loginCSRF != "tok-abc-123" {
+		t.Errorf("POST /login mismatch: ct=%q user=%q pass=%q csrf=%q", loginCT, loginUser, loginPass, loginCSRF)
+	}
+	if accountLoggedIn != "1" || accountSession != "sess-secret-999" {
+		t.Errorf("cookie jar did not persist across steps: logged_in=%q session=%q", accountLoggedIn, accountSession)
+	}
+	if !slices.Equal(ll.FinalCookieNames, []string{"csrf"}) {
+		t.Errorf("FinalCookieNames = %v, want [csrf]", ll.FinalCookieNames)
+	}
+
+	wantMethods := []string{"GET", "POST", "GET", "GET", "POST"}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(visitEvts) != 5 {
+		t.Fatalf("expected 5 visit events, got %d", len(visitEvts))
+	}
+	for i, ev := range visitEvts {
+		if ev.Kind != events.VisitComplete || ev.Method != wantMethods[i] || ev.PlanName != "auth-flow" || ev.StepIndex != i+1 || ev.Role != RolePlan {
+			t.Errorf("visit event[%d] mismatch: %+v", i, ev)
+		}
+	}
+}
+
+// TestPlan_JSONBodyRawBodyWithCookiesHeadersAndRedirects tests JSON with-body,
+// raw body, with-cookies jar seeding (no duplicate Cookie headers + 307 body
+// preservation), with-headers overrides, and 302 auto-no-redirect Location check.
+func TestPlan_JSONBodyRawBodyWithCookiesHeadersAndRedirects(t *testing.T) {
+	var jsonCT string
+	var jsonPayload map[string]string
+	var apiPlusCT string
+	var apiPlusPayload map[string]string
+	var rawCT, rawReceived string
+	var customUA, customTrace string
+	var cookieHeaderLines int
+	var seededOnRedirectTarget, bodyOnRedirectTarget string
+	var seededOnNextStep string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/json-post", func(w http.ResponseWriter, r *http.Request) {
+		jsonCT = r.Header.Get("Content-Type")
+		customUA = r.Header.Get("User-Agent")
+		customTrace = r.Header.Get("X-Trace-ID")
+		_ = json.NewDecoder(r.Body).Decode(&jsonPayload)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"created":true}`)
+	})
+	mux.HandleFunc("/json-vendor", func(w http.ResponseWriter, r *http.Request) {
+		apiPlusCT = r.Header.Get("Content-Type")
+		_ = json.NewDecoder(r.Body).Decode(&apiPlusPayload)
+		w.Header().Set("Content-Type", "application/vnd.api+json")
+		fmt.Fprint(w, `{"ok":true}`)
+	})
+	mux.HandleFunc("/raw-put", func(w http.ResponseWriter, r *http.Request) {
+		rawCT = r.Header.Get("Content-Type")
+		b, _ := io.ReadAll(r.Body)
+		rawReceived = string(b)
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "accepted")
+	})
+	mux.HandleFunc("/seed-307", func(w http.ResponseWriter, r *http.Request) {
+		cookieHeaderLines = len(r.Header.Values("Cookie"))
+		http.Redirect(w, r, "/seed-target", http.StatusTemporaryRedirect)
+	})
+	mux.HandleFunc("/seed-target", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("seeded_tok"); err == nil {
+			seededOnRedirectTarget = c.Value
+		}
+		b, _ := io.ReadAll(r.Body)
+		bodyOnRedirectTarget = string(b)
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "redirected-ok")
+	})
+	mux.HandleFunc("/after-seed", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("seeded_tok"); err == nil {
+			seededOnNextStep = c.Value
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "still-seeded")
+	})
+	mux.HandleFunc("/bounce", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "/after-login")
+		http.SetCookie(w, &http.Cookie{Name: "bounce_cookie", Value: "yes", Path: "/"})
+		w.WriteHeader(http.StatusFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	suite := mustSuiteFromYAML(t, "request-features", srv.URL+"/", `
+name: request-features
+stop-on-fail: true
+plan:
+  - name: json-post
+    method: POST
+    path: /json-post
+    with-headers:
+      - key: Content-Type
+        value: application/json; charset=utf-8
+      - key: User-Agent
+        value: CustomBot/2.0
+      - key: X-Trace-ID
+        value: trace-42
+    with-body:
+      - key: email
+        value: bob@example.com
+      - key: role
+        value: admin
+    want-status: 200
+    want-body:
+      - contains: '"created":true'
+  - name: json-vendor
+    method: POST
+    path: /json-vendor
+    with-headers:
+      - key: content-type
+        value: application/vnd.api+json
+    with-body:
+      - key: kind
+        value: widget
+    want-status: 200
+  - name: raw-put
+    method: PUT
+    path: /raw-put
+    body: "raw payload line"
+    want-status: 200
+  - name: seeded-cookie-and-307-body
+    method: POST
+    path: /seed-307
+    with-cookies:
+      - name: seeded_tok
+        value: seed-val-77
+    body: "preserve-across-307"
+    want-status: 200
+    want-body:
+      - contains: redirected-ok
+  - name: verify-seed-persisted
+    method: GET
+    path: /after-seed
+    want-status: 200
+    want-cookies:
+      - name: seeded_tok
+        value: seed-val-77
+  - name: expect-302-no-follow
+    method: POST
+    path: /bounce
+    want-status: 302
+    want-headers:
+      - key: Location
+        is: /after-login
+    want-cookies:
+      - name: bounce_cookie
+        is: yes
+`)
+
+	key, _ := secrets.NewEphemeralKey()
+	jar, err := NewInspectingJar(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar, Timeout: 2 * time.Second}
+	cfg := Config{
+		Hit:            srv.URL + "/",
+		Until:          5 * time.Second,
+		RequestTimeout: 2 * time.Second,
+		Plan:           suite,
+		RogueRate:      0,
+	}
+	lem := NewLemming(1, 0, 0, cfg, &discovery.URLPool{Origin: srv.URL}, client, jar, nil, nil, nil)
+	ll := lem.Run(context.Background())
+
+	if ll.ExitReason != ExitPlanComplete || !ll.PlanPassed || ll.FailedVisits != 0 {
+		t.Fatalf("plan failed: exit=%q passed=%v failed=%d visits=%+v", ll.ExitReason, ll.PlanPassed, ll.FailedVisits, ll.Visits)
+	}
+	if jsonCT != "application/json; charset=utf-8" || jsonPayload["email"] != "bob@example.com" || jsonPayload["role"] != "admin" {
+		t.Errorf("JSON with-body mismatch: ct=%q payload=%v", jsonCT, jsonPayload)
+	}
+	if apiPlusCT != "application/vnd.api+json" || apiPlusPayload["kind"] != "widget" {
+		t.Errorf("application/*+json with-body mismatch: ct=%q payload=%v", apiPlusCT, apiPlusPayload)
+	}
+	if customUA != "CustomBot/2.0" || customTrace != "trace-42" {
+		t.Errorf("with-headers override mismatch: ua=%q trace=%q", customUA, customTrace)
+	}
+	if rawCT != "text/plain; charset=utf-8" || rawReceived != "raw payload line" {
+		t.Errorf("raw body mismatch: ct=%q body=%q", rawCT, rawReceived)
+	}
+	if cookieHeaderLines != 1 {
+		t.Errorf("expected exactly 1 Cookie header line on seeded request, got %d", cookieHeaderLines)
+	}
+	if seededOnRedirectTarget != "seed-val-77" || bodyOnRedirectTarget != "preserve-across-307" {
+		t.Errorf("307 redirect did not preserve cookie/body: cookie=%q body=%q", seededOnRedirectTarget, bodyOnRedirectTarget)
+	}
+	if seededOnNextStep != "seed-val-77" {
+		t.Errorf("seeded cookie did not persist to subsequent step: got %q", seededOnNextStep)
+	}
+	last := ll.Visits[len(ll.Visits)-1]
+	if last.StatusCode != http.StatusFound || len(last.Hops) != 0 {
+		t.Errorf("expected 302 auto-no-redirect with 0 hops, got status=%d hops=%v", last.StatusCode, last.Hops)
+	}
+}
+
+// TestPlan_ChillStopOnFailAndLoop tests chill (0s, positive, final chill, ctx
+// cancel mid-chill), stop-on-fail (plan default + step override), and loop: true.
+func TestPlan_ChillStopOnFailAndLoop(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ok", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body>ok</body></html>`)
+	})
+	mux.HandleFunc("/s1", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body>step 1</body></html>`)
+	})
+	mux.HandleFunc("/s2", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body>step 2</body></html>`)
+	})
+	mux.HandleFunc("/boom", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `err`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	t.Run("chill-zero-and-positive", func(t *testing.T) {
+		// ThinkMin=500ms would take 1s across 2 steps, but chill: 0s skips pause
+		// and final step without chill skips default think time when !Loop.
+		suite := mustSuiteFromYAML(t, "chill-zero", srv.URL+"/", `
+name: chill-zero
+plan:
+  - name: fast
+    path: /s1
+    chill: 0s
+  - name: final
+    path: /s2
+`)
+		cfg := Config{
+			Hit:      srv.URL + "/",
+			Until:    5 * time.Second,
+			ThinkMin: 500 * time.Millisecond,
+			ThinkMax: 500 * time.Millisecond,
+			Plan:     suite,
+		}
+		start := time.Now()
+		ll := NewLemming(1, 0, 0, cfg, &discovery.URLPool{Origin: srv.URL}, srv.Client(), nil, nil, nil, nil).Run(context.Background())
+		elapsed := time.Since(start)
+		if ll.ExitReason != ExitPlanComplete || !ll.PlanPassed || ll.TotalVisits != 2 {
+			t.Fatalf("unexpected result: exit=%q passed=%v visits=%d", ll.ExitReason, ll.PlanPassed, ll.TotalVisits)
+		}
+		if elapsed >= 300*time.Millisecond {
+			t.Errorf("chill: 0s / final-step skip took too long: %s (expected < 300ms)", elapsed)
+		}
+
+		// Positive chill on intermediate and final step sleeps for specified durations.
+		suitePos := mustSuiteFromYAML(t, "chill-pos", srv.URL+"/", `
+name: chill-pos
+plan:
+  - name: first
+    path: /s1
+    chill: 50ms
+  - name: final
+    path: /s2
+    chill: 50ms
+`)
+		cfgPos := Config{Hit: srv.URL + "/", Until: 5 * time.Second, Plan: suitePos}
+		start = time.Now()
+		llPos := NewLemming(1, 0, 0, cfgPos, &discovery.URLPool{Origin: srv.URL}, srv.Client(), nil, nil, nil, nil).Run(context.Background())
+		elapsed = time.Since(start)
+		if llPos.ExitReason != ExitPlanComplete || !llPos.PlanPassed || elapsed < 85*time.Millisecond {
+			t.Errorf("positive chill did not sleep as expected: exit=%q passed=%v elapsed=%s", llPos.ExitReason, llPos.PlanPassed, elapsed)
+		}
+	})
+
+	t.Run("chill-context-cancel", func(t *testing.T) {
+		suite := mustSuiteFromYAML(t, "chill-cancel", srv.URL+"/", `
+name: chill-cancel
+plan:
+  - name: first
+    path: /s1
+    chill: 5s
+  - name: second
+    path: /s2
+`)
+		cfg := Config{Hit: srv.URL + "/", Until: 10 * time.Second, Plan: suite}
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		ll := NewLemming(1, 0, 0, cfg, &discovery.URLPool{Origin: srv.URL}, srv.Client(), nil, nil, nil, nil).Run(ctx)
+		if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+			t.Fatalf("chill did not exit promptly on cancel: elapsed=%s", elapsed)
+		}
+		if ll.ExitReason != ExitCancelled || ll.TotalVisits != 1 || ll.PlanStepsCompleted != 1 || ll.PlanPassed {
+			t.Errorf("unexpected cancel result: exit=%q visits=%d completed=%d passed=%v",
+				ll.ExitReason, ll.TotalVisits, ll.PlanStepsCompleted, ll.PlanPassed)
+		}
+	})
+
+	t.Run("stop-on-fail-plan-and-step", func(t *testing.T) {
+		// Plan-level stop-on-fail: true aborts on step 2 failure.
+		suitePlanStop := mustSuiteFromYAML(t, "plan-stop", srv.URL+"/", `
+name: plan-stop
+stop-on-fail: true
+plan:
+  - name: step1
+    path: /s1
+    chill: 0s
+  - name: step2
+    path: /boom
+    chill: 0s
+  - name: step3
+    path: /s2
+`)
+		ll := NewLemming(1, 0, 0, Config{Hit: srv.URL + "/", Until: 2 * time.Second, Plan: suitePlanStop},
+			&discovery.URLPool{Origin: srv.URL}, srv.Client(), nil, nil, nil, nil).Run(context.Background())
+		if ll.ExitReason != ExitPlanFailed || ll.TotalVisits != 2 || ll.FailedVisits != 1 || ll.PlanPassed {
+			t.Errorf("plan stop-on-fail mismatch: exit=%q visits=%d failed=%d passed=%v",
+				ll.ExitReason, ll.TotalVisits, ll.FailedVisits, ll.PlanPassed)
+		}
+
+		// Step-level stop-on-fail: true overrides plan default false.
+		suiteStepStop := mustSuiteFromYAML(t, "step-stop", srv.URL+"/", `
+name: step-stop
+stop-on-fail: false
+plan:
+  - name: step1
+    path: /s1
+    chill: 0s
+  - name: step2
+    path: /boom
+    stop-on-fail: true
+    chill: 0s
+  - name: step3
+    path: /s2
+`)
+		ll2 := NewLemming(1, 0, 0, Config{Hit: srv.URL + "/", Until: 2 * time.Second, Plan: suiteStepStop},
+			&discovery.URLPool{Origin: srv.URL}, srv.Client(), nil, nil, nil, nil).Run(context.Background())
+		if ll2.ExitReason != ExitPlanFailed || ll2.TotalVisits != 2 || ll2.PlanPassed {
+			t.Errorf("step stop-on-fail mismatch: exit=%q visits=%d passed=%v", ll2.ExitReason, ll2.TotalVisits, ll2.PlanPassed)
+		}
+
+		// Step-level stop-on-fail: false overrides plan default true -> runs step 3.
+		suiteStepContinue := mustSuiteFromYAML(t, "step-cont", srv.URL+"/", `
+name: step-cont
+stop-on-fail: true
+plan:
+  - name: step1
+    path: /s1
+    chill: 0s
+  - name: step2
+    path: /boom
+    stop-on-fail: false
+    chill: 0s
+  - name: step3
+    path: /s2
+`)
+		ll3 := NewLemming(1, 0, 0, Config{Hit: srv.URL + "/", Until: 2 * time.Second, Plan: suiteStepContinue},
+			&discovery.URLPool{Origin: srv.URL}, srv.Client(), nil, nil, nil, nil).Run(context.Background())
+		if ll3.ExitReason != ExitPlanComplete || ll3.TotalVisits != 3 || ll3.FailedVisits != 1 || ll3.PlanPassed {
+			t.Errorf("step stop-on-fail=false override mismatch: exit=%q visits=%d failed=%d passed=%v",
+				ll3.ExitReason, ll3.TotalVisits, ll3.FailedVisits, ll3.PlanPassed)
+		}
+	})
+
+	t.Run("loop-true", func(t *testing.T) {
+		suite := mustSuiteFromYAML(t, "looping", srv.URL+"/", `
+name: looping
+loop: true
+plan:
+  - name: first
+    path: /s1
+    chill: 0s
+  - name: second
+    path: /s2
+    chill: 0s
+`)
+		cfg := Config{
+			Hit:      srv.URL + "/",
+			Until:    2 * time.Second,
+			MaxPages: 5,
+			Plan:     suite,
+		}
+		ll := NewLemming(1, 0, 0, cfg, &discovery.URLPool{Origin: srv.URL}, srv.Client(), nil, nil, nil, nil).Run(context.Background())
+		if ll.ExitReason != ExitPageLimit || ll.TotalVisits != 5 || ll.PlanStepsCompleted != 2 || ll.PlanStepsTotal != 2 || !ll.PlanPassed {
+			t.Fatalf("looping plan mismatch: exit=%q visits=%d steps=%d/%d passed=%v",
+				ll.ExitReason, ll.TotalVisits, ll.PlanStepsCompleted, ll.PlanStepsTotal, ll.PlanPassed)
+		}
+		wantStepIdxs := []int{1, 2, 1, 2, 1}
+		for i, want := range wantStepIdxs {
+			if ll.Visits[i].StepIndex != want {
+				t.Errorf("visit[%d].StepIndex = %d, want %d", i, ll.Visits[i].StepIndex, want)
+			}
+		}
+	})
+}
+
+// TestSwarm_DeterministicRogueSplitAndWeightedPersonas verifies IsRogueLemming,
+// CountRoguesUpTo, exact 95%/5% vs 0% rogue splits, weighted 5:3:2 persona
+// distribution, cohort metrics, event fields, and non-streamed ingest fallback.
+func TestSwarm_DeterministicRogueSplitAndWeightedPersonas(t *testing.T) {
+	// 1. Unit checks for deterministic rogue helpers.
+	if IsRogueLemming(0, 0.5) || IsRogueLemming(-1, 0.5) || IsRogueLemming(1, 0) || IsRogueLemming(1, math.NaN()) {
+		t.Error("unexpected true from IsRogueLemming for non-positive number/rate or NaN")
+	}
+	if !IsRogueLemming(1, 1.0) || CountRoguesUpTo(10, 1.0) != 10 {
+		t.Error("rate=1 must classify every lemming as rogue")
+	}
+	if CountRoguesUpTo(0, 0.5) != 0 || CountRoguesUpTo(10, 0) != 0 || CountRoguesUpTo(10, math.NaN()) != 0 {
+		t.Error("unexpected non-zero CountRoguesUpTo")
+	}
+	for _, rate := range []float64{0.05, 0.25, 0.5} {
+		var counted int64
+		for n := int64(1); n <= 100; n++ {
+			if IsRogueLemming(n, rate) {
+				counted++
+			}
+			if got := CountRoguesUpTo(n, rate); got != counted {
+				t.Fatalf("rate=%v n=%d: CountRoguesUpTo=%d != cumulative IsRogueLemming=%d", rate, n, got, counted)
+			}
+		}
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/{$}", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body><a href="/explore">explore</a></body></html>`)
+	})
+	mux.HandleFunc("/explore", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body>exploring</body></html>`)
+	})
+	mux.HandleFunc("/p1", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body>p1</body></html>`)
+	})
+	mux.HandleFunc("/p2", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body>p2</body></html>`)
+	})
+	mux.HandleFunc("/p3", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body>p3</body></html>`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	pool := &discovery.URLPool{
+		Origin: srv.URL,
+		URLs:   []string{srv.URL + "/", srv.URL + "/explore"},
+	}
+
+	// 2. 20 lemmings at RogueRate=0.05 -> exactly 19 plan + 1 rogue.
+	singleSuite := mustSuiteFromYAML(t, "single", srv.URL+"/", `
+name: single
+plan:
+  - name: home
+    path: /p1
+    chill: 0s
+`)
+	bus := events.NewBus()
+	defer bus.Close()
+	var bornPlan, bornRogue, diedPlanPassed, diedRogue atomic.Int64
+	bus.Subscribe(func(e events.Event) {
+		switch e.Kind {
+		case events.LemmingBorn:
+			if e.Role == RolePlan && e.PlanName == "single" {
+				bornPlan.Add(1)
+			} else if e.Role == RoleRogue && e.PlanName == "" {
+				bornRogue.Add(1)
+			}
+		case events.LemmingDied:
+			if e.Role == RolePlan && e.PlanName == "single" && e.PlanPassed {
+				diedPlanPassed.Add(1)
+			} else if e.Role == RoleRogue && !e.PlanPassed {
+				diedRogue.Add(1)
+			}
+		}
+	})
+
+	sw, err := New(context.Background(), Config{
+		Hit:       srv.URL + "/",
+		Terrain:   2,
+		Pack:      10,
+		Limit:     4,
+		Until:     2 * time.Second,
+		MaxPages:  2,
+		Plan:      singleSuite,
+		RogueRate: 0.05,
+	}, Options{Bus: bus, Pool: pool})
+	if err != nil {
+		t.Fatalf("swarm.New(0.05): %v", err)
+	}
+	if err := sw.Run(context.Background()); err != nil {
+		t.Fatalf("swarm.Run(0.05): %v", err)
+	}
+	m := sw.Metrics()
+	if m.PlanLemmingsPassed.Load() != 19 || m.PlanLemmingsFailed.Load() != 0 || m.RogueLemmings.Load() != 1 {
+		t.Errorf("95%%/5%% metrics mismatch: passed=%d failed=%d rogue=%d (want 19, 0, 1)",
+			m.PlanLemmingsPassed.Load(), m.PlanLemmingsFailed.Load(), m.RogueLemmings.Load())
+	}
+	if bornPlan.Load() != 19 || bornRogue.Load() != 1 || diedPlanPassed.Load() != 19 || diedRogue.Load() != 1 {
+		t.Errorf("event counts mismatch: bornPlan=%d bornRogue=%d diedPlanPassed=%d diedRogue=%d",
+			bornPlan.Load(), bornRogue.Load(), diedPlanPassed.Load(), diedRogue.Load())
+	}
+
+	// 3. 20 lemmings at RogueRate=0 -> exactly 20 plan + 0 rogue, weighted 5:3:2 -> 10:6:4.
+	multiSuite := mustSuiteFromYAML(t, "personas", srv.URL+"/", `
+plans:
+  - name: buyer
+    weight: 5
+    plan:
+      - name: buy
+        path: /p1
+        chill: 0s
+  - name: browser
+    weight: 3
+    plan:
+      - name: browse
+        path: /p2
+        chill: 0s
+  - name: admin
+    weight: 2
+    plan:
+      - name: manage
+        path: /p3
+        chill: 0s
+`)
+	busMulti := events.NewBus()
+	defer busMulti.Close()
+	personaCounts := make(map[string]int)
+	var pmu sync.Mutex
+	busMulti.Subscribe(events.Filter(func(e events.Event) {
+		pmu.Lock()
+		personaCounts[e.PlanName]++
+		pmu.Unlock()
+	}, events.LemmingDied))
+
+	swMulti, err := New(context.Background(), Config{
+		Hit:       srv.URL + "/",
+		Terrain:   2,
+		Pack:      10,
+		Limit:     4,
+		Until:     2 * time.Second,
+		Plan:      multiSuite,
+		RogueRate: 0,
+	}, Options{Bus: busMulti, Pool: pool})
+	if err != nil {
+		t.Fatalf("swarm.New(weighted): %v", err)
+	}
+	if err := swMulti.Run(context.Background()); err != nil {
+		t.Fatalf("swarm.Run(weighted): %v", err)
+	}
+	if swMulti.Metrics().PlanLemmingsPassed.Load() != 20 || swMulti.Metrics().RogueLemmings.Load() != 0 {
+		t.Errorf("0%% rogue mismatch: passed=%d rogue=%d (want 20, 0)",
+			swMulti.Metrics().PlanLemmingsPassed.Load(), swMulti.Metrics().RogueLemmings.Load())
+	}
+	pmu.Lock()
+	if personaCounts["buyer"] != 10 || personaCounts["browser"] != 6 || personaCounts["admin"] != 4 {
+		t.Errorf("weighted 5:3:2 distribution mismatch: got %v, want buyer=10 browser=6 admin=4", personaCounts)
+	}
+	pmu.Unlock()
+
+	// 4. Verify Swarm.ingest fallback when !ll.Streamed updates cohort counters & event fields.
+	busIngest := events.NewBus()
+	defer busIngest.Close()
+	var ingested []events.Event
+	busIngest.Subscribe(events.Filter(func(e events.Event) {
+		ingested = append(ingested, e)
+	}, events.LemmingDied))
+	sIngest := &Swarm{events: busIngest}
+	sIngest.ingest(LifeLog{Identity: Identity{Number: 1, ID: "a"}, Role: RolePlan, PlanName: "buyer", PlanPassed: true, Streamed: false})
+	sIngest.ingest(LifeLog{Identity: Identity{Number: 2, ID: "b"}, Role: RolePlan, PlanName: "buyer", PlanPassed: false, Streamed: false})
+	sIngest.ingest(LifeLog{Identity: Identity{Number: 3, ID: "c"}, Role: RoleRogue, Streamed: false})
+	if sIngest.metrics.PlanLemmingsPassed.Load() != 1 || sIngest.metrics.PlanLemmingsFailed.Load() != 1 || sIngest.metrics.RogueLemmings.Load() != 1 {
+		t.Errorf("ingest fallback metrics mismatch: passed=%d failed=%d rogue=%d",
+			sIngest.metrics.PlanLemmingsPassed.Load(), sIngest.metrics.PlanLemmingsFailed.Load(), sIngest.metrics.RogueLemmings.Load())
+	}
+	if len(ingested) != 3 || !ingested[0].PlanPassed || ingested[0].Role != RolePlan || ingested[0].PlanName != "buyer" || ingested[2].Role != RoleRogue {
+		t.Errorf("ingest fallback events mismatch: %+v", ingested)
+	}
+}
+
+type recordingCapturer struct {
+	mu   sync.Mutex
+	reqs []forensics.CaptureRequest
+}
+
+func (c *recordingCapturer) Mode() string        { return forensics.ModeCDPReplay }
+func (c *recordingCapturer) BrowserInfo() string { return "mock-cdp" }
+func (c *recordingCapturer) Close() error        { return nil }
+func (c *recordingCapturer) Capture(_ context.Context, req forensics.CaptureRequest) (forensics.Artifact, error) {
+	c.mu.Lock()
+	c.reqs = append(c.reqs, req)
+	c.mu.Unlock()
+	return forensics.Artifact{
+		ID:            fmt.Sprintf("art-%d", len(c.reqs)),
+		URL:           req.SafeURL,
+		Path:          req.Path,
+		StatusCode:    req.StatusCode,
+		TriggerReason: req.TriggerReason,
+		CaptureMode:   forensics.ModeHTTPOnly,
+		Session:       req.Session,
+	}, nil
+}
+
+// TestForensics_SkipBrowserReplayAndFinalCookieNames verifies SkipBrowserReplay
+// is false for failed GET (no body) and true for failed POST (and GET with body),
+// forensics SessionSnapshot plan fields are populated, and FinalCookieNames holds
+// sorted unique cookie names only (never raw values).
+func TestForensics_SkipBrowserReplayAndFinalCookieNames(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/fail-get", func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "zeta_session", Value: "SUPER_SECRET_ZETA", Path: "/"})
+		http.SetCookie(w, &http.Cookie{Name: "alpha_token", Value: "SUPER_SECRET_ALPHA", Path: "/"})
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `<html><body>get fail</body></html>`)
+	})
+	mux.HandleFunc("/fail-post", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `<html><body>post fail</body></html>`)
+	})
+	mux.HandleFunc("/fail-get-body", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `<html><body>get-body fail</body></html>`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	suite := mustSuiteFromYAML(t, "forensics-plan", srv.URL+"/", `
+name: forensics-plan
+plan:
+  - name: fail-get
+    method: GET
+    path: /fail-get
+    chill: 0s
+  - name: fail-post
+    method: POST
+    path: /fail-post
+    with-body:
+      - key: item
+        value: sword
+    chill: 0s
+  - name: fail-get-body
+    method: GET
+    path: /fail-get-body
+    body: "query-body"
+    chill: 0s
+`)
+
+	cap := &recordingCapturer{}
+	store := forensics.NewStore(20, 5)
+	coord := forensics.NewCoordinator(context.Background(), store, cap, nil, forensics.CoordinatorConfig{Workers: 1})
+
+	key, _ := secrets.NewEphemeralKey()
+	jar, err := NewInspectingJar(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar, Timeout: 2 * time.Second}
+
+	cfg := Config{
+		Hit:            srv.URL + "/",
+		Until:          5 * time.Second,
+		RequestTimeout: 2 * time.Second,
+		Plan:           suite,
+		RogueRate:      0,
+	}
+	lem := NewLemming(1, 0, 0, cfg, &discovery.URLPool{Origin: srv.URL}, client, jar, nil, nil, coord)
+	ll := lem.Run(context.Background())
+
+	drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = coord.DrainAndClose(drainCtx)
+
+	if ll.FailedVisits != 3 || ll.PlanPassed {
+		t.Fatalf("expected 3 failed visits and PlanPassed=false, got failed=%d passed=%v", ll.FailedVisits, ll.PlanPassed)
+	}
+
+	// FinalCookieNames must hold sorted unique names ONLY (never secret values).
+	if !slices.Equal(ll.FinalCookieNames, []string{"alpha_token", "zeta_session"}) {
+		t.Errorf("FinalCookieNames = %v, want [alpha_token zeta_session]", ll.FinalCookieNames)
+	}
+	for _, name := range ll.FinalCookieNames {
+		if strings.Contains(name, "SUPER_SECRET") {
+			t.Errorf("cookie secret leaked into FinalCookieNames: %q", name)
+		}
+	}
+
+	cap.mu.Lock()
+	defer cap.mu.Unlock()
+	if len(cap.reqs) != 3 {
+		t.Fatalf("expected 3 forensics capture requests, got %d", len(cap.reqs))
+	}
+	byStep := make(map[string]forensics.CaptureRequest, len(cap.reqs))
+	for _, r := range cap.reqs {
+		byStep[r.Session.PlanStep] = r
+	}
+
+	getReq, ok := byStep["fail-get"]
+	if !ok {
+		t.Fatal("missing capture request for fail-get")
+	}
+	if getReq.Method != http.MethodGet || getReq.SkipBrowserReplay {
+		t.Errorf("fail-get: Method=%q SkipBrowserReplay=%v (want GET, false)", getReq.Method, getReq.SkipBrowserReplay)
+	}
+	if getReq.Session.PlanName != "forensics-plan" || getReq.Session.Method != http.MethodGet ||
+		getReq.Session.Role != RolePlan || getReq.Session.NavigationMode != "plan" {
+		t.Errorf("fail-get session mismatch: %+v", getReq.Session)
+	}
+
+	postReq, ok := byStep["fail-post"]
+	if !ok {
+		t.Fatal("missing capture request for fail-post")
+	}
+	if postReq.Method != http.MethodPost || !postReq.SkipBrowserReplay || postReq.Session.Method != http.MethodPost {
+		t.Errorf("fail-post: Method=%q SkipBrowserReplay=%v session.Method=%q (want POST, true, POST)",
+			postReq.Method, postReq.SkipBrowserReplay, postReq.Session.Method)
+	}
+
+	getBodyReq, ok := byStep["fail-get-body"]
+	if !ok {
+		t.Fatal("missing capture request for fail-get-body")
+	}
+	if !getBodyReq.SkipBrowserReplay {
+		t.Errorf("fail-get-body with request body must set SkipBrowserReplay=true")
+	}
+
+	// Verify rogue lemming forensics sets Role="rogue", NavigationMode="rogue", and SkipBrowserReplay=false for GET.
+	capRogue := &recordingCapturer{}
+	storeRogue := forensics.NewStore(10, 5)
+	coordRogue := forensics.NewCoordinator(context.Background(), storeRogue, capRogue, nil, forensics.CoordinatorConfig{Workers: 1})
+	rogueCfg := Config{
+		Hit:            srv.URL + "/fail-get",
+		Until:          2 * time.Second,
+		MaxPages:       1,
+		RequestTimeout: 2 * time.Second,
+		Navigation:     plan.NavigationLinks,
+		Plan:           suite,
+		RogueRate:      1.0,
+	}
+	rogueLem := NewLemming(1, 0, 0, rogueCfg, &discovery.URLPool{Origin: srv.URL, URLs: []string{srv.URL + "/fail-get"}}, srv.Client(), nil, nil, nil, coordRogue)
+	rogueLL := rogueLem.Run(context.Background())
+	drainCtx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	_ = coordRogue.DrainAndClose(drainCtx2)
+	if rogueLL.Role != RoleRogue || rogueLL.PlanPassed {
+		t.Fatalf("expected rogue lemming with PlanPassed=false, got role=%q passed=%v", rogueLL.Role, rogueLL.PlanPassed)
+	}
+	capRogue.mu.Lock()
+	defer capRogue.mu.Unlock()
+	if len(capRogue.reqs) != 1 || capRogue.reqs[0].Session.NavigationMode != "rogue" || capRogue.reqs[0].Session.Role != RoleRogue || capRogue.reqs[0].SkipBrowserReplay {
+		t.Errorf("rogue forensics request mismatch: %+v", capRogue.reqs)
 	}
 }
 

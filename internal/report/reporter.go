@@ -20,6 +20,7 @@ import (
 	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
 	"github.com/andreimerlescu/lemmings/v2/internal/events"
 	"github.com/andreimerlescu/lemmings/v2/internal/forensics"
+	"github.com/andreimerlescu/lemmings/v2/internal/plan"
 	"github.com/andreimerlescu/lemmings/v2/internal/swarm"
 )
 
@@ -79,7 +80,7 @@ type Data struct {
 	GeneratedAt   time.Time     `json:"generated_at"`
 	Duration      time.Duration `json:"duration_ns"`
 	Config        swarm.Config  `json:"config"`
-	Journey       string        `json:"journey,omitempty"`
+	Plan          *PlanReport   `json:"plan,omitempty"`
 
 	TotalLemmings     int64 `json:"total_lemmings"`
 	LemmingsStarted   int64 `json:"lemmings_started"`
@@ -211,6 +212,45 @@ type ScoutReport struct {
 	Failures int64 `json:"failures"`
 }
 
+// PlanReport summarizes YAML Plan / multi-persona Suite and rogue cohort execution.
+type PlanReport struct {
+	RogueRate     float64         `json:"rogue_rate"`
+	PlanLemmings  int64           `json:"plan_lemmings"`
+	PlanPassed    int64           `json:"plan_passed"`
+	PlanFailed    int64           `json:"plan_failed"`
+	PlanPassRate  float64         `json:"plan_pass_rate"`
+	RogueLemmings int64           `json:"rogue_lemmings"`
+	RogueFlawless int64           `json:"rogue_flawless"`
+	Personas      []PersonaReport `json:"personas,omitempty"`
+}
+
+// PersonaReport summarizes execution metrics for one named Plan persona in a Suite.
+type PersonaReport struct {
+	Name       string           `json:"name"`
+	Weight     int              `json:"weight"`
+	TotalSteps int              `json:"total_steps"`
+	Lemmings   int64            `json:"lemmings"`
+	Passed     int64            `json:"passed"`
+	Failed     int64            `json:"failed"`
+	PassRate   float64          `json:"pass_rate"`
+	Steps      []PlanStepReport `json:"steps,omitempty"`
+}
+
+// PlanStepReport summarizes execution metrics for one ordered step inside a Plan persona.
+type PlanStepReport struct {
+	Index      int           `json:"index"`
+	Name       string        `json:"name"`
+	Method     string        `json:"method"`
+	Path       string        `json:"path"`
+	Hits       int64         `json:"hits"`
+	Passed     int64         `json:"passed"`
+	Failed     int64         `json:"failed"`
+	P50        time.Duration `json:"p50_ns"`
+	P95        time.Duration `json:"p95_ns"`
+	P99        time.Duration `json:"p99_ns"`
+	TopFailure string        `json:"top_failure,omitempty"`
+}
+
 // CountRow is one labelled count row.
 type CountRow struct {
 	Label string  `json:"label"`
@@ -243,6 +283,7 @@ type LiveStats struct {
 	Room           RoomReport      `json:"room"`
 	Concert        ConcertReport   `json:"concert"`
 	Scouts         ScoutReport     `json:"scouts"`
+	Plan           *PlanReport     `json:"plan,omitempty"`
 	Timeline       []TimelinePoint `json:"timeline,omitempty"`
 	Paths          []PathReport    `json:"paths,omitempty"`
 	StatusCodes    []CountRow      `json:"status_codes,omitempty"`
@@ -260,6 +301,9 @@ type NotableLife struct {
 	Language   string        `json:"language"`
 	Terrain    int           `json:"terrain"`
 	Pack       int           `json:"pack"`
+	Role       string        `json:"role,omitempty"`
+	PlanName   string        `json:"plan_name,omitempty"`
+	PlanPassed bool          `json:"plan_passed,omitempty"`
 	Lifespan   time.Duration `json:"lifespan_ns"`
 	Visits     int64         `json:"visits"`
 	Failed     int64         `json:"failed"`
@@ -272,6 +316,7 @@ type NotableLife struct {
 // LifeStep is one visit inside a NotableLife.
 type LifeStep struct {
 	Seq       int     `json:"seq"`
+	Method    string  `json:"method,omitempty"`
 	Step      string  `json:"step,omitempty"`
 	Path      string  `json:"path"`
 	Status    int     `json:"status"`
@@ -282,6 +327,28 @@ type LifeStep struct {
 	QueuedMS  float64 `json:"queued_ms,omitempty"`
 	Why       string  `json:"why,omitempty"`
 	Bar       float64 `json:"bar"`
+}
+
+type planStepStats struct {
+	Index          int
+	Name           string
+	Method         string
+	Path           string
+	Hits           int64
+	Passed         int64
+	Failed         int64
+	FailureReasons map[string]int64
+	LatencySeries
+}
+
+type personaStats struct {
+	Name       string
+	Weight     int
+	TotalSteps int
+	Lemmings   int64
+	Passed     int64
+	Failed     int64
+	Steps      []*planStepStats
 }
 
 type pathStats struct {
@@ -348,6 +415,14 @@ func (n *notableSet) lives() []NotableLife {
 }
 
 func notableLife(ll *swarm.LifeLog, title, why string) NotableLife {
+	role := ll.Role
+	if role == "" {
+		role = ll.Identity.Role
+	}
+	planName := ll.PlanName
+	if planName == "" {
+		planName = ll.Identity.PlanName
+	}
 	life := NotableLife{
 		Title:      title,
 		Why:        why,
@@ -358,6 +433,9 @@ func notableLife(ll *swarm.LifeLog, title, why string) NotableLife {
 		Language:   ll.Identity.Language,
 		Terrain:    ll.Terrain,
 		Pack:       ll.Pack,
+		Role:       role,
+		PlanName:   planName,
+		PlanPassed: ll.PlanPassed,
 		Lifespan:   ll.Duration.Round(time.Millisecond),
 		Visits:     ll.TotalVisits,
 		Failed:     ll.FailedVisits,
@@ -375,6 +453,7 @@ func notableLife(ll *swarm.LifeLog, title, why string) NotableLife {
 		v := &visits[i]
 		step := LifeStep{
 			Seq:       v.Sequence,
+			Method:    v.Method,
 			Step:      v.Step,
 			Path:      discovery.PathOf(v.URL),
 			Status:    v.StatusCode,
@@ -433,6 +512,14 @@ type Reporter struct {
 	assetsByClass                              map[string]*assetClassStats
 	scoutVisits, scoutFailures                 int64
 
+	planOrder     []string
+	personas      map[string]*personaStats
+	planLemmings  int64
+	planPassed    int64
+	planFailed    int64
+	rogueLemmings int64
+	rogueFlawless int64
+
 	sessions, flawless int64
 	exitReasons        map[string]int64
 	notable            notableSet
@@ -442,19 +529,57 @@ type Reporter struct {
 
 // New constructs a Reporter for cfg.
 func New(cfg swarm.Config) *Reporter {
-	return &Reporter{
+	r := &Reporter{
 		cfg:           cfg,
 		byPath:        make(map[string]*pathStats),
 		startedAt:     time.Now(),
 		latency:       LatencySeries{exactCap: exactGlobalSamples},
 		assetLatency:  LatencySeries{exactCap: exactGlobalSamples},
 		assetsByClass: make(map[string]*assetClassStats),
+		personas:      make(map[string]*personaStats),
 		timeline:      NewTimeline(),
 		statusCodes:   make(map[int]int64),
 		errorKinds:    make(map[string]int64),
 		failedChecks:  make(map[string]int64),
 		exitReasons:   make(map[string]int64),
 	}
+	if cfg.Plan != nil {
+		for _, p := range cfg.Plan.Plans {
+			if p == nil || p.Name == "" {
+				continue
+			}
+			if _, exists := r.personas[p.Name]; exists {
+				continue
+			}
+			weight := p.Weight
+			if weight <= 0 {
+				weight = 1
+			}
+			steps := make([]*planStepStats, len(p.Items))
+			for i, item := range p.Items {
+				name := item.Name
+				if name == "" {
+					name = fmt.Sprintf("step-%d", i+1)
+				}
+				steps[i] = &planStepStats{
+					Index:          i + 1,
+					Name:           name,
+					Method:         item.EffectiveMethod(),
+					Path:           discovery.SafeURL(item.Path),
+					FailureReasons: make(map[string]int64),
+					LatencySeries:  LatencySeries{exactCap: exactPathSamples},
+				}
+			}
+			r.planOrder = append(r.planOrder, p.Name)
+			r.personas[p.Name] = &personaStats{
+				Name:       p.Name,
+				Weight:     weight,
+				TotalSteps: len(p.Items),
+				Steps:      steps,
+			}
+		}
+	}
+	return r
 }
 
 // SetForensics attaches the forensics Store so captured screenshots and admin
@@ -724,6 +849,9 @@ func (r *Reporter) recordVisitLocked(v *swarm.Visit, finished time.Time) {
 				r.concertBans403++
 			}
 		}
+		if v.Role == swarm.RolePlan && v.PlanName != "" && v.StepIndex >= 1 {
+			r.recordPlanStepLocked(v, failed)
+		}
 	}
 
 	if v.ConcertAdmit {
@@ -757,13 +885,102 @@ func (r *Reporter) recordVisitLocked(v *swarm.Visit, finished time.Time) {
 	}
 }
 
+func (r *Reporter) ensurePersonaLocked(name string, totalSteps int) *personaStats {
+	if name == "" {
+		return nil
+	}
+	ps := r.personas[name]
+	if ps == nil {
+		ps = &personaStats{
+			Name:       name,
+			Weight:     1,
+			TotalSteps: totalSteps,
+		}
+		r.planOrder = append(r.planOrder, name)
+		r.personas[name] = ps
+	} else if totalSteps > ps.TotalSteps {
+		ps.TotalSteps = totalSteps
+	}
+	return ps
+}
+
+func (r *Reporter) recordPlanStepLocked(v *swarm.Visit, failed bool) {
+	ps := r.ensurePersonaLocked(v.PlanName, v.StepIndex)
+	if ps == nil {
+		return
+	}
+	idx := v.StepIndex - 1
+	if idx < 0 {
+		return
+	}
+	if idx >= len(ps.Steps) {
+		if v.StepIndex > plan.DefaultMaxPlanItems {
+			return
+		}
+		for len(ps.Steps) < v.StepIndex {
+			stepIdx := len(ps.Steps) + 1
+			ps.Steps = append(ps.Steps, &planStepStats{
+				Index:          stepIdx,
+				Name:           fmt.Sprintf("step-%d", stepIdx),
+				Method:         http.MethodGet,
+				FailureReasons: make(map[string]int64),
+				LatencySeries:  LatencySeries{exactCap: exactPathSamples},
+			})
+		}
+	}
+	st := ps.Steps[idx]
+	if v.Step != "" && (st.Name == "" || st.Name == fmt.Sprintf("step-%d", v.StepIndex)) {
+		st.Name = v.Step
+	}
+	if v.Method != "" && st.Hits == 0 && r.cfg.Plan == nil {
+		st.Method = strings.ToUpper(strings.TrimSpace(v.Method))
+	}
+	if st.Path == "" && v.URL != "" {
+		st.Path = discovery.PathOf(v.URL)
+	}
+	st.Hits++
+	st.Add(v.EffectiveLatency())
+	if failed {
+		st.Failed++
+		if reason := swarm.WhyFailed(v); reason != "" {
+			st.FailureReasons[reason]++
+		}
+	} else {
+		st.Passed++
+	}
+}
+
+func topFailure(reasons map[string]int64) string {
+	var best string
+	var bestCount int64
+	for reason, n := range reasons {
+		if n > bestCount || (n == bestCount && (best == "" || reason < best)) {
+			best = reason
+			bestCount = n
+		}
+	}
+	return best
+}
+
 // Ingest records a completed lemming's LifeLog. Satisfies swarm.LifeSink.
 func (r *Reporter) Ingest(ll swarm.LifeLog) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	role := ll.Role
+	if role == "" {
+		role = ll.Identity.Role
+	}
+	planName := ll.PlanName
+	if planName == "" {
+		planName = ll.Identity.PlanName
+	}
+	ll.Role = role
+	ll.PlanName = planName
+
 	if !ll.Streamed {
 		ll.TotalVisits, ll.FailedVisits, ll.CancelledVisits = 0, 0, 0
+		maxStepIdx := 0
 		for i := range ll.Visits {
 			v := &ll.Visits[i]
 			finished := v.FinishedAt
@@ -774,7 +991,18 @@ func (r *Reporter) Ingest(ll swarm.LifeLog) {
 					finished = time.Now()
 				}
 			}
-			r.recordVisitLocked(v, finished)
+			rec := v
+			if (v.Role == "" && role != "") || (v.PlanName == "" && planName != "") {
+				vc := *v
+				if vc.Role == "" {
+					vc.Role = role
+				}
+				if vc.PlanName == "" {
+					vc.PlanName = planName
+				}
+				rec = &vc
+			}
+			r.recordVisitLocked(rec, finished)
 			ll.TotalVisits++
 			switch {
 			case v.Cancelled:
@@ -787,14 +1015,63 @@ func (r *Reporter) Ingest(ll swarm.LifeLog) {
 			}
 			if !v.Cancelled {
 				ll.SlowestVisit = max(ll.SlowestVisit, v.EffectiveLatency())
+				if v.StepIndex > maxStepIdx {
+					maxStepIdx = v.StepIndex
+				}
 			}
 			ll.LongestWait = max(ll.LongestWait, v.WaitingRoom.Duration)
+		}
+		if role == swarm.RolePlan {
+			if ll.PlanStepsCompleted == 0 && maxStepIdx > 0 {
+				ll.PlanStepsCompleted = maxStepIdx
+			}
+			if ll.PlanStepsTotal == 0 {
+				if ps := r.personas[planName]; ps != nil && ps.TotalSteps > 0 {
+					ll.PlanStepsTotal = ps.TotalSteps
+				} else if ll.PlanStepsCompleted > 0 {
+					ll.PlanStepsTotal = ll.PlanStepsCompleted
+				}
+			}
+			if !ll.PlanPassed {
+				ll.PlanPassed = ll.Error == nil &&
+					ll.FailedVisits == 0 &&
+					ll.CancelledVisits == 0 &&
+					ll.PlanStepsTotal > 0 &&
+					ll.PlanStepsCompleted >= ll.PlanStepsTotal &&
+					ll.ExitReason != swarm.ExitPlanFailed &&
+					ll.ExitReason != swarm.ExitCancelled
+			} else if ll.Error != nil || ll.FailedVisits > 0 || ll.CancelledVisits > 0 ||
+				ll.ExitReason == swarm.ExitPlanFailed || ll.ExitReason == swarm.ExitCancelled {
+				ll.PlanPassed = false
+			}
 		}
 	}
 
 	r.sessions++
 	if ll.FailedVisits == 0 && ll.Error == nil {
 		r.flawless++
+	}
+	switch role {
+	case swarm.RolePlan:
+		r.planLemmings++
+		if ll.PlanPassed {
+			r.planPassed++
+		} else {
+			r.planFailed++
+		}
+		if ps := r.ensurePersonaLocked(planName, ll.PlanStepsTotal); ps != nil {
+			ps.Lemmings++
+			if ll.PlanPassed {
+				ps.Passed++
+			} else {
+				ps.Failed++
+			}
+		}
+	case swarm.RoleRogue:
+		r.rogueLemmings++
+		if ll.FailedVisits == 0 && ll.Error == nil {
+			r.rogueFlawless++
+		}
 	}
 	if ll.ExitReason != "" {
 		r.exitReasons[ll.ExitReason]++
@@ -908,6 +1185,7 @@ func (r *Reporter) Live(points, paths int) LiveStats {
 		Room:      r.buildRoomReportLocked(),
 		Concert:   r.buildConcertReportLocked(),
 		Scouts:    r.buildScoutReportLocked(),
+		Plan:      r.buildPlanReportLocked(true),
 	}
 	if completed := r.visits - r.cancelled; completed > 0 {
 		s.FailureRate = float64(r.failed) / float64(completed)
@@ -984,9 +1262,7 @@ func (r *Reporter) buildReportDataLocked() Data {
 		Notable:           r.notable.lives(),
 		TraceFile:         r.cfg.TraceFile,
 	}
-	if r.cfg.Journey != nil {
-		data.Journey = r.cfg.Journey.Name
-	}
+	data.Plan = r.buildPlanReportLocked(false)
 	if completed := r.visits - r.cancelled; completed > 0 {
 		data.FailureRate = float64(r.failed) / float64(completed)
 	}
@@ -1166,6 +1442,76 @@ func (r *Reporter) buildScoutReportLocked() ScoutReport {
 	}
 }
 
+func (r *Reporter) buildPlanReportLocked(live bool) *PlanReport {
+	if r.cfg.Plan == nil && r.planLemmings == 0 && r.rogueLemmings == 0 && len(r.planOrder) == 0 {
+		return nil
+	}
+	rogueRate := r.cfg.RogueRate
+	if rogueRate < 0 {
+		rogueRate = 0
+	}
+	pr := &PlanReport{
+		RogueRate:     rogueRate,
+		PlanLemmings:  r.planLemmings,
+		PlanPassed:    r.planPassed,
+		PlanFailed:    r.planFailed,
+		RogueLemmings: r.rogueLemmings,
+		RogueFlawless: r.rogueFlawless,
+	}
+	if r.planLemmings > 0 {
+		pr.PlanPassRate = 100 * float64(r.planPassed) / float64(r.planLemmings)
+	}
+	if len(r.planOrder) > 0 {
+		pr.Personas = make([]PersonaReport, 0, len(r.planOrder))
+		for _, name := range r.planOrder {
+			ps := r.personas[name]
+			if ps == nil {
+				continue
+			}
+			pRep := PersonaReport{
+				Name:       ps.Name,
+				Weight:     ps.Weight,
+				TotalSteps: ps.TotalSteps,
+				Lemmings:   ps.Lemmings,
+				Passed:     ps.Passed,
+				Failed:     ps.Failed,
+			}
+			if ps.Lemmings > 0 {
+				pRep.PassRate = 100 * float64(ps.Passed) / float64(ps.Lemmings)
+			}
+			if len(ps.Steps) > 0 {
+				pRep.Steps = make([]PlanStepReport, 0, len(ps.Steps))
+				for _, st := range ps.Steps {
+					sr := PlanStepReport{
+						Index:      st.Index,
+						Name:       st.Name,
+						Method:     st.Method,
+						Path:       st.Path,
+						Hits:       st.Hits,
+						Passed:     st.Passed,
+						Failed:     st.Failed,
+						TopFailure: topFailure(st.FailureReasons),
+					}
+					if st.hist.count > 0 {
+						if live {
+							sr.P50 = st.hist.Quantile(50)
+							sr.P95 = st.hist.Quantile(95)
+							sr.P99 = st.hist.Quantile(99)
+						} else {
+							sr.P50 = st.Quantile(50)
+							sr.P95 = st.Quantile(95)
+							sr.P99 = st.Quantile(99)
+						}
+					}
+					pRep.Steps = append(pRep.Steps, sr)
+				}
+			}
+			pr.Personas = append(pr.Personas, pRep)
+		}
+	}
+	return pr
+}
+
 func normalizeAssetClass(class string) string {
 	switch strings.ToLower(strings.TrimSpace(class)) {
 	case "style", "script", "image", "font", "audio", "video", "data":
@@ -1191,6 +1537,18 @@ func (r *Reporter) evaluateGates(data Data) ([]GateResult, string) {
 			Limit:    "≤ " + r.cfg.P95Budget.String(),
 			Observed: FormatMillis(data.P95),
 			Passed:   data.P95 <= r.cfg.P95Budget,
+		})
+	}
+	if r.cfg.PlanPassGate {
+		var obsShare float64
+		if data.Plan != nil && data.Plan.PlanLemmings > 0 {
+			obsShare = float64(data.Plan.PlanPassed) / float64(data.Plan.PlanLemmings)
+		}
+		gates = append(gates, GateResult{
+			Name:     "plan pass rate",
+			Limit:    fmt.Sprintf("≥ %.2f%%", r.cfg.MinPlanPassRate*100),
+			Observed: fmt.Sprintf("%.2f%%", obsShare*100),
+			Passed:   data.Plan != nil && data.Plan.PlanLemmings > 0 && obsShare >= r.cfg.MinPlanPassRate,
 		})
 	}
 	switch {
@@ -1350,6 +1708,40 @@ var templateFuncs = map[string]any{
 	"upper":       strings.ToUpper,
 	"mdCell":      mdCell,
 	"mdFence":     mdFence,
+	"planNames":   planNames,
+	"methodClass": methodClass,
+}
+
+func planNames(pr *PlanReport) string {
+	if pr == nil || len(pr.Personas) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(pr.Personas))
+	for _, p := range pr.Personas {
+		if p.Name != "" {
+			names = append(names, p.Name)
+		}
+	}
+	return strings.Join(names, ", ")
+}
+
+func methodClass(m string) string {
+	switch strings.ToUpper(strings.TrimSpace(m)) {
+	case http.MethodPost:
+		return "post"
+	case http.MethodPut:
+		return "put"
+	case http.MethodPatch:
+		return "patch"
+	case http.MethodDelete:
+		return "delete"
+	case http.MethodHead:
+		return "head"
+	case http.MethodOptions:
+		return "options"
+	default:
+		return "get"
+	}
 }
 
 func mdCell(s string) string {

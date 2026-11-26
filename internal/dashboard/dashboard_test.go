@@ -19,7 +19,7 @@ import (
 
 	"github.com/andreimerlescu/lemmings/v2/internal/events"
 	"github.com/andreimerlescu/lemmings/v2/internal/forensics"
-	"github.com/andreimerlescu/lemmings/v2/internal/journey"
+	"github.com/andreimerlescu/lemmings/v2/internal/plan"
 	"github.com/andreimerlescu/lemmings/v2/internal/report"
 	"github.com/andreimerlescu/lemmings/v2/internal/swarm"
 )
@@ -402,17 +402,36 @@ func TestObservatory_ScaleInvariants(t *testing.T) {
 }
 
 func TestDashboard_ConfigCannotBreakOutOfItsScriptTag(t *testing.T) {
+	suite, err := plan.NewSuite([]*plan.Plan{{
+		Name:   `</script><script>alert(1)</script>`,
+		Weight: 1,
+		Items:  []plan.PlanItem{{Name: "s1", Path: "/"}},
+	}})
+	if err != nil {
+		t.Fatalf("NewSuite: %v", err)
+	}
 	cfg := swarm.Config{
-		Hit:     "http://127.0.0.1:8080/",
-		Version: "2.0.0",
-		Journey: &journey.Journey{Name: `</script><script>alert(1)</script>`},
+		Hit:             "http://127.0.0.1:8080/",
+		Version:         "2.0.0",
+		Plan:            suite,
+		RogueRate:       0.05,
+		PlanPassGate:    true,
+		MinPlanPassRate: 0.9,
 	}
 	out := DashboardHTML(cfg)
 	if strings.Contains(out, `</script><script>alert(1)</script>`) {
-		t.Fatal("journey name broke out of JSON <script id=\"config\"> tag")
+		t.Fatal("plan name broke out of JSON <script id=\"config\"> tag")
 	}
 	if !strings.Contains(out, `\u003c/script\u003e`) {
 		t.Error("expected Go json.Marshal HTML escaping (\\u003c/script\\u003e) inside config JSON")
+	}
+	if !strings.Contains(out, `"rogue_rate":0.05`) || !strings.Contains(out, `"min_plan_pass_gate":0.9`) {
+		t.Errorf("expected rogue_rate and min_plan_pass_gate in config JSON")
+	}
+
+	disabled := DashboardHTML(swarm.Config{Hit: "http://127.0.0.1:8080/", Version: "2.0.0"})
+	if !strings.Contains(disabled, `"min_plan_pass_gate":-1`) {
+		t.Error("expected min_plan_pass_gate:-1 when PlanPassGate is false")
 	}
 }
 
@@ -627,14 +646,45 @@ func TestDashboard_AuthLimiterPerIPGlobalCeilingAndMapCap(t *testing.T) {
 }
 
 func TestDashboard_LiveMetricsJSONIncludesConcertAndAssets(t *testing.T) {
-	d, bus, _, rawToken := newTestDash(t, false)
-	d.cfg.Assets = true
-	d.cfg.AssetsPerPage = 8
+	bus := events.NewBus()
+	t.Cleanup(bus.Close)
 
-	// Populate both Swarm.Metrics and Reporter (via EventBus) to confirm full wiring.
-	rep := d.stats.(*report.Reporter)
+	suite, err := plan.NewSuite([]*plan.Plan{{
+		Name:   "checkout",
+		Weight: 1,
+		Items: []plan.PlanItem{
+			{Name: "home", Path: "/", Method: "GET"},
+			{Name: "login", Path: "/login", Method: "POST"},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("NewSuite: %v", err)
+	}
+	cfg := swarm.Config{
+		Hit:           "http://127.0.0.1:8080/",
+		Terrain:       2,
+		Pack:          3,
+		Limit:         6,
+		Until:         10 * time.Second,
+		Ramp:          time.Second,
+		Version:       "2.0.0",
+		Assets:        true,
+		AssetsPerPage: 8,
+		Plan:          suite,
+		RogueRate:     0.05,
+	}
+	rawToken, err := GenerateToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := report.New(cfg)
 	rep.Attach(bus)
+	d, err := New(cfg, bus, &swarm.Metrics{}, rawToken, rep, forensics.NewStore(20, 5))
+	if err != nil {
+		t.Fatal(err)
+	}
 
+	// Populate Swarm.Metrics, Reporter, and Observatory to confirm full wiring.
 	d.metrics.LemmingsStarted.Store(14)
 	d.metrics.LemmingsCompleted.Store(10)
 	d.metrics.LemmingsAlive.Store(4)
@@ -647,6 +697,28 @@ func TestDashboard_LiveMetricsJSONIncludesConcertAndAssets(t *testing.T) {
 	d.metrics.Bans403.Store(1)
 	d.metrics.ScoutVisits.Store(7)
 	d.metrics.ScoutFailures.Store(2)
+	d.metrics.PlanLemmingsPassed.Store(5)
+	d.metrics.PlanLemmingsFailed.Store(1)
+	d.metrics.RogueLemmings.Store(1)
+
+	// Emit plan and rogue lifecycle/visit events to verify Observatory + LiveStats.Plan + max reconciliation.
+	ident := swarm.Identity{Number: 1, ID: "plan-1", Name: "Neon Fox", Role: swarm.RolePlan, PlanName: "checkout"}
+	bus.Emit(events.Event{Kind: events.LemmingBorn, LemmingID: ident.ID, LemmingNumber: 1, Role: swarm.RolePlan, PlanName: "checkout", Payload: &ident})
+	v := &swarm.Visit{
+		Sequence: 1, Method: http.MethodPost, PlanName: "checkout", Step: "login", StepIndex: 2, Role: swarm.RolePlan,
+		URL: "http://127.0.0.1:8080/login", StatusCode: 200, Duration: 12 * time.Millisecond,
+	}
+	bus.Emit(events.Event{
+		Kind: events.VisitComplete, LemmingID: ident.ID, LemmingNumber: 1, Method: v.Method,
+		PlanName: v.PlanName, StepIndex: v.StepIndex, Role: v.Role, URL: v.URL, StatusCode: 200, Duration: v.Duration, Payload: v,
+	})
+	// Fallback role/plan_name from event fields when Payload is nil.
+	bus.Emit(events.Event{Kind: events.LemmingBorn, LemmingID: "rogue-2", LemmingNumber: 2, Role: swarm.RoleRogue})
+
+	// Ingest 2 rogue sessions so live.Plan.RogueLemmings (2) exceeds d.metrics.RogueLemmings (1) and tests max().
+	rep.Ingest(swarm.LifeLog{Identity: ident, Role: swarm.RolePlan, PlanName: "checkout", PlanPassed: true, TotalVisits: 1})
+	rep.Ingest(swarm.LifeLog{Identity: swarm.Identity{Number: 2, ID: "rogue-2"}, Role: swarm.RoleRogue, TotalVisits: 1})
+	rep.Ingest(swarm.LifeLog{Identity: swarm.Identity{Number: 3, ID: "rogue-3"}, Role: swarm.RoleRogue, TotalVisits: 1})
 
 	h := d.Handler()
 	cookie := authCookieFor(t, h, rawToken)
@@ -675,6 +747,9 @@ func TestDashboard_LiveMetricsJSONIncludesConcertAndAssets(t *testing.T) {
 		"bans_403":         1,
 		"scout_visits":     7,
 		"scout_failures":   2,
+		"plan_passed":      5,
+		"plan_failed":      1,
+		"rogue_lemmings":   2,
 	}
 	for k, wantVal := range want {
 		got, ok := raw[k].(float64)
@@ -683,7 +758,7 @@ func TestDashboard_LiveMetricsJSONIncludesConcertAndAssets(t *testing.T) {
 		}
 	}
 
-	// Verify /api/state embeds both the expanded metricsSnapshot and LiveStats.
+	// Verify /api/state embeds expanded metricsSnapshot and live.plan.
 	req = httptest.NewRequest(http.MethodGet, "http://localhost:4000/api/state", nil)
 	req.Host = "localhost:4000"
 	req.AddCookie(cookie)
@@ -692,8 +767,45 @@ func TestDashboard_LiveMetricsJSONIncludesConcertAndAssets(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /api/state status = %d", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), `"lemmings_started":14`) || !strings.Contains(w.Body.String(), `"asset_denied_403":2`) {
-		t.Errorf("/api/state missing new metricsSnapshot fields: %s", w.Body.String())
+	stateBody := w.Body.String()
+	for _, needle := range []string{
+		`"lemmings_started":14`,
+		`"asset_denied_403":2`,
+		`"plan_passed":5`,
+		`"plan_failed":1`,
+		`"rogue_lemmings":2`,
+		`"plan":{`,
+		`"name":"checkout"`,
+		`"method":"POST"`,
+	} {
+		if !strings.Contains(stateBody, needle) {
+			t.Errorf("/api/state missing %s: %s", needle, stateBody)
+		}
+	}
+
+	// Verify /api/lemming exposes role, plan_name, and visit HTTP method ("m").
+	req = httptest.NewRequest(http.MethodGet, "http://localhost:4000/api/lemming?id=plan-1", nil)
+	req.Host = "localhost:4000"
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/lemming plan-1 status = %d", w.Code)
+	}
+	var life LemmingLife
+	if err := json.NewDecoder(w.Body).Decode(&life); err != nil {
+		t.Fatalf("decode /api/lemming: %v", err)
+	}
+	if life.Role != swarm.RolePlan || life.PlanName != "checkout" {
+		t.Errorf("plan-1 role/plan_name = %q/%q, want plan/checkout", life.Role, life.PlanName)
+	}
+	if len(life.History) != 1 || life.History[0].Method != http.MethodPost {
+		t.Errorf("plan-1 history = %+v, want 1 visit with Method=POST", life.History)
+	}
+
+	rogueLife, ok := d.obs.Life("rogue-2")
+	if !ok || rogueLife.Role != swarm.RoleRogue {
+		t.Errorf("rogue-2 fallback role = %q (ok=%v), want rogue", rogueLife.Role, ok)
 	}
 }
 

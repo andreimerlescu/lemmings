@@ -17,7 +17,7 @@ import (
 
 	"github.com/andreimerlescu/lemmings/v2/internal/discovery"
 	"github.com/andreimerlescu/lemmings/v2/internal/events"
-	"github.com/andreimerlescu/lemmings/v2/internal/journey"
+	"github.com/andreimerlescu/lemmings/v2/internal/plan"
 	"github.com/andreimerlescu/lemmings/v2/internal/secrets"
 	"golang.org/x/net/websocket"
 )
@@ -343,14 +343,19 @@ func TestCDP_LiveHeadlessBrowserCaptureAndScout(t *testing.T) {
 	}, events.ScoutVisit))
 
 	fpKey, _ := secrets.NewEphemeralKey()
-	j, _ := journey.Parse(bytes.NewReader([]byte(`{"name":"scout-check","steps":[{"name":"glitch","path":"/js-fault-200"}]}`)), srv.URL+"/")
+	p := mustParsePlanSuite(t, `
+name: scout-check
+plan:
+  - name: glitch
+    path: /js-fault-200
+`, srv.URL+"/")
 
 	RunScouts(ctx, ScoutConfig{
 		Count:          1,
 		Origin:         srv.URL,
 		Hit:            srv.URL + "/",
 		URLs:           []string{srv.URL + "/js-fault-200"},
-		Journey:        j,
+		Plan:           p,
 		Until:          6 * time.Second,
 		ThinkMin:       10 * time.Millisecond,
 		ThinkMax:       20 * time.Millisecond,
@@ -366,6 +371,10 @@ func TestCDP_LiveHeadlessBrowserCaptureAndScout(t *testing.T) {
 		t.Errorf("unexpected Scout artifact: mode=%q consoleErrors=%d hasScreenshot=%v",
 			arts[0].CaptureMode, arts[0].ConsoleErrors, arts[0].Screenshot != nil)
 	}
+	if arts[0].Session.PlanName != "scout-check" || arts[0].Session.PlanStep != "glitch" || arts[0].Session.Method != "GET" || arts[0].Session.Role != "scout" {
+		t.Errorf("unexpected Scout session metadata: plan=%q step=%q method=%q role=%q",
+			arts[0].Session.PlanName, arts[0].Session.PlanStep, arts[0].Session.Method, arts[0].Session.Role)
+	}
 	liveMu.Lock()
 	gotVisits := len(liveScoutVisits)
 	liveMu.Unlock()
@@ -373,7 +382,7 @@ func TestCDP_LiveHeadlessBrowserCaptureAndScout(t *testing.T) {
 		t.Errorf("expected 1 ScoutVisit event in live test, got %d", gotVisits)
 	}
 
-	// 3. Real-browser Scout on JSON 200 OK journey step passes content_type without false failure,
+	// 3. Real-browser Scout on JSON 200 OK plan step passes want-content-type without false failure,
 	// and off-origin 302 redirect skips screenshot, cookies, and DOM capture.
 	store2 := NewStore(10, 3)
 	bus2 := events.NewBus()
@@ -386,21 +395,23 @@ func TestCDP_LiveHeadlessBrowserCaptureAndScout(t *testing.T) {
 		mu2.Unlock()
 	}, events.ScoutVisit))
 
-	j2, err := journey.Parse(bytes.NewReader([]byte(`{
-		"name": "live-json-and-escape",
-		"steps": [
-			{"name": "health-json", "path": "/api/health", "expect": {"status": [200], "content_type": "application/json", "contains": ["\"ok\":true"]}},
-			{"name": "off-origin", "path": "/escape"}
-		]
-	}`)), srv.URL+"/")
-	if err != nil {
-		t.Fatalf("journey.Parse j2: %v", err)
-	}
+	p2 := mustParsePlanSuite(t, `
+name: live-json-and-escape
+plan:
+  - name: health-json
+    path: /api/health
+    want-status: [200]
+    want-content-type: application/json
+    want-body:
+      - contains: '"ok":true'
+  - name: off-origin
+    path: /escape
+`, srv.URL+"/")
 	RunScouts(ctx, ScoutConfig{
 		Count:          1,
 		Origin:         srv.URL,
 		Hit:            srv.URL + "/",
-		Journey:        j2,
+		Plan:           p2,
 		Until:          10 * time.Second,
 		ThinkMin:       10 * time.Millisecond,
 		ThinkMax:       20 * time.Millisecond,
@@ -412,7 +423,7 @@ func TestCDP_LiveHeadlessBrowserCaptureAndScout(t *testing.T) {
 	gotVisits2 := append([]events.Event(nil), visits2...)
 	mu2.Unlock()
 	if len(gotVisits2) != 2 {
-		t.Fatalf("expected 2 ScoutVisit events in live JSON+escape journey, got %d", len(gotVisits2))
+		t.Fatalf("expected 2 ScoutVisit events in live JSON+escape plan, got %d", len(gotVisits2))
 	}
 	if gotVisits2[0].StatusCode != 200 || gotVisits2[0].Failed || gotVisits2[0].Err != nil {
 		t.Errorf("live JSON 200 step falsely failed: %+v (err=%v)", gotVisits2[0], gotVisits2[0].Err)
@@ -1043,16 +1054,18 @@ func TestScout_OffOriginRedirectBlockedAndEmitsScoutVisit(t *testing.T) {
 				mu.Unlock()
 			}, events.ScoutVisit))
 
-			j, err := journey.Parse(bytes.NewReader([]byte(`{"name":"off-origin","steps":[{"name":"redir","path":"/redir"}]}`)), "http://target.local/")
-			if err != nil {
-				t.Fatalf("journey.Parse: %v", err)
-			}
+			p := mustParsePlanSuite(t, `
+name: off-origin
+plan:
+  - name: redir
+    path: /redir
+`, "http://target.local/")
 
 			RunScouts(ctx, ScoutConfig{
 				Count:      1,
 				Origin:     "http://target.local",
 				Hit:        "http://target.local/",
-				Journey:    j,
+				Plan:       p,
 				Until:      4 * time.Second,
 				ThinkMin:   5 * time.Millisecond,
 				ThinkMax:   10 * time.Millisecond,
@@ -1097,16 +1110,20 @@ func TestScout_OffOriginRedirectBlockedAndEmitsScoutVisit(t *testing.T) {
 			if art.CaptureWarning == "" || art.TriggerReason != "off-origin-redirect" {
 				t.Errorf("expected off-origin warning & trigger, got warning=%q trigger=%q", art.CaptureWarning, art.TriggerReason)
 			}
+			if art.Session.PlanName != "off-origin" || art.Session.PlanStep != "redir" || art.Session.Method != "GET" || art.Session.Role != "scout" {
+				t.Errorf("unexpected off-origin session metadata: plan=%q step=%q method=%q role=%q",
+					art.Session.PlanName, art.Session.PlanStep, art.Session.Method, art.Session.Role)
+			}
 		})
 	}
 }
 
-// TestScout_JSONJourneyContentTypeNavErrorStaleDrainAndPoolUntil tests:
-// 1. JSON 200 OK journey step passing content_type: "application/json" without false failure.
+// TestScout_JSONPlanContentTypeNavErrorStaleDrainAndPoolUntil tests:
+// 1. JSON 200 OK plan step passing want-content-type: "application/json" without false failure.
 // 2. Stale CDP events from page 1 drained before page 2 so page 2 is not contaminated.
 // 3. Page.navigate errorText keeps docStatus=0 and triggers "nav-error".
 // 4. URL pool mode cycles through cfg.URLs until -until expires and emits ScoutVisit per page.
-func TestScout_JSONJourneyContentTypeNavErrorStaleDrainAndPoolUntil(t *testing.T) {
+func TestScout_JSONPlanContentTypeNavErrorStaleDrainAndPoolUntil(t *testing.T) {
 	t.Run("json-200-passes-and-stale-events-drained", func(t *testing.T) {
 		var navCount atomic.Int32
 		srv := newFakeCDPServer(t, func(send func(any), req cdpServerReq) {
@@ -1227,22 +1244,28 @@ func TestScout_JSONJourneyContentTypeNavErrorStaleDrainAndPoolUntil(t *testing.T
 			mu.Unlock()
 		}, events.ScoutVisit))
 
-		j, err := journey.Parse(bytes.NewReader([]byte(`{
-			"name": "json-api",
-			"steps": [
-				{"name": "health", "path": "/v1/health", "expect": {"status": [200], "content_type": "application/json", "contains": ["\"ok\":true"]}},
-				{"name": "status", "path": "/v1/status", "expect": {"status": [200], "content_type": "application/json", "contains": ["concert"]}}
-			]
-		}`)), "http://api.local/")
-		if err != nil {
-			t.Fatalf("journey.Parse: %v", err)
-		}
+		p := mustParsePlanSuite(t, `
+name: json-api
+plan:
+  - name: health
+    path: /v1/health
+    want-status: [200]
+    want-content-type: application/json
+    want-body:
+      - contains: '"ok":true'
+  - name: status
+    path: /v1/status
+    want-status: [200]
+    want-content-type: application/json
+    want-body:
+      - contains: concert
+`, "http://api.local/")
 
 		RunScouts(ctx, ScoutConfig{
 			Count:      1,
 			Origin:     "http://api.local",
 			Hit:        "http://api.local/",
-			Journey:    j,
+			Plan:       p,
 			Until:      4 * time.Second,
 			ThinkMin:   30 * time.Millisecond,
 			ThinkMax:   40 * time.Millisecond,
@@ -1251,7 +1274,7 @@ func TestScout_JSONJourneyContentTypeNavErrorStaleDrainAndPoolUntil(t *testing.T
 
 		if stats := store.Stats(); stats.Captured != 0 {
 			arts, _ := store.SnapshotForReport()
-			t.Fatalf("expected 0 failure artifacts for valid 200 JSON journey, got %d (%+v)", stats.Captured, arts)
+			t.Fatalf("expected 0 failure artifacts for valid 200 JSON plan, got %d (%+v)", stats.Captured, arts)
 		}
 		mu.Lock()
 		gotVisits := append([]events.Event(nil), visits...)
@@ -1321,13 +1344,18 @@ func TestScout_JSONJourneyContentTypeNavErrorStaleDrainAndPoolUntil(t *testing.T
 			mu.Unlock()
 		}, events.ScoutVisit))
 
-		j, _ := journey.Parse(bytes.NewReader([]byte(`{"name":"nav-err","steps":[{"name":"down","path":"/down"}]}`)), "http://down.local/")
+		p := mustParsePlanSuite(t, `
+name: nav-err
+plan:
+  - name: down
+    path: /down
+`, "http://down.local/")
 		RunScouts(ctx, ScoutConfig{
-			Count:   1,
-			Origin:  "http://down.local",
-			Hit:     "http://down.local/",
-			Journey: j,
-			Until:   3 * time.Second,
+			Count:  1,
+			Origin: "http://down.local",
+			Hit:    "http://down.local/",
+			Plan:   p,
+			Until:  3 * time.Second,
 		}, cdp, store, bus)
 
 		arts, _ := store.SnapshotForReport()
@@ -1336,6 +1364,10 @@ func TestScout_JSONJourneyContentTypeNavErrorStaleDrainAndPoolUntil(t *testing.T
 		}
 		if arts[0].StatusCode != 0 || arts[0].TriggerReason != "nav-error" {
 			t.Errorf("expected StatusCode=0 TriggerReason=nav-error, got status=%d trigger=%q", arts[0].StatusCode, arts[0].TriggerReason)
+		}
+		if arts[0].Session.PlanName != "nav-err" || arts[0].Session.PlanStep != "down" || arts[0].Session.Method != "GET" || arts[0].Session.Role != "scout" {
+			t.Errorf("unexpected nav-error session metadata: plan=%q step=%q method=%q role=%q",
+				arts[0].Session.PlanName, arts[0].Session.PlanStep, arts[0].Session.Method, arts[0].Session.Role)
 		}
 		mu.Lock()
 		defer mu.Unlock()
@@ -1425,6 +1457,218 @@ func TestScout_JSONJourneyContentTypeNavErrorStaleDrainAndPoolUntil(t *testing.T
 
 		if got := visitCount.Load(); got < 2 {
 			t.Fatalf("expected URL pool Scout to cycle until -until (>=2 visits), got %d", got)
+		}
+	})
+}
+
+func mustParsePlanSuite(t *testing.T, yamlDoc, hit string) *plan.Suite {
+	t.Helper()
+	plans, err := plan.ParsePlanYAML(strings.NewReader(yamlDoc), "test", hit, 0)
+	if err != nil {
+		t.Fatalf("plan.ParsePlanYAML: %v", err)
+	}
+	suite, err := plan.NewSuite(plans)
+	if err != nil {
+		t.Fatalf("plan.NewSuite: %v", err)
+	}
+	return suite
+}
+
+// TestCDPCapturer_SkipBrowserReplay verifies that CaptureRequest.SkipBrowserReplay
+// short-circuits before touching CDP, returning an HTTP-only Artifact with the
+// extracted error body and warning even when c.browser is nil or connected.
+func TestCDPCapturer_SkipBrowserReplay(t *testing.T) {
+	const wantWarning = "CDP replay skipped for non-GET request; captured HTTP-only forensics"
+
+	req := CaptureRequest{
+		URL:               "http://127.0.0.1/api/checkout",
+		SafeURL:           "http://127.0.0.1/api/checkout",
+		Origin:            "http://127.0.0.1",
+		Path:              "/api/checkout",
+		Method:            http.MethodPost,
+		SkipBrowserReplay: true,
+		StatusCode:        500,
+		LatencyMS:         42.5,
+		TriggerReason:     "status 500",
+		ContentType:       "application/json",
+		Headers:           http.Header{"X-Request-Id": {"req-post-500"}},
+		RawBody:           []byte(`{"error":"payment_failed","message":"Card processor unavailable"}`),
+		Session: SessionSnapshot{
+			LemmingNumber: 15,
+			LemmingID:     "t0-p14",
+			LemmingName:   "Bolt Runner",
+			PlanName:      "checkout",
+			PlanStep:      "submit-order",
+			Method:        http.MethodPost,
+			Role:          "plan",
+		},
+	}
+
+	t.Run("nil-browser-no-panic", func(t *testing.T) {
+		cdp := &CDPCapturer{}
+		art, err := cdp.Capture(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Capture(SkipBrowserReplay=true) returned error: %v", err)
+		}
+		if art.CaptureMode != ModeHTTPOnly {
+			t.Errorf("CaptureMode = %q, want %q", art.CaptureMode, ModeHTTPOnly)
+		}
+		if art.CaptureWarning != wantWarning {
+			t.Errorf("CaptureWarning = %q, want %q", art.CaptureWarning, wantWarning)
+		}
+		if art.Screenshot != nil {
+			t.Errorf("expected nil Screenshot when browser replay skipped")
+		}
+		if art.ID == "" || art.StatusCode != 500 || art.Path != "/api/checkout" {
+			t.Errorf("unexpected artifact identity/status: id=%q status=%d path=%q", art.ID, art.StatusCode, art.Path)
+		}
+		if art.Session.PlanName != "checkout" || art.Session.PlanStep != "submit-order" || art.Session.Method != http.MethodPost || art.Session.Role != "plan" {
+			t.Errorf("session snapshot mismatch: %+v", art.Session)
+		}
+		if art.ErrorBody.Format != "json" || art.ErrorBody.RequestID != "req-post-500" || !strings.Contains(art.ErrorBody.Summary, "Card processor unavailable") {
+			t.Errorf("unexpected ErrorBody: %+v", art.ErrorBody)
+		}
+	})
+
+	t.Run("connected-cdp-makes-zero-rpc-calls", func(t *testing.T) {
+		var rpcCalls atomic.Int32
+		srv := newFakeCDPServer(t, func(send func(any), req cdpServerReq) {
+			if req.Method != "Browser.close" {
+				rpcCalls.Add(1)
+			}
+			send(map[string]any{"id": req.ID, "result": map[string]any{}})
+		})
+		defer srv.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cdp, err := NewCDPCapturer(ctx, CDPOptions{CDPURL: srv.URL, Timeout: 2 * time.Second})
+		if err != nil {
+			t.Fatalf("NewCDPCapturer: %v", err)
+		}
+		defer func() { _ = cdp.Close() }()
+
+		art, err := cdp.Capture(ctx, req)
+		if err != nil {
+			t.Fatalf("Capture(SkipBrowserReplay=true) returned error: %v", err)
+		}
+		if got := rpcCalls.Load(); got != 0 {
+			t.Fatalf("expected 0 CDP RPC calls when SkipBrowserReplay=true, got %d", got)
+		}
+		if art.CaptureMode != ModeHTTPOnly || art.CaptureWarning != wantWarning {
+			t.Errorf("unexpected mode/warning: mode=%q warning=%q", art.CaptureMode, art.CaptureWarning)
+		}
+	})
+}
+
+// TestBuildScoutTargets_PlanSuiteAndNonGETFallback verifies that Scouts walk
+// weighted personas from a GET-only *plan.Suite, and fall back to rotated
+// cfg.URLs whenever any plan in the suite contains a non-GET step.
+func TestBuildScoutTargets_PlanSuiteAndNonGETFallback(t *testing.T) {
+	t.Run("get-only-multi-persona-suite", func(t *testing.T) {
+		suite := mustParsePlanSuite(t, `
+plans:
+  - name: browse
+    weight: 2
+    plan:
+      - name: home
+        path: /
+      - name: games
+        path: /games
+  - name: scores
+    weight: 1
+    plan:
+      - name: board
+        path: /leaderboard
+`, "http://target.local/")
+
+		cfg := ScoutConfig{
+			Hit:  "http://target.local/",
+			URLs: []string{"http://target.local/fallback-a", "http://target.local/fallback-b"},
+			Plan: suite,
+		}
+
+		// Weight 2 for browse, weight 1 for scores -> idx 0,1 pick browse; idx 2 picks scores; idx 3 wraps to browse.
+		t0 := buildScoutTargets(cfg, 0)
+		if len(t0) != 2 {
+			t.Fatalf("idx=0: expected 2 targets, got %d (%+v)", len(t0), t0)
+		}
+		if t0[0].url != "http://target.local/" || t0[0].planName != "browse" || t0[0].stepName != "home" || t0[0].step == nil {
+			t.Errorf("idx=0 target[0] mismatch: %+v", t0[0])
+		}
+		if t0[1].url != "http://target.local/games" || t0[1].planName != "browse" || t0[1].stepName != "games" || t0[1].step == nil {
+			t.Errorf("idx=0 target[1] mismatch: %+v", t0[1])
+		}
+
+		t1 := buildScoutTargets(cfg, 1)
+		if len(t1) != 2 || t1[0].planName != "browse" {
+			t.Errorf("idx=1: expected browse plan (weight 2), got %+v", t1)
+		}
+
+		t2 := buildScoutTargets(cfg, 2)
+		if len(t2) != 1 || t2[0].url != "http://target.local/leaderboard" || t2[0].planName != "scores" || t2[0].stepName != "board" || t2[0].step == nil {
+			t.Errorf("idx=2: expected scores plan, got %+v", t2)
+		}
+
+		t3 := buildScoutTargets(cfg, 3)
+		if len(t3) != 2 || t3[0].planName != "browse" {
+			t.Errorf("idx=3: expected wrap to browse plan, got %+v", t3)
+		}
+	})
+
+	t.Run("suite-with-post-falls-back-to-rotated-urls", func(t *testing.T) {
+		suite := mustParsePlanSuite(t, `
+plans:
+  - name: browse
+    weight: 1
+    plan:
+      - name: home
+        path: /
+  - name: buyer
+    weight: 1
+    plan:
+      - name: catalog
+        path: /catalog
+      - name: checkout
+        path: /api/order
+        method: POST
+        body: '{"item":"arcade-token"}'
+`, "http://target.local/")
+
+		if !suite.HasNonGET() {
+			t.Fatal("expected suite.HasNonGET() to be true")
+		}
+
+		cfg := ScoutConfig{
+			Hit: "http://target.local/",
+			URLs: []string{
+				"http://target.local/a",
+				"http://target.local/b",
+				"http://target.local/c",
+			},
+			Plan: suite,
+		}
+
+		got0 := buildScoutTargets(cfg, 0)
+		want0 := []string{"http://target.local/a", "http://target.local/b", "http://target.local/c"}
+		if len(got0) != len(want0) {
+			t.Fatalf("idx=0: got %d targets, want %d", len(got0), len(want0))
+		}
+		for i, wantURL := range want0 {
+			if got0[i].url != wantURL || got0[i].planName != "" || got0[i].stepName != "" || got0[i].step != nil {
+				t.Errorf("idx=0 target[%d] = %+v, want plain URL %q", i, got0[i], wantURL)
+			}
+		}
+
+		got1 := buildScoutTargets(cfg, 1)
+		want1 := []string{"http://target.local/b", "http://target.local/c", "http://target.local/a"}
+		if len(got1) != len(want1) {
+			t.Fatalf("idx=1: got %d targets, want %d", len(got1), len(want1))
+		}
+		for i, wantURL := range want1 {
+			if got1[i].url != wantURL || got1[i].planName != "" || got1[i].stepName != "" || got1[i].step != nil {
+				t.Errorf("idx=1 target[%d] = %+v, want rotated plain URL %q", i, got1[i], wantURL)
+			}
 		}
 	})
 }

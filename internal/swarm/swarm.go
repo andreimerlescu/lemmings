@@ -18,33 +18,56 @@ import (
 // Metrics holds exact live atomic counters readable by the CLI ticker,
 // dashboard, and reporters.
 type Metrics struct {
-	LemmingsStarted   atomic.Int64
-	LemmingsAlive     atomic.Int64
-	LemmingsCompleted atomic.Int64
-	LemmingsFailed    atomic.Int64
-	TerrainsOnline    atomic.Int64
-	TotalVisits       atomic.Int64
-	TotalBytes        atomic.Int64
-	TotalWaitingRoom  atomic.Int64
-	Total2xx          atomic.Int64
-	Total3xx          atomic.Int64
-	Total4xx          atomic.Int64
-	Total5xx          atomic.Int64
-	FailedVisits      atomic.Int64
-	CancelledVisits   atomic.Int64
-	OverflowLogs      atomic.Int64
-	DroppedLogs       atomic.Int64
-	ArtifactsCaptured atomic.Int64
-	ScoutsAlive       atomic.Int64
-	AssetRequests     atomic.Int64
-	AssetFailed       atomic.Int64
-	AssetBytes        atomic.Int64
-	AssetDenied403    atomic.Int64
-	QueuePolls        atomic.Int64
-	Bans429           atomic.Int64
-	Bans403           atomic.Int64
-	ScoutVisits       atomic.Int64
-	ScoutFailures     atomic.Int64
+	LemmingsStarted    atomic.Int64
+	LemmingsAlive      atomic.Int64
+	LemmingsCompleted  atomic.Int64
+	LemmingsFailed     atomic.Int64
+	TerrainsOnline     atomic.Int64
+	TotalVisits        atomic.Int64
+	TotalBytes         atomic.Int64
+	TotalWaitingRoom   atomic.Int64
+	Total2xx           atomic.Int64
+	Total3xx           atomic.Int64
+	Total4xx           atomic.Int64
+	Total5xx           atomic.Int64
+	FailedVisits       atomic.Int64
+	CancelledVisits    atomic.Int64
+	OverflowLogs       atomic.Int64
+	DroppedLogs        atomic.Int64
+	ArtifactsCaptured  atomic.Int64
+	ScoutsAlive        atomic.Int64
+	AssetRequests      atomic.Int64
+	AssetFailed        atomic.Int64
+	AssetBytes         atomic.Int64
+	AssetDenied403     atomic.Int64
+	QueuePolls         atomic.Int64
+	Bans429            atomic.Int64
+	Bans403            atomic.Int64
+	ScoutVisits        atomic.Int64
+	ScoutFailures      atomic.Int64
+	PlanLemmingsPassed atomic.Int64
+	PlanLemmingsFailed atomic.Int64
+	RogueLemmings      atomic.Int64
+}
+
+func (m *Metrics) recordDeath(ll *LifeLog) {
+	if m == nil || ll == nil {
+		return
+	}
+	role := ll.Role
+	if role == "" {
+		role = ll.Identity.Role
+	}
+	switch role {
+	case RolePlan:
+		if ll.PlanPassed {
+			m.PlanLemmingsPassed.Add(1)
+		} else {
+			m.PlanLemmingsFailed.Add(1)
+		}
+	case RoleRogue:
+		m.RogueLemmings.Add(1)
+	}
 }
 
 // RecordVisit counts one completed visit atomically.
@@ -319,7 +342,7 @@ func (s *Swarm) Run(ctx context.Context) error {
 					Origin:         s.pool.Origin,
 					Hit:            s.cfg.Hit,
 					URLs:           s.pool.URLs,
-					Journey:        s.cfg.Journey,
+					Plan:           s.cfg.Plan,
 					Until:          s.cfg.Until,
 					ThinkMin:       s.cfg.ThinkMin,
 					ThinkMax:       s.cfg.ThinkMax,
@@ -432,12 +455,25 @@ func (s *Swarm) ingest(ll LifeLog) {
 		if ll.Error != nil {
 			s.metrics.LemmingsFailed.Add(1)
 		}
+		s.metrics.recordDeath(&ll)
+		role := ll.Role
+		if role == "" {
+			role = ll.Identity.Role
+		}
+		planName := ll.PlanName
+		if planName == "" {
+			planName = ll.Identity.PlanName
+		}
 		s.events.Emit(events.Event{
 			Kind:          events.LemmingDied,
 			LemmingID:     ll.Identity.ID,
 			LemmingNumber: ll.Identity.Number,
 			Terrain:       ll.Terrain,
 			Pack:          ll.Pack,
+			Duration:      ll.Duration,
+			Role:          role,
+			PlanName:      planName,
+			PlanPassed:    ll.PlanPassed,
 			Payload:       &ll,
 		})
 	}

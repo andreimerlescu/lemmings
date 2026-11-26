@@ -216,3 +216,52 @@ func TestPrometheusObserver_CancelledExclusionAndV2Metrics(t *testing.T) {
 		}
 	}
 }
+
+func TestPrometheusObserver_PlanAndRogueCohortMetrics(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+
+	bus := events.NewBus()
+	defer bus.Close()
+
+	obs := NewPrometheusObserver(swarm.Config{
+		MetricsPort:     port,
+		MetricsURLLabel: "none",
+	})
+	if err := obs.Attach(context.Background(), bus); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	defer func() { _ = obs.Detach() }()
+
+	// Emit plan passed (2), plan failed (1), rogue (1), and non-plan (1) deaths.
+	bus.Emit(events.Event{Kind: events.LemmingDied, Role: swarm.RolePlan, PlanName: "auth", PlanPassed: true})
+	bus.Emit(events.Event{Kind: events.LemmingDied, Role: swarm.RolePlan, PlanName: "auth", PlanPassed: true})
+	bus.Emit(events.Event{Kind: events.LemmingDied, Role: swarm.RolePlan, PlanName: "auth", PlanPassed: false})
+	bus.Emit(events.Event{Kind: events.LemmingDied, Role: swarm.RoleRogue})
+	bus.Emit(events.Event{Kind: events.LemmingDied}) // non-plan run: must not increment plan or rogue counters
+
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/metrics", port))
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /metrics status = %d", resp.StatusCode)
+	}
+	text := string(body)
+	for _, want := range []string{
+		`lemmings_completed_total 5`,
+		`lemmings_plan_lemmings_total{outcome="passed"} 2`,
+		`lemmings_plan_lemmings_total{outcome="failed"} 1`,
+		`lemmings_rogue_lemmings_total 1`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing expected metric %q\nfull metrics:\n%s", want, text)
+		}
+	}
+}

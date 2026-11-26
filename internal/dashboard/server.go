@@ -110,6 +110,9 @@ type metricsSnapshot struct {
 	ScoutsAlive       int64  `json:"scouts_alive"`
 	ScoutVisits       int64  `json:"scout_visits"`
 	ScoutFailures     int64  `json:"scout_failures"`
+	PlanPassed        int64  `json:"plan_passed"`
+	PlanFailed        int64  `json:"plan_failed"`
+	RogueLemmings     int64  `json:"rogue_lemmings"`
 	ElapsedSecs       int64  `json:"elapsed_secs"`
 }
 
@@ -648,6 +651,9 @@ func (d *Dashboard) snapshot(elapsedSecs int64, live *report.LiveStats) metricsS
 		ScoutsAlive:       d.metrics.ScoutsAlive.Load(),
 		ScoutVisits:       d.metrics.ScoutVisits.Load(),
 		ScoutFailures:     d.metrics.ScoutFailures.Load(),
+		PlanPassed:        d.metrics.PlanLemmingsPassed.Load(),
+		PlanFailed:        d.metrics.PlanLemmingsFailed.Load(),
+		RogueLemmings:     d.metrics.RogueLemmings.Load(),
 		ElapsedSecs:       elapsedSecs,
 	}
 	if live != nil {
@@ -660,6 +666,11 @@ func (d *Dashboard) snapshot(elapsedSecs int64, live *report.LiveStats) metricsS
 		snap.Bans403 = max(snap.Bans403, live.Concert.Bans403)
 		snap.ScoutVisits = max(snap.ScoutVisits, live.Scouts.Visits)
 		snap.ScoutFailures = max(snap.ScoutFailures, live.Scouts.Failures)
+		if live.Plan != nil {
+			snap.PlanPassed = max(snap.PlanPassed, live.Plan.PlanPassed)
+			snap.PlanFailed = max(snap.PlanFailed, live.Plan.PlanFailed)
+			snap.RogueLemmings = max(snap.RogueLemmings, live.Plan.RogueLemmings)
+		}
 	}
 	return snap
 }
@@ -771,28 +782,30 @@ func between(s, start, end string) string {
 func AuthHTML() string { return pages.login }
 
 type dashboardConfig struct {
-	Hit           string  `json:"hit"`
-	Version       string  `json:"version"`
-	Terrain       int64   `json:"terrain"`
-	Pack          int64   `json:"pack"`
-	Total         int64   `json:"total"`
-	Limit         int     `json:"limit"`
-	UntilSecs     float64 `json:"until"`
-	RampSecs      float64 `json:"ramp"`
-	RampShape     string  `json:"ramp_shape"`
-	EtaSecs       float64 `json:"eta"`
-	ThinkMin      float64 `json:"think_min"`
-	ThinkMax      float64 `json:"think_max"`
-	Navigation    string  `json:"navigation"`
-	Journey       string  `json:"journey,omitempty"`
-	Stage         int     `json:"stage"`
-	FailGate      float64 `json:"fail_gate"`
-	P95Gate       float64 `json:"p95_gate"`
-	Scouts        int     `json:"scouts"`
-	Assets        bool    `json:"assets"`
-	AssetsPerPage int     `json:"assets_per_page"`
-	ReviewMode    bool    `json:"review_mode"`
-	RevealCookies bool    `json:"reveal_cookies"`
+	Hit             string   `json:"hit"`
+	Version         string   `json:"version"`
+	Terrain         int64    `json:"terrain"`
+	Pack            int64    `json:"pack"`
+	Total           int64    `json:"total"`
+	Limit           int      `json:"limit"`
+	UntilSecs       float64  `json:"until"`
+	RampSecs        float64  `json:"ramp"`
+	RampShape       string   `json:"ramp_shape"`
+	EtaSecs         float64  `json:"eta"`
+	ThinkMin        float64  `json:"think_min"`
+	ThinkMax        float64  `json:"think_max"`
+	Navigation      string   `json:"navigation"`
+	Plans           []string `json:"plans,omitempty"`
+	RogueRate       float64  `json:"rogue_rate,omitempty"`
+	Stage           int      `json:"stage"`
+	FailGate        float64  `json:"fail_gate"`
+	P95Gate         float64  `json:"p95_gate"`
+	MinPlanPassGate float64  `json:"min_plan_pass_gate"`
+	Scouts          int      `json:"scouts"`
+	Assets          bool     `json:"assets"`
+	AssetsPerPage   int      `json:"assets_per_page"`
+	ReviewMode      bool     `json:"review_mode"`
+	RevealCookies   bool     `json:"reveal_cookies"`
 }
 
 // DashboardHTML returns the rendered live portal HTML with JSON-escaped config.
@@ -805,15 +818,21 @@ func DashboardHTML(cfg swarm.Config) string {
 		EtaSecs:  swarm.EstimateWallClock(cfg).Seconds(),
 		ThinkMin: cfg.ThinkMin.Seconds(), ThinkMax: cfg.ThinkMax.Seconds(),
 		Navigation: cfg.Navigation, Stage: StageSize, FailGate: -1,
-		P95Gate: cfg.P95Budget.Seconds(), Scouts: cfg.Scouts,
+		P95Gate: cfg.P95Budget.Seconds(), MinPlanPassGate: -1, Scouts: cfg.Scouts,
 		Assets: cfg.Assets, AssetsPerPage: cfg.AssetsPerPage,
 		ReviewMode: cfg.ReviewMode, RevealCookies: cfg.RevealSessionCookies,
 	}
-	if cfg.Journey != nil {
-		c.Journey = cfg.Journey.Name
+	if cfg.Plan != nil {
+		c.Plans = cfg.Plan.Names()
+	}
+	if cfg.RogueRate > 0 {
+		c.RogueRate = cfg.RogueRate
 	}
 	if cfg.FailureGate {
 		c.FailGate = cfg.MaxFailureRate
+	}
+	if cfg.PlanPassGate {
+		c.MinPlanPassGate = cfg.MinPlanPassRate
 	}
 	js, _ := json.Marshal(c)
 	return strings.NewReplacer(

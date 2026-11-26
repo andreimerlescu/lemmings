@@ -63,6 +63,8 @@ type LemmingLife struct {
 	Name     string      `json:"name"`
 	Persona  string      `json:"persona"`
 	Language string      `json:"language"`
+	Role     string      `json:"role,omitempty"`
+	PlanName string      `json:"plan_name,omitempty"`
 	Terrain  int         `json:"terrain"`
 	Pack     int         `json:"pack"`
 	Born     float64     `json:"born"`
@@ -82,6 +84,7 @@ type LemmingLife struct {
 type LifeVisit struct {
 	Seq        int     `json:"n"`
 	At         float64 `json:"at"`
+	Method     string  `json:"m,omitempty"`
 	Step       string  `json:"step,omitempty"`
 	Path       string  `json:"p"`
 	Status     int     `json:"s"`
@@ -210,20 +213,28 @@ func (o *Observatory) Handle(e events.Event) {
 			ts.alive++
 		}
 		life := &LemmingLife{
-			Number:  e.LemmingNumber,
-			ID:      e.LemmingID,
-			Name:    swarm.LemmingName(e.LemmingID),
-			Terrain: e.Terrain,
-			Pack:    e.Pack,
-			Born:    t,
-			State:   "walking",
-			Slot:    -1,
+			Number:   e.LemmingNumber,
+			ID:       e.LemmingID,
+			Name:     swarm.LemmingName(e.LemmingID),
+			Role:     e.Role,
+			PlanName: e.PlanName,
+			Terrain:  e.Terrain,
+			Pack:     e.Pack,
+			Born:     t,
+			State:    "walking",
+			Slot:     -1,
 		}
 		if id, ok := e.Payload.(*swarm.Identity); ok && id != nil {
 			life.Number = id.Number
 			life.Name = id.Name
 			life.Persona = swarm.PersonaOf(id.UserAgent)
 			life.Language = id.Language
+			if id.Role != "" {
+				life.Role = id.Role
+			}
+			if id.PlanName != "" {
+				life.PlanName = id.PlanName
+			}
 		}
 		if len(o.lives) < maxTrackedLemmings {
 			o.lives[e.LemmingID] = life
@@ -418,7 +429,7 @@ func (l *LemmingLife) record(v *swarm.Visit, t float64) {
 	}
 	l.Current = discovery.PathOf(v.URL)
 	lv := LifeVisit{
-		Seq: v.Sequence, At: t, Step: v.Step, Path: discovery.PathOf(v.URL), Status: v.StatusCode,
+		Seq: v.Sequence, At: t, Method: v.Method, Step: v.Step, Path: discovery.PathOf(v.URL), Status: v.StatusCode,
 		Millis: report.Millis(v.EffectiveLatency()), TTFB: report.Millis(v.Timing.TTFB), Bytes: v.BytesIn,
 		Title: v.Page.Title, Failed: swarm.FailedVisit(v), Cancelled: v.Cancelled, Why: swarm.WhyFailed(v),
 		QueuedMS: report.Millis(v.WaitingRoom.Duration), Hops: max(len(v.Hops)-1, 0), Reused: v.Timing.Reused,

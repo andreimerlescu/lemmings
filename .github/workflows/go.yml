@@ -104,9 +104,11 @@ jobs:
             target: FuzzResolveURL
           - pkg: ./internal/secrets
             target: FuzzScrubText
-          - pkg: ./internal/journey
+          - pkg: ./internal/plan
+            target: FuzzParsePlan
+          - pkg: ./internal/plan
             target: FuzzExtractErrorBody
-          - pkg: ./internal/journey
+          - pkg: ./internal/plan
             target: FuzzExtractAssets
           - pkg: ./internal/swarm
             target: FuzzDetectWaitingRoom

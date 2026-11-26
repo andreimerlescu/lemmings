@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/andreimerlescu/lemmings/v2/internal/journey"
+	"github.com/andreimerlescu/lemmings/v2/internal/plan"
 )
 
 // ReviewStatus tracks admin triage state for a captured error artifact.
@@ -98,7 +98,7 @@ type ReplayCookie struct {
 	Expires  float64
 }
 
-// SessionSnapshot captures the lemming's identity, sequential number, journey
+// SessionSnapshot captures the lemming's identity, sequential number, plan
 // position, navigation trail, and cookie jar status when an error triggered.
 type SessionSnapshot struct {
 	LemmingNumber  int64             `json:"lemming_number"`
@@ -111,8 +111,10 @@ type SessionSnapshot struct {
 	UserAgent      string            `json:"user_agent"`
 	Language       string            `json:"language"`
 	NavigationMode string            `json:"navigation_mode"`
-	JourneyName    string            `json:"journey_name,omitempty"`
-	JourneyStep    string            `json:"journey_step,omitempty"`
+	PlanName       string            `json:"plan_name,omitempty"`
+	PlanStep       string            `json:"plan_step,omitempty"`
+	Method         string            `json:"method,omitempty"`
+	Role           string            `json:"role,omitempty"`
 	VisitSequence  int               `json:"visit_sequence"`
 	SessionAgeMS   float64           `json:"session_age_ms"`
 	TotalVisits    int64             `json:"total_visits"`
@@ -161,25 +163,25 @@ func (s *Screenshot) Extension() string {
 // artifacts (session/cookies/number, JS console, screenshot, extracted error body)
 // plus admin triage review state.
 type Artifact struct {
-	ID             string                 `json:"id"`
-	Sequence       int64                  `json:"sequence"`
-	Fingerprint    string                 `json:"fingerprint"`
-	CapturedAt     time.Time              `json:"captured_at"`
-	URL            string                 `json:"url"`
-	Path           string                 `json:"path"`
-	TriggerReason  string                 `json:"trigger_reason"`
-	CaptureMode    string                 `json:"capture_mode"`
-	CaptureWarning string                 `json:"capture_warning,omitempty"`
-	StatusCode     int                    `json:"status_code"`
-	LatencyMS      float64                `json:"latency_ms"`
-	Session        SessionSnapshot        `json:"session"`
-	Console        []ConsoleEntry         `json:"console,omitempty"`
-	ConsoleErrors  int                    `json:"console_errors"`
-	ErrorBody      journey.ExtractedError `json:"error_body"`
-	Screenshot     *Screenshot            `json:"screenshot,omitempty"`
-	ReviewStatus   ReviewStatus           `json:"review_status"`
-	ReviewNote     string                 `json:"review_note,omitempty"`
-	ReviewedAt     time.Time              `json:"reviewed_at,omitempty"`
+	ID             string              `json:"id"`
+	Sequence       int64               `json:"sequence"`
+	Fingerprint    string              `json:"fingerprint"`
+	CapturedAt     time.Time           `json:"captured_at"`
+	URL            string              `json:"url"`
+	Path           string              `json:"path"`
+	TriggerReason  string              `json:"trigger_reason"`
+	CaptureMode    string              `json:"capture_mode"`
+	CaptureWarning string              `json:"capture_warning,omitempty"`
+	StatusCode     int                 `json:"status_code"`
+	LatencyMS      float64             `json:"latency_ms"`
+	Session        SessionSnapshot     `json:"session"`
+	Console        []ConsoleEntry      `json:"console,omitempty"`
+	ConsoleErrors  int                 `json:"console_errors"`
+	ErrorBody      plan.ExtractedError `json:"error_body"`
+	Screenshot     *Screenshot         `json:"screenshot,omitempty"`
+	ReviewStatus   ReviewStatus        `json:"review_status"`
+	ReviewNote     string              `json:"review_note,omitempty"`
+	ReviewedAt     time.Time           `json:"reviewed_at,omitempty"`
 }
 
 // Summary is the lightweight projection streamed over SSE and returned by
@@ -273,19 +275,21 @@ type Stats struct {
 // CaptureRequest carries everything needed by a forensics worker to produce
 // an Artifact without retaining references to live lemming state.
 type CaptureRequest struct {
-	URL           string // full URL for replay (same-origin)
-	SafeURL       string // redacted URL for persistence
-	Origin        string
-	Path          string
-	StatusCode    int
-	LatencyMS     float64
-	TriggerReason string
-	ContentType   string
-	Headers       http.Header
-	RawBody       []byte // owned copy, bounded
-	Session       SessionSnapshot
-	ReplayCookies []ReplayCookie // ephemeral copy for CDP injection only
-	Mobile        bool
+	URL               string // full URL for replay (same-origin)
+	SafeURL           string // redacted URL for persistence
+	Origin            string
+	Path              string
+	Method            string
+	SkipBrowserReplay bool
+	StatusCode        int
+	LatencyMS         float64
+	TriggerReason     string
+	ContentType       string
+	Headers           http.Header
+	RawBody           []byte // owned copy, bounded
+	Session           SessionSnapshot
+	ReplayCookies     []ReplayCookie // ephemeral copy for CDP injection only
+	Mobile            bool
 }
 
 // Fingerprint computes a stable deduplication key from path, HTTP status,

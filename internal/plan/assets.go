@@ -1,4 +1,4 @@
-package journey
+package plan
 
 import (
 	"bytes"

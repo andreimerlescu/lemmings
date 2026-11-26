@@ -18,7 +18,7 @@ import (
 
 	"github.com/andreimerlescu/lemmings/v2/internal/events"
 	"github.com/andreimerlescu/lemmings/v2/internal/forensics"
-	"github.com/andreimerlescu/lemmings/v2/internal/journey"
+	"github.com/andreimerlescu/lemmings/v2/internal/plan"
 	"github.com/andreimerlescu/lemmings/v2/internal/secrets"
 	"github.com/andreimerlescu/lemmings/v2/internal/swarm"
 )
@@ -109,7 +109,7 @@ func TestRenderData_HybridForensicsPackagingAndSecretRedaction(t *testing.T) {
 				},
 			},
 		},
-		ErrorBody: journey.ExtractedError{
+		ErrorBody: plan.ExtractedError{
 			Format:    "json",
 			Summary:   "Coin Hopper Fault",
 			ErrorCode: "E_HOPPER_JAM",
@@ -299,7 +299,7 @@ func TestRenderHTML_EscapesUntrustedContent(t *testing.T) {
 		CaptureMode:   forensics.ModeHTTPOnly,
 		Console:       []forensics.ConsoleEntry{{Level: "error", Text: xss}},
 		ConsoleErrors: 1,
-		ErrorBody:     journey.ExtractedError{Format: "html", Headline: xss, Summary: xss, BodyExcerpt: xss},
+		ErrorBody:     plan.ExtractedError{Format: "html", Headline: xss, Summary: xss, BodyExcerpt: xss},
 	})
 	_, _ = store.Review(sum.ID, forensics.ReviewBug, xss)
 
@@ -309,7 +309,7 @@ func TestRenderHTML_EscapesUntrustedContent(t *testing.T) {
 		URL:        "http://127.0.0.1/" + xss,
 		StatusCode: 500,
 		Failed:     true,
-		Page:       journey.PageEvidence{Title: xss},
+		Page:       plan.PageEvidence{Title: xss},
 		Duration:   10 * time.Millisecond,
 	})
 
@@ -869,8 +869,28 @@ func TestMarkdownInjectionResistance_MdCellAndMdFence(t *testing.T) {
 		Version:       "2.0.0",
 		GeneratedAt:   time.Now(),
 		Config:        swarm.Config{Hit: "http://127.0.0.1/", Terrain: 1, Pack: 1, Limit: 1, Until: time.Second, Navigation: "crawl|evil\nline"},
-		Journey:       "step|one\nbreak",
-		ErrorKinds:    []CountRow{{Label: "err|pipe\nnewline", Count: 1}},
+		Plan: &PlanReport{
+			RogueRate:    0.05,
+			PlanLemmings: 1,
+			PlanFailed:   1,
+			Personas: []PersonaReport{{
+				Name:       "buyer|evil\nbreak",
+				Weight:     1,
+				TotalSteps: 1,
+				Lemmings:   1,
+				Failed:     1,
+				Steps: []PlanStepReport{{
+					Index:      1,
+					Name:       "step|one\nbreak",
+					Method:     "POST",
+					Path:       "/pay|pipe\nline",
+					Hits:       1,
+					Failed:     1,
+					TopFailure: "err|top\nfail",
+				}},
+			}},
+		},
+		ErrorKinds: []CountRow{{Label: "err|pipe\nnewline", Count: 1}},
 		Paths: []PathReport{{
 			URL: "http://127.0.0.1/path|pipe\n|injected|", Hits: 1, Bytes: "10 B",
 		}},
@@ -883,7 +903,7 @@ func TestMarkdownInjectionResistance_MdCellAndMdFence(t *testing.T) {
 				StatusCode:    500,
 				TriggerReason: "http-500",
 				ReviewStatus:  forensics.ReviewUnreviewed,
-				ErrorBody: journey.ExtractedError{
+				ErrorBody: plan.ExtractedError{
 					Format:      "text",
 					Summary:     "boom",
 					StackTrace:  "trace ``` inside",
@@ -902,6 +922,11 @@ func TestMarkdownInjectionResistance_MdCellAndMdFence(t *testing.T) {
 	}
 	if !strings.Contains(rendered.Markdown, `err\|pipe newline`) {
 		t.Errorf("Markdown did not escape pipe/newline in error_kinds cell")
+	}
+	for _, escaped := range []string{`buyer\|evil break`, `step\|one break`, `/pay\|pipe line`, `err\|top fail`} {
+		if !strings.Contains(rendered.Markdown, escaped) {
+			t.Errorf("Markdown did not escape plan cell %q", escaped)
+		}
 	}
 	// BodyExcerpt contains 4 backticks, so mdFence must wrap it in 5 backticks.
 	if !strings.Contains(rendered.Markdown, "`````text\n"+hostileExcerpt+"\n`````") {
@@ -963,5 +988,578 @@ func TestCompare_AssetAndQueueDeltasAndLegacyCompat(t *testing.T) {
 	}
 	if res.QueueHeldDelta != 7 {
 		t.Errorf("QueueHeldDelta = %d, want 7 (11 - 4)", res.QueueHeldDelta)
+	}
+}
+
+func TestReporter_MultiPersonaPlanReportAndRogueCohort(t *testing.T) {
+	// Without a configured plan or plan/rogue sessions, Data.Plan and Live().Plan must be nil.
+	plainRep := New(swarm.Config{Hit: "http://127.0.0.1:8080/", Terrain: 1, Pack: 1, Limit: 1, Until: time.Second})
+	plainRep.RecordVisit(&swarm.Visit{URL: "http://127.0.0.1:8080/", StatusCode: 200, Duration: 5 * time.Millisecond})
+	if plainRep.Live(5, 5).Plan != nil || plainRep.Result().Plan != nil {
+		t.Fatal("expected Plan to be nil when no plan configured and no plan/rogue sessions occurred")
+	}
+
+	suite, err := plan.NewSuite([]*plan.Plan{
+		{
+			Name:       "checkout",
+			Weight:     3,
+			StopOnFail: true,
+			Items: []plan.PlanItem{
+				{Name: "landing", Path: "/", Method: "GET"},
+				{Name: "login", Path: "/login?token=secret_query", Method: "POST"},
+				{Name: "confirm", Path: "/checkout/confirm", Method: "POST"},
+			},
+		},
+		{
+			Name:   "browser",
+			Weight: 1,
+			Items: []plan.PlanItem{
+				{Name: "home", Path: "/", Method: "GET"},
+				{Name: "unreached-catalog", Path: "/catalog", Method: "GET"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewSuite: %v", err)
+	}
+
+	cfg := swarm.Config{
+		Hit:       "http://127.0.0.1:8080/",
+		Terrain:   1,
+		Pack:      6,
+		Limit:     6,
+		Until:     10 * time.Second,
+		Plan:      suite,
+		RogueRate: 0.25,
+		Version:   "2.0.0",
+	}
+	rep := New(cfg)
+
+	// Checkout lemming #1 (streamed): passes all 3 steps.
+	for i, step := range []struct {
+		idx    int
+		name   string
+		method string
+		url    string
+		dur    time.Duration
+	}{
+		{1, "landing", "GET", "http://127.0.0.1:8080/", 10 * time.Millisecond},
+		{2, "login", "POST", "http://127.0.0.1:8080/login", 20 * time.Millisecond},
+		{3, "confirm", "POST", "http://127.0.0.1:8080/checkout/confirm", 30 * time.Millisecond},
+	} {
+		rep.RecordVisit(&swarm.Visit{
+			LemmingID: "lem-1", LemmingNumber: 1, Sequence: i + 1,
+			Role: swarm.RolePlan, PlanName: "checkout", Step: step.name, StepIndex: step.idx, Method: step.method,
+			URL: step.url, StatusCode: 200, Duration: step.dur,
+		})
+	}
+	rep.Ingest(swarm.LifeLog{
+		Identity:           swarm.Identity{Number: 1, ID: "lem-1", Name: "Neon Fox", Role: swarm.RolePlan, PlanName: "checkout"},
+		Role:               swarm.RolePlan,
+		PlanName:           "checkout",
+		PlanStepsCompleted: 3,
+		PlanStepsTotal:     3,
+		PlanPassed:         true,
+		Streamed:           true,
+		TotalVisits:        3,
+		ExitReason:         swarm.ExitPlanComplete,
+		Duration:           time.Second,
+		Visits: []swarm.Visit{
+			{Sequence: 1, Method: "GET", Step: "landing", URL: "http://127.0.0.1:8080/", StatusCode: 200, Duration: 10 * time.Millisecond},
+			{Sequence: 2, Method: "POST", Step: "login", URL: "http://127.0.0.1:8080/login", StatusCode: 200, Duration: 20 * time.Millisecond},
+			{Sequence: 3, Method: "POST", Step: "confirm", URL: "http://127.0.0.1:8080/checkout/confirm", StatusCode: 200, Duration: 30 * time.Millisecond},
+		},
+	})
+
+	// Checkout lemmings #2 & #3 (streamed): pass step 1, fail step 2 with two distinct errors to verify deterministic TopFailure tie-break.
+	// Tied counts (1 vs 1): "status 500" < "status 503". Then add a second "status 503" so "status 503" (count 2) wins.
+	rep.RecordVisit(&swarm.Visit{
+		LemmingID: "lem-2", LemmingNumber: 2, Sequence: 1,
+		Role: swarm.RolePlan, PlanName: "checkout", Step: "landing", StepIndex: 1, Method: "GET",
+		URL: "http://127.0.0.1:8080/", StatusCode: 200, Duration: 12 * time.Millisecond,
+	})
+	rep.RecordVisit(&swarm.Visit{
+		LemmingID: "lem-2", LemmingNumber: 2, Sequence: 2,
+		Role: swarm.RolePlan, PlanName: "checkout", Step: "login", StepIndex: 2, Method: "POST",
+		URL: "http://127.0.0.1:8080/login", StatusCode: 500, Failed: true, Duration: 40 * time.Millisecond,
+	})
+	rep.Ingest(swarm.LifeLog{
+		Identity:           swarm.Identity{Number: 2, ID: "lem-2", Name: "Synth Cat", Role: swarm.RolePlan, PlanName: "checkout"},
+		Role:               swarm.RolePlan,
+		PlanName:           "checkout",
+		PlanStepsCompleted: 2,
+		PlanStepsTotal:     3,
+		PlanPassed:         false,
+		Streamed:           true,
+		TotalVisits:        2,
+		FailedVisits:       1,
+		FirstFailureAt:     time.Now(),
+		ExitReason:         swarm.ExitPlanFailed,
+	})
+
+	rep.RecordVisit(&swarm.Visit{
+		LemmingID: "lem-3", LemmingNumber: 3, Sequence: 1,
+		Role: swarm.RolePlan, PlanName: "checkout", Step: "landing", StepIndex: 1, Method: "GET",
+		URL: "http://127.0.0.1:8080/", StatusCode: 200, Duration: 14 * time.Millisecond,
+	})
+	rep.RecordVisit(&swarm.Visit{
+		LemmingID: "lem-3", LemmingNumber: 3, Sequence: 2,
+		Role: swarm.RolePlan, PlanName: "checkout", Step: "login", StepIndex: 2, Method: "POST",
+		URL: "http://127.0.0.1:8080/login", StatusCode: 503, Failed: true, Duration: 50 * time.Millisecond,
+	})
+	// Check alphabetical tie-break while 500 (1) == 503 (1): "status 500" must win!
+	midLive := rep.Live(5, 5)
+	if midLive.Plan == nil || len(midLive.Plan.Personas) != 2 {
+		t.Fatalf("midLive.Plan = %+v, want 2 personas", midLive.Plan)
+	}
+	if got := midLive.Plan.Personas[0].Steps[1].TopFailure; got != "status 500" {
+		t.Errorf("TopFailure alphabetical tie-break = %q, want %q", got, "status 500")
+	}
+
+	// Add another 503 failure + a cancelled visit on step 2 (cancelled must NOT increment Hits/Failed/Latency).
+	rep.RecordVisit(&swarm.Visit{
+		LemmingID: "lem-3b", LemmingNumber: 3, Sequence: 2,
+		Role: swarm.RolePlan, PlanName: "checkout", Step: "login", StepIndex: 2, Method: "POST",
+		URL: "http://127.0.0.1:8080/login", StatusCode: 503, Failed: true, Duration: 60 * time.Millisecond,
+	})
+	rep.RecordVisit(&swarm.Visit{
+		LemmingID: "lem-3c", LemmingNumber: 3, Sequence: 2,
+		Role: swarm.RolePlan, PlanName: "checkout", Step: "login", StepIndex: 2, Method: "POST",
+		URL: "http://127.0.0.1:8080/login", StatusCode: 500, Cancelled: true, Duration: 999 * time.Millisecond,
+	})
+	rep.Ingest(swarm.LifeLog{
+		Identity:           swarm.Identity{Number: 3, ID: "lem-3", Name: "Laser Owl", Role: swarm.RolePlan, PlanName: "checkout"},
+		Role:               swarm.RolePlan,
+		PlanName:           "checkout",
+		PlanStepsCompleted: 2,
+		PlanStepsTotal:     3,
+		PlanPassed:         false,
+		Streamed:           true,
+		TotalVisits:        2,
+		FailedVisits:       1,
+		ExitReason:         swarm.ExitPlanFailed,
+	})
+
+	// Checkout lemming #4 (NON-streamed, PlanPassed omitted): should recompute PlanPassed=true!
+	rep.Ingest(swarm.LifeLog{
+		Identity: swarm.Identity{Number: 4, ID: "lem-4", Name: "Offline Ace", Role: swarm.RolePlan, PlanName: "checkout"},
+		Role:     swarm.RolePlan,
+		PlanName: "checkout",
+		Streamed: false,
+		Visits: []swarm.Visit{
+			{Sequence: 1, Role: swarm.RolePlan, PlanName: "checkout", Step: "landing", StepIndex: 1, Method: "GET", URL: "http://127.0.0.1:8080/", StatusCode: 200, Duration: 15 * time.Millisecond},
+			{Sequence: 2, Role: swarm.RolePlan, PlanName: "checkout", Step: "login", StepIndex: 2, Method: "POST", URL: "http://127.0.0.1:8080/login", StatusCode: 200, Duration: 25 * time.Millisecond},
+			{Sequence: 3, Role: swarm.RolePlan, PlanName: "checkout", Step: "confirm", StepIndex: 3, Method: "POST", URL: "http://127.0.0.1:8080/checkout/confirm", StatusCode: 200, Duration: 35 * time.Millisecond},
+		},
+	})
+
+	// Browser lemming #5 (NON-streamed, stops after step 1 of 2): step 2 stays unreached (Hits: 0), PlanPassed=false.
+	rep.Ingest(swarm.LifeLog{
+		Identity: swarm.Identity{Number: 5, ID: "lem-5", Name: "Short Walker", Role: swarm.RolePlan, PlanName: "browser"},
+		Role:     swarm.RolePlan,
+		PlanName: "browser",
+		Streamed: false,
+		Visits: []swarm.Visit{
+			{Sequence: 1, Role: swarm.RolePlan, PlanName: "browser", Step: "home", StepIndex: 1, Method: "GET", URL: "http://127.0.0.1:8080/", StatusCode: 200, Duration: 8 * time.Millisecond},
+		},
+	})
+
+	// Rogue cohort: 1 flawless, 1 failed.
+	rep.Ingest(swarm.LifeLog{
+		Identity:    swarm.Identity{Number: 6, ID: "lem-6", Name: "Rogue Good", Role: swarm.RoleRogue},
+		Role:        swarm.RoleRogue,
+		Streamed:    true,
+		TotalVisits: 4,
+	})
+	rep.Ingest(swarm.LifeLog{
+		Identity:     swarm.Identity{Number: 7, ID: "lem-7", Name: "Rogue Bad", Role: swarm.RoleRogue},
+		Role:         swarm.RoleRogue,
+		Streamed:     true,
+		TotalVisits:  2,
+		FailedVisits: 1,
+	})
+
+	data := rep.Result()
+	live := rep.Live(10, 10)
+
+	for _, pair := range []struct {
+		name string
+		pr   *PlanReport
+	}{{"Result", data.Plan}, {"Live", live.Plan}} {
+		pr := pair.pr
+		if pr == nil {
+			t.Fatalf("%s: PlanReport is nil", pair.name)
+		}
+		if pr.RogueRate != 0.25 {
+			t.Errorf("%s: RogueRate = %v, want 0.25", pair.name, pr.RogueRate)
+		}
+		if pr.PlanLemmings != 5 || pr.PlanPassed != 2 || pr.PlanFailed != 3 {
+			t.Errorf("%s: Plan cohort = %d (%d passed, %d failed), want 5 (2 passed, 3 failed)",
+				pair.name, pr.PlanLemmings, pr.PlanPassed, pr.PlanFailed)
+		}
+		if math.Abs(pr.PlanPassRate-40.0) > 1e-6 {
+			t.Errorf("%s: PlanPassRate = %.4f, want 40.0", pair.name, pr.PlanPassRate)
+		}
+		if pr.RogueLemmings != 2 || pr.RogueFlawless != 1 {
+			t.Errorf("%s: Rogue cohort = %d (%d flawless), want 2 (1 flawless)", pair.name, pr.RogueLemmings, pr.RogueFlawless)
+		}
+		if len(pr.Personas) != 2 {
+			t.Fatalf("%s: len(Personas) = %d, want 2", pair.name, len(pr.Personas))
+		}
+
+		// Persona 0: checkout
+		p0 := pr.Personas[0]
+		if p0.Name != "checkout" || p0.Weight != 3 || p0.TotalSteps != 3 || p0.Lemmings != 4 || p0.Passed != 2 || p0.Failed != 2 || math.Abs(p0.PassRate-50.0) > 1e-6 {
+			t.Errorf("%s: checkout persona mismatch: %+v", pair.name, p0)
+		}
+		if len(p0.Steps) != 3 {
+			t.Fatalf("%s: checkout steps len = %d, want 3", pair.name, len(p0.Steps))
+		}
+		// Step 2 (login): 2 passed (lem-1, lem-4) + 3 failed (lem-2 500, lem-3 503, lem-3b 503) = 5 hits (cancelled ignored!).
+		stLogin := p0.Steps[1]
+		if stLogin.Index != 2 || stLogin.Name != "login" || stLogin.Method != "POST" || stLogin.Path != "/login" {
+			t.Errorf("%s: login step metadata mismatch: %+v", pair.name, stLogin)
+		}
+		if stLogin.Hits != 5 || stLogin.Passed != 2 || stLogin.Failed != 3 || stLogin.TopFailure != "status 503" {
+			t.Errorf("%s: login step stats mismatch: %+v", pair.name, stLogin)
+		}
+		if stLogin.P50 <= 0 || stLogin.P95 <= 0 || stLogin.P99 <= 0 || stLogin.P99 >= 900*time.Millisecond {
+			t.Errorf("%s: login step quantiles polluted or zero: p50=%s p95=%s p99=%s", pair.name, stLogin.P50, stLogin.P95, stLogin.P99)
+		}
+
+		// Persona 1: browser (step 2 unreached!)
+		p1 := pr.Personas[1]
+		if p1.Name != "browser" || p1.Weight != 1 || p1.TotalSteps != 2 || p1.Lemmings != 1 || p1.Passed != 0 || p1.Failed != 1 {
+			t.Errorf("%s: browser persona mismatch: %+v", pair.name, p1)
+		}
+		if len(p1.Steps) != 2 {
+			t.Fatalf("%s: browser steps len = %d, want 2", pair.name, len(p1.Steps))
+		}
+		stUnreached := p1.Steps[1]
+		if stUnreached.Index != 2 || stUnreached.Name != "unreached-catalog" || stUnreached.Method != "GET" || stUnreached.Path != "/catalog" ||
+			stUnreached.Hits != 0 || stUnreached.Passed != 0 || stUnreached.Failed != 0 || stUnreached.P50 != 0 || stUnreached.TopFailure != "" {
+			t.Errorf("%s: unreached step mismatch: %+v", pair.name, stUnreached)
+		}
+	}
+
+	// Verify NotableLife carries Role, PlanName, PlanPassed, and LifeStep.Method.
+	var sawNotableWithPlan bool
+	for _, nl := range data.Notable {
+		if nl.PlanName == "checkout" && nl.Role == swarm.RolePlan {
+			sawNotableWithPlan = true
+			if len(nl.Steps) > 0 && nl.Steps[0].Method == "" {
+				t.Errorf("NotableLife step missing Method: %+v", nl.Steps[0])
+			}
+		}
+	}
+	if !sawNotableWithPlan {
+		t.Errorf("expected at least one NotableLife with PlanName=checkout and Role=plan, got %+v", data.Notable)
+	}
+}
+
+func TestReporter_PlanPassRateGate(t *testing.T) {
+	suite, err := plan.NewSuite([]*plan.Plan{
+		{Name: "smoke", Weight: 1, Items: []plan.PlanItem{{Name: "root", Path: "/", Method: "GET"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("zero_plan_lemmings_fails_even_with_zero_min", func(t *testing.T) {
+		rep := New(swarm.Config{
+			Hit:             "http://127.0.0.1:8080/",
+			Terrain:         1,
+			Pack:            1,
+			Limit:           1,
+			Until:           time.Second,
+			Plan:            suite,
+			PlanPassGate:    true,
+			MinPlanPassRate: 0.0,
+		})
+		res := rep.Result()
+		if res.Verdict != "FAILED" || !res.GatesFailed() || len(res.Gates) != 1 {
+			t.Fatalf("expected FAILED gate with 0 plan lemmings, got verdict=%q gates=%+v", res.Verdict, res.Gates)
+		}
+		g := res.Gates[0]
+		if g.Name != "plan pass rate" || g.Limit != "≥ 0.00%" || g.Observed != "0.00%" || g.Passed {
+			t.Errorf("unexpected gate result: %+v", g)
+		}
+	})
+
+	t.Run("below_threshold_fails", func(t *testing.T) {
+		rep := New(swarm.Config{
+			Hit:             "http://127.0.0.1:8080/",
+			Terrain:         1,
+			Pack:            10,
+			Limit:           10,
+			Until:           time.Second,
+			Plan:            suite,
+			PlanPassGate:    true,
+			MinPlanPassRate: 0.90,
+		})
+		for i := 1; i <= 10; i++ {
+			rep.Ingest(swarm.LifeLog{
+				Identity:   swarm.Identity{Number: int64(i), ID: "p", Role: swarm.RolePlan, PlanName: "smoke"},
+				Role:       swarm.RolePlan,
+				PlanName:   "smoke",
+				PlanPassed: i <= 8,
+				Streamed:   true,
+			})
+		}
+		res := rep.Result()
+		if res.Verdict != "FAILED" || !res.GatesFailed() || len(res.Gates) != 1 {
+			t.Fatalf("expected FAILED at 80%% < 90%%, got verdict=%q gates=%+v", res.Verdict, res.Gates)
+		}
+		g := res.Gates[0]
+		if g.Name != "plan pass rate" || g.Limit != "≥ 90.00%" || g.Observed != "80.00%" || g.Passed {
+			t.Errorf("unexpected gate result: %+v", g)
+		}
+	})
+
+	t.Run("at_or_above_threshold_passes", func(t *testing.T) {
+		rep := New(swarm.Config{
+			Hit:             "http://127.0.0.1:8080/",
+			Terrain:         1,
+			Pack:            10,
+			Limit:           10,
+			Until:           time.Second,
+			Plan:            suite,
+			PlanPassGate:    true,
+			MinPlanPassRate: 0.90,
+		})
+		for i := 1; i <= 10; i++ {
+			rep.Ingest(swarm.LifeLog{
+				Identity:   swarm.Identity{Number: int64(i), ID: "p", Role: swarm.RolePlan, PlanName: "smoke"},
+				Role:       swarm.RolePlan,
+				PlanName:   "smoke",
+				PlanPassed: i <= 9,
+				Streamed:   true,
+			})
+		}
+		res := rep.Result()
+		if res.Verdict != "PASSED" || res.GatesFailed() || len(res.Gates) != 1 {
+			t.Fatalf("expected PASSED at 90%% >= 90%%, got verdict=%q gates=%+v", res.Verdict, res.Gates)
+		}
+		g := res.Gates[0]
+		if g.Name != "plan pass rate" || g.Limit != "≥ 90.00%" || g.Observed != "90.00%" || !g.Passed {
+			t.Errorf("unexpected gate result: %+v", g)
+		}
+	})
+}
+
+func TestRenderData_PlanExecutionFormatsAndSEC10NoSecretLeak(t *testing.T) {
+	const (
+		secretCookie = "SECRET_PLAN_COOKIE_VALUE_XYZ"
+		secretHeader = "SECRET_PLAN_HEADER_TOKEN_XYZ"
+		secretBodyKV = "SECRET_PLAN_BODY_FIELD_XYZ"
+		secretRaw    = "SECRET_RAW_PLAN_BODY_XYZ"
+		secretQuery  = "SECRET_QUERY_TOKEN_XYZ"
+	)
+
+	suite, err := plan.NewSuite([]*plan.Plan{
+		{
+			Name:   "auth-buyer",
+			Weight: 2,
+			Items: []plan.PlanItem{
+				{
+					Name:        "sign-in",
+					Path:        "/api/login?api_key=" + secretQuery,
+					Method:      "POST",
+					WithCookies: []plan.PlanCookie{{Name: "seed_cookie", Value: secretCookie}},
+					WithHeaders: []plan.PlanHeader{{Key: "Authorization", Value: "Bearer " + secretHeader}},
+					WithBody:    []plan.PlanBody{{Key: "password", Value: secretBodyKV}},
+				},
+				{
+					Name:   "submit-order",
+					Path:   "/api/orders",
+					Method: "PUT",
+					Body:   secretRaw,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewSuite: %v", err)
+	}
+
+	dir := t.TempDir()
+	tracePath := filepath.Join(dir, "plan-trace.jsonl")
+	tw, err := NewTraceWriter(tracePath)
+	if err != nil {
+		t.Fatalf("NewTraceWriter: %v", err)
+	}
+
+	store := forensics.NewStore(10, 3)
+	store.Save(forensics.Artifact{
+		Fingerprint:   forensics.Fingerprint("/api/orders", 500, "http-500"),
+		CapturedAt:    time.Now(),
+		URL:           "http://127.0.0.1:8080/api/orders",
+		Path:          "/api/orders",
+		StatusCode:    500,
+		TriggerReason: "http-500",
+		CaptureMode:   forensics.ModeHTTPOnly,
+		Session: forensics.SessionSnapshot{
+			LemmingNumber:  1,
+			LemmingID:      "lem-auth-1",
+			LemmingName:    "Arcade Runner",
+			Source:         "http-replay",
+			NavigationMode: "plan",
+			PlanName:       "auth-buyer",
+			PlanStep:       "submit-order",
+			Method:         "PUT",
+			Role:           swarm.RolePlan,
+			VisitSequence:  2,
+			CookieJar: forensics.CookieJarSnapshot{
+				Health:        "healthy",
+				TotalCookies:  1,
+				ActiveCookies: 1,
+				Cookies: []forensics.CookieStatus{
+					{Name: "seed_cookie", Domain: "127.0.0.1", Path: "/", Fingerprint: "abcd1234", RawValue: secretCookie},
+				},
+			},
+		},
+		ErrorBody: plan.ExtractedError{Format: "json", Summary: "order error"},
+	})
+
+	cfg := swarm.Config{
+		Hit:       "http://127.0.0.1:8080/",
+		Terrain:   1,
+		Pack:      2,
+		Limit:     2,
+		Until:     5 * time.Second,
+		Plan:      suite,
+		RogueRate: 0.05,
+		Version:   "2.0.0",
+		TraceFile: tracePath,
+	}
+	rep := New(cfg)
+	rep.SetTrace(tw)
+	rep.SetForensics(store)
+
+	rep.RecordVisit(&swarm.Visit{
+		LemmingID:     "lem-auth-1",
+		LemmingNumber: 1,
+		Sequence:      1,
+		Method:        "POST",
+		PlanName:      "auth-buyer",
+		Role:          swarm.RolePlan,
+		Step:          "sign-in",
+		StepIndex:     1,
+		URL:           "http://127.0.0.1:8080/api/login?api_key=" + secretQuery,
+		StatusCode:    200,
+		CookieNames:   []string{"seed_cookie"},
+		Duration:      18 * time.Millisecond,
+	})
+	rep.RecordVisit(&swarm.Visit{
+		LemmingID:     "lem-auth-1",
+		LemmingNumber: 1,
+		Sequence:      2,
+		Method:        "PUT",
+		PlanName:      "auth-buyer",
+		Role:          swarm.RolePlan,
+		Step:          "submit-order",
+		StepIndex:     2,
+		URL:           "http://127.0.0.1:8080/api/orders",
+		StatusCode:    500,
+		Failed:        true,
+		Duration:      42 * time.Millisecond,
+	})
+	rep.Ingest(swarm.LifeLog{
+		Identity:           swarm.Identity{Number: 1, ID: "lem-auth-1", Name: "Arcade Runner", Role: swarm.RolePlan, PlanName: "auth-buyer"},
+		Role:               swarm.RolePlan,
+		PlanName:           "auth-buyer",
+		PlanStepsCompleted: 2,
+		PlanStepsTotal:     2,
+		PlanPassed:         false,
+		Streamed:           true,
+		TotalVisits:        2,
+		FailedVisits:       1,
+		FirstFailureAt:     time.Now(),
+		ExitReason:         swarm.ExitPlanFailed,
+		Visits: []swarm.Visit{
+			{Sequence: 1, Method: "POST", Step: "sign-in", URL: "http://127.0.0.1:8080/api/login?api_key=" + secretQuery, StatusCode: 200, Duration: 18 * time.Millisecond},
+			{Sequence: 2, Method: "PUT", Step: "submit-order", URL: "http://127.0.0.1:8080/api/orders", StatusCode: 500, Failed: true, Duration: 42 * time.Millisecond},
+		},
+	})
+	rep.CloseTrace()
+
+	rendered, err := rep.Render()
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	// Verify Markdown rendering contains Plan Execution, persona heading, methods, paths, and forensics plan metadata.
+	for _, want := range []string{
+		"## plan execution",
+		"### auth-buyer",
+		"| 1 | sign-in | POST | /api/login |",
+		"| 2 | submit-order | PUT | /api/orders |",
+		"status 500",
+		"role plan",
+		"plan auth-buyer / submit-order",
+	} {
+		if !strings.Contains(rendered.Markdown, want) {
+			t.Errorf("Markdown missing expected content %q:\n%s", want, rendered.Markdown)
+		}
+	}
+
+	// Verify HTML rendering contains Plan execution, persona, methods, paths, and forensics plan metadata.
+	for _, want := range []string{
+		"Plan execution",
+		"auth-buyer",
+		"sign-in",
+		"submit-order",
+		"/api/login",
+		"/api/orders",
+		"m-post",
+		"m-put",
+		"status 500",
+	} {
+		if !strings.Contains(rendered.HTML, want) {
+			t.Errorf("HTML missing expected content %q", want)
+		}
+	}
+
+	// Verify JSON unmarshals PlanReport accurately.
+	var parsed Data
+	if err := json.Unmarshal(rendered.JSON, &parsed); err != nil {
+		t.Fatalf("JSON unmarshal: %v", err)
+	}
+	if parsed.Plan == nil || len(parsed.Plan.Personas) != 1 || len(parsed.Plan.Personas[0].Steps) != 2 {
+		t.Fatalf("JSON PlanReport mismatch: %+v", parsed.Plan)
+	}
+	if parsed.Plan.Personas[0].Steps[0].Path != "/api/login" {
+		t.Errorf("JSON step 1 Path = %q, want /api/login (query stripped)", parsed.Plan.Personas[0].Steps[0].Path)
+	}
+
+	// Verify JSONL trace records populate Method, PlanName, Role and redact query parameters.
+	traceBytes, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatalf("ReadFile trace: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(traceBytes)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("trace line count = %d, want 2", len(lines))
+	}
+	var tr0, tr1 VisitTrace
+	if err := json.Unmarshal([]byte(lines[0]), &tr0); err != nil {
+		t.Fatalf("unmarshal trace[0]: %v", err)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &tr1); err != nil {
+		t.Fatalf("unmarshal trace[1]: %v", err)
+	}
+	if tr0.Method != "POST" || tr0.PlanName != "auth-buyer" || tr0.Role != swarm.RolePlan || tr0.Step != "sign-in" || tr0.URL != "http://127.0.0.1:8080/api/login" {
+		t.Errorf("trace[0] mismatch: %+v", tr0)
+	}
+	if tr1.Method != "PUT" || tr1.PlanName != "auth-buyer" || tr1.Role != swarm.RolePlan || tr1.Step != "submit-order" {
+		t.Errorf("trace[1] mismatch: %+v", tr1)
+	}
+
+	// SEC-10: verify none of with-cookies / with-headers / with-body / raw body / query values ever leak!
+	allOutputs := rendered.Markdown + rendered.HTML + rendered.HTMLForEmail + string(rendered.JSON) + string(traceBytes)
+	for _, secret := range []string{secretCookie, secretHeader, secretBodyKV, secretRaw, secretQuery} {
+		if strings.Contains(allOutputs, secret) {
+			t.Fatalf("SEC-10 VIOLATION: plan secret %q leaked into report or VisitTrace!", secret)
+		}
 	}
 }
