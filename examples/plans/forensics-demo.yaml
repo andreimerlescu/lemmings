@@ -1,0 +1,31 @@
+name: forensics-demo
+plan:
+  - name: arrive
+    path: /
+    want-status: 200
+    want-title: Neon Arcade
+    want-body:
+      - contains: Insert coin
+
+  - name: pick-game
+    path: /games/outrun
+    want-status: 200
+    want-title: Outrun Horizon
+
+  - name: tokens-page
+    path: /tokens
+    want-status: 200
+    want-body:
+      - contains: 10 tokens
+      - not-contains: Something went wrong
+
+  - name: token-api
+    path: /api/tokens
+    want-status: 200
+    want-content-type: application/json
+
+  - name: crt-diagnostics
+    path: /arcade-glitch
+    want-status: 200
+    want-body:
+      - contains: Arcade Cabinet Glitch
