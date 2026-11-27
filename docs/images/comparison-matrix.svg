@@ -1,0 +1,443 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1096" viewBox="0 0 1600 1096" role="img" aria-label="Lemmings vs 7 Load-Testing Tools Feature Comparison Matrix">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#120d1f"/>
+      <stop offset="45%" stop-color="#1d1727"/>
+      <stop offset="100%" stop-color="#161022"/>
+    </linearGradient>
+    <radialGradient id="topGlowPink" cx="50%" cy="0%" r="55%">
+      <stop offset="0%" stop-color="#f92aad" stop-opacity="0.22"/>
+      <stop offset="65%" stop-color="#2a1747" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#1d1727" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="topGlowCyan" cx="15%" cy="8%" r="35%">
+      <stop offset="0%" stop-color="#36f9f6" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#1d1727" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wordmarkGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fede5d"/>
+      <stop offset="48%" stop-color="#ff8b39"/>
+      <stop offset="100%" stop-color="#f92aad"/>
+    </linearGradient>
+    <linearGradient id="horizonGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#36f9f6" stop-opacity="0.9"/>
+      <stop offset="35%" stop-color="#ff7edb" stop-opacity="0.95"/>
+      <stop offset="70%" stop-color="#fede5d" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#f92aad" stop-opacity="0.85"/>
+    </linearGradient>
+    <linearGradient id="lemColBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f92aad" stop-opacity="0.18"/>
+      <stop offset="50%" stop-color="#36f9f6" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#72f1b8" stop-opacity="0.14"/>
+    </linearGradient>
+    <filter id="glowPink" x="-20%" y="-40%" width="140%" height="180%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="glowGreen" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2.4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="cardShadow" x="-4%" y="-4%" width="108%" height="110%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#090611" flood-opacity="0.65"/>
+    </filter>
+    <clipPath id="tableClip">
+      <rect x="36" y="132" width="1528" height="850" rx="16"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1600" height="1096" fill="url(#bgGrad)"/>
+  <rect width="1600" height="1096" fill="url(#topGlowPink)"/>
+  <rect width="1600" height="1096" fill="url(#topGlowCyan)"/>
+
+  <!-- Subtle synthwave horizon grid behind header -->
+  <g stroke="#f92aad" stroke-opacity="0.07" stroke-width="1">
+    <line x1="0" y1="54" x2="1600" y2="54"/>
+    <line x1="0" y1="84" x2="1600" y2="84"/>
+    <line x1="0" y1="110" x2="1600" y2="110"/>
+  </g>
+
+  <!-- ══ HEADER ═══════════════════════════════════════════════════════════ -->
+  <g>
+    <text x="36" y="66" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="38" font-weight="900" font-style="italic"
+          letter-spacing="5" fill="url(#wordmarkGrad)" filter="url(#glowPink)">LEMMINGS</text>
+
+    <rect x="300" y="40" width="66" height="24" rx="12" fill="#2a2139" stroke="#ff7edb" stroke-opacity="0.55" stroke-width="1"/>
+    <text x="333" y="56" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#ff7edb">v2.0.1</text>
+
+    <rect x="376" y="40" width="112" height="24" rx="12" fill="#172c36" stroke="#36f9f6" stroke-opacity="0.55" stroke-width="1"/>
+    <text x="432" y="56" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="700" fill="#36f9f6">APACHE-2.0</text>
+
+    <rect x="498" y="40" width="176" height="24" rx="12" fill="#1a2f2b" stroke="#72f1b8" stroke-opacity="0.5" stroke-width="1"/>
+    <text x="586" y="56" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="700" fill="#72f1b8">SINGLE GO BINARY</text>
+
+    <text x="36" y="97" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="19" font-weight="700" fill="#f7f1ff" letter-spacing="0.2">
+      8-Tool HTTP &amp; Web Load-Testing Feature Matrix
+    </text>
+    <text x="36" y="118" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" fill="#9ea4d4">
+      Stateful visitors · Pure-Go Chrome CDP screenshots &amp; JS console forensics · Live Admin Triage Portal · Deterministic CI gates
+    </text>
+
+    <rect x="1176" y="30" width="388" height="84" rx="14" fill="#262335" stroke="#ff7edb" stroke-opacity="0.45" stroke-width="1.2"/>
+    <text x="1196" y="57" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="10.5" font-weight="700" letter-spacing="2" fill="#848bbd">OPEN SOURCE · ZERO NODE / JVM / PYTHON</text>
+    <text x="1196" y="82" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="14.5" font-weight="700" fill="#36f9f6">github.com/andreimerlescu/lemmings</text>
+    <text x="1196" y="102" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="12" fill="#fede5d" font-weight="600">★ 17 / 17 Native<tspan dx="10" fill="#848bbd">·</tspan><tspan dx="10">20–23 MB Static Binary</tspan></text>
+  </g>
+
+  <!-- ══ MAIN MATRIX CARD ═════════════════════════════════════════════════ -->
+  <rect x="36" y="132" width="1528" height="850" rx="16" fill="#241f34" filter="url(#cardShadow)"/>
+
+  <g clip-path="url(#tableClip)">
+    <rect x="36" y="132" width="1528" height="68" fill="#2c2440"/>
+
+    <rect x="36" y="200" width="1528" height="42" fill="#241f34"/>
+    <rect x="36" y="242" width="1528" height="42" fill="#1f1a2d"/>
+    <rect x="36" y="284" width="1528" height="42" fill="#241f34"/>
+    <rect x="36" y="326" width="1528" height="42" fill="#1f1a2d"/>
+    <rect x="36" y="368" width="1528" height="42" fill="#241f34"/>
+    <rect x="36" y="410" width="1528" height="42" fill="#1f1a2d"/>
+    <rect x="36" y="452" width="1528" height="42" fill="#241f34"/>
+    <rect x="36" y="494" width="1528" height="42" fill="#1f1a2d"/>
+    <rect x="36" y="536" width="1528" height="42" fill="#241f34"/>
+    <rect x="36" y="578" width="1528" height="42" fill="#1f1a2d"/>
+    <rect x="36" y="620" width="1528" height="42" fill="#241f34"/>
+    <rect x="36" y="662" width="1528" height="42" fill="#1f1a2d"/>
+    <rect x="36" y="704" width="1528" height="42" fill="#241f34"/>
+    <rect x="36" y="746" width="1528" height="42" fill="#1f1a2d"/>
+    <rect x="36" y="788" width="1528" height="42" fill="#241f34"/>
+    <rect x="36" y="830" width="1528" height="42" fill="#1f1a2d"/>
+    <rect x="36" y="872" width="1528" height="42" fill="#241f34"/>
+    <rect x="36" y="914" width="1528" height="68" fill="#2c2440"/>
+
+    <rect x="474" y="132" width="180" height="850" fill="url(#lemColBg)"/>
+    <rect x="474" y="132" width="180" height="4" fill="url(#horizonGrad)"/>
+
+    <line x1="36" y1="200" x2="1564" y2="200" stroke="url(#horizonGrad)" stroke-width="1.5" stroke-opacity="0.8"/>
+    <line x1="36" y1="242" x2="1564" y2="242" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="284" x2="1564" y2="284" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="326" x2="1564" y2="326" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="368" x2="1564" y2="368" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="410" x2="1564" y2="410" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="452" x2="1564" y2="452" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="494" x2="1564" y2="494" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="536" x2="1564" y2="536" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="578" x2="1564" y2="578" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="620" x2="1564" y2="620" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="662" x2="1564" y2="662" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="704" x2="1564" y2="704" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="746" x2="1564" y2="746" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="788" x2="1564" y2="788" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="830" x2="1564" y2="830" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="872" x2="1564" y2="872" stroke="#848bbd" stroke-opacity="0.16" stroke-width="1"/>
+    <line x1="36" y1="914" x2="1564" y2="914" stroke="#ff7edb" stroke-opacity="0.45" stroke-width="1.5"/>
+    <line x1="474" y1="132" x2="474" y2="982" stroke="#ff7edb" stroke-opacity="0.65" stroke-width="1.5"/>
+    <line x1="654" y1="132" x2="654" y2="982" stroke="#36f9f6" stroke-opacity="0.55" stroke-width="1.5"/>
+    <line x1="784" y1="132" x2="784" y2="982" stroke="#848bbd" stroke-opacity="0.14" stroke-width="1"/>
+    <line x1="914" y1="132" x2="914" y2="982" stroke="#848bbd" stroke-opacity="0.14" stroke-width="1"/>
+    <line x1="1044" y1="132" x2="1044" y2="982" stroke="#848bbd" stroke-opacity="0.14" stroke-width="1"/>
+    <line x1="1174" y1="132" x2="1174" y2="982" stroke="#848bbd" stroke-opacity="0.14" stroke-width="1"/>
+    <line x1="1304" y1="132" x2="1304" y2="982" stroke="#848bbd" stroke-opacity="0.14" stroke-width="1"/>
+    <line x1="1434" y1="132" x2="1434" y2="982" stroke="#848bbd" stroke-opacity="0.14" stroke-width="1"/>
+    <text x="58" y="162" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="12" font-weight="800" letter-spacing="2.2" fill="#9ea4d4">CAPABILITY</text>
+    <!-- 3-State Legend -->
+    <g>
+      <circle cx="64" cy="183" r="6" fill="#72f1b8" fill-opacity="0.2" stroke="#72f1b8" stroke-width="1.2"/>
+      <path d="M 61.2 183.2 L 63.2 185.3 L 67.1 180.9" fill="none" stroke="#72f1b8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="75" y="186.5" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="10.5" font-weight="600" fill="#a4e8cb">Native</text>
+
+      <circle cx="130" cy="183" r="6" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-width="1.2"/>
+      <path d="M 130 177 A 6 6 0 0 0 130 189 Z" fill="#fede5d" fill-opacity="0.88"/>
+      <text x="141" y="186.5" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="10.5" font-weight="600" fill="#fede5d">Partial / Bolted-on</text>
+
+      <circle cx="264" cy="183" r="6" fill="#fe4450" fill-opacity="0.12" stroke="#fe4450" stroke-opacity="0.6" stroke-width="1.1"/>
+      <path d="M 261.7 180.7 L 266.3 185.3 M 266.3 180.7 L 261.7 185.3" fill="none" stroke="#fe4450" stroke-width="1.5" stroke-linecap="round"/>
+      <text x="275" y="186.5" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="10.5" font-weight="600" fill="#9ea4d4">None</text>
+    </g>
+    <text x="564.0" y="166" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="18" font-weight="900" font-style="italic" letter-spacing="1.6" fill="url(#wordmarkGrad)">LEMMINGS</text>
+    <text x="564.0" y="186" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" fill="#36f9f6">Go · Apache-2.0</text>
+    <text x="719.0" y="166" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="15.5" font-weight="800" fill="#f7f1ff">ab</text>
+    <text x="719.0" y="186" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" fill="#848bbd">C · Apache-2.0</text>
+    <text x="849.0" y="166" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="15.5" font-weight="800" fill="#f7f1ff">Bombardier</text>
+    <text x="849.0" y="186" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" fill="#848bbd">Go · MIT</text>
+    <text x="979.0" y="166" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="15.5" font-weight="800" fill="#f7f1ff">NBomber</text>
+    <text x="979.0" y="186" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" fill="#848bbd">.NET · Paid Org</text>
+    <text x="1109.0" y="166" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="15.5" font-weight="800" fill="#f7f1ff">k6</text>
+    <text x="1109.0" y="186" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" fill="#848bbd">Go+JS · AGPL-3</text>
+    <text x="1239.0" y="166" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="15.5" font-weight="800" fill="#f7f1ff">Gatling</text>
+    <text x="1239.0" y="186" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" fill="#848bbd">JVM · OSS/Ent</text>
+    <text x="1369.0" y="166" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="15.5" font-weight="800" fill="#f7f1ff">Locust</text>
+    <text x="1369.0" y="186" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" fill="#848bbd">Python · MIT</text>
+    <text x="1499.0" y="166" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="15.5" font-weight="800" fill="#f7f1ff">JMeter</text>
+    <text x="1499.0" y="186" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" fill="#848bbd">JVM · Apache-2.0</text>
+    <text x="58" y="226.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Free Permissive Commercial License</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="213.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 213.8 L 562.7 217.0 L 568.8 210.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="235.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">Apache-2.0</text>
+    <g><circle cx="719.0" cy="221.0" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 714.6 221.3 L 717.7 224.5 L 723.8 217.7" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <g><circle cx="849.0" cy="213.5" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 844.6 213.8 L 847.7 217.0 L 853.8 210.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="849.0" y="235.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#a4e8cb">MIT</text>
+    <g><circle cx="979.0" cy="213.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 975.8 210.3 L 982.2 216.7 M 982.2 210.3 L 975.8 216.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="979.0" y="235.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">Paid org</text>
+    <g><circle cx="1109.0" cy="213.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1105.8 210.3 L 1112.2 216.7 M 1112.2 210.3 L 1105.8 216.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="1109.0" y="235.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">AGPL-3.0</text>
+    <g><circle cx="1239.0" cy="213.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 1239.0 205.1 A 8.4 8.4 0 0 0 1239.0 221.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="1239.0" y="235.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">OSS only</text>
+    <g><circle cx="1369.0" cy="213.5" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 1364.6 213.8 L 1367.7 217.0 L 1373.8 210.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="1369.0" y="235.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#a4e8cb">MIT</text>
+    <g><circle cx="1499.0" cy="221.0" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 1494.6 221.3 L 1497.7 224.5 L 1503.8 217.7" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="58" y="268.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Single Zero-Runtime Binary</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="255.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 255.8 L 562.7 259.0 L 568.8 252.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="277.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">20–23 MB Go</text>
+    <g><circle cx="719.0" cy="255.5" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 714.6 255.8 L 717.7 259.0 L 723.8 252.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="719.0" y="277.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#a4e8cb">C / APR</text>
+    <g><circle cx="849.0" cy="255.5" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 844.6 255.8 L 847.7 259.0 L 853.8 252.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="849.0" y="277.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#a4e8cb">Go</text>
+    <g><circle cx="979.0" cy="255.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 975.8 252.3 L 982.2 258.7 M 982.2 252.3 L 975.8 258.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="979.0" y="277.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">.NET SDK</text>
+    <g><circle cx="1109.0" cy="255.5" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 1104.6 255.8 L 1107.7 259.0 L 1113.8 252.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="1109.0" y="277.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#a4e8cb">Go + Goja</text>
+    <g><circle cx="1239.0" cy="255.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1235.8 252.3 L 1242.2 258.7 M 1242.2 252.3 L 1235.8 258.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="1239.0" y="277.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">JVM</text>
+    <g><circle cx="1369.0" cy="255.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1365.8 252.3 L 1372.2 258.7 M 1372.2 252.3 L 1365.8 258.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="1369.0" y="277.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">Python</text>
+    <g><circle cx="1499.0" cy="255.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1495.8 252.3 L 1502.2 258.7 M 1502.2 252.3 L 1495.8 258.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="1499.0" y="277.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">JVM</text>
+    <text x="58" y="310.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Multi-Core CPU Scaling</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="297.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 297.8 L 562.7 301.0 L 568.8 294.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="319.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">Goroutines</text>
+    <g><circle cx="719.0" cy="297.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 294.3 L 722.2 300.7 M 722.2 294.3 L 715.8 300.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="719.0" y="319.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">1 thread</text>
+    <g><circle cx="849.0" cy="297.5" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 844.6 297.8 L 847.7 301.0 L 853.8 294.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="849.0" y="319.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#a4e8cb">Goroutines</text>
+    <g><circle cx="979.0" cy="297.5" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 974.6 297.8 L 977.7 301.0 L 983.8 294.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="979.0" y="319.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#a4e8cb">.NET async</text>
+    <g><circle cx="1109.0" cy="297.5" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 1104.6 297.8 L 1107.7 301.0 L 1113.8 294.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="1109.0" y="319.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#a4e8cb">Go runtime</text>
+    <g><circle cx="1239.0" cy="297.5" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 1234.6 297.8 L 1237.7 301.0 L 1243.8 294.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="1239.0" y="319.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#a4e8cb">JVM / Netty</text>
+    <g><circle cx="1369.0" cy="297.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 1369.0 289.1 A 8.4 8.4 0 0 0 1369.0 305.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="1369.0" y="319.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">--processes*</text>
+    <g><circle cx="1499.0" cy="297.5" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 1494.6 297.8 L 1497.7 301.0 L 1503.8 294.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="1499.0" y="319.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#a4e8cb">OS threads</text>
+    <text x="58" y="352.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Zero-Code Site Crawl &amp; Link Navigation</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="339.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 339.8 L 562.7 343.0 L 568.8 336.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="361.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">-crawl</text>
+    <g><circle cx="719.0" cy="347.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 343.8 L 722.2 350.2 M 722.2 343.8 L 715.8 350.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="347.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 845.8 343.8 L 852.2 350.2 M 852.2 343.8 L 845.8 350.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="979.0" cy="347.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 975.8 343.8 L 982.2 350.2 M 982.2 343.8 L 975.8 350.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1109.0" cy="347.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1105.8 343.8 L 1112.2 350.2 M 1112.2 343.8 L 1105.8 350.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1239.0" cy="347.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1235.8 343.8 L 1242.2 350.2 M 1242.2 343.8 L 1235.8 350.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1369.0" cy="347.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1365.8 343.8 L 1372.2 350.2 M 1372.2 343.8 L 1365.8 350.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1499.0" cy="347.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1495.8 343.8 L 1502.2 350.2 M 1502.2 343.8 L 1495.8 350.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="58" y="394.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Declarative Strict YAML Multi-Persona Plans</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="381.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 381.8 L 562.7 385.0 L 568.8 378.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="403.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">Up to 100</text>
+    <g><circle cx="719.0" cy="389.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 385.8 L 722.2 392.2 M 722.2 385.8 L 715.8 392.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="389.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 845.8 385.8 L 852.2 392.2 M 852.2 385.8 L 845.8 392.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="979.0" cy="381.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 975.8 378.3 L 982.2 384.7 M 982.2 378.3 L 975.8 384.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="979.0" y="403.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">C# / F#</text>
+    <g><circle cx="1109.0" cy="381.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1105.8 378.3 L 1112.2 384.7 M 1112.2 378.3 L 1105.8 384.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="1109.0" y="403.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">JavaScript</text>
+    <g><circle cx="1239.0" cy="381.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1235.8 378.3 L 1242.2 384.7 M 1242.2 378.3 L 1235.8 384.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="1239.0" y="403.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">Java / Scala</text>
+    <g><circle cx="1369.0" cy="381.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1365.8 378.3 L 1372.2 384.7 M 1372.2 378.3 L 1365.8 384.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="1369.0" y="403.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">Python</text>
+    <g><circle cx="1499.0" cy="381.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1495.8 378.3 L 1502.2 384.7 M 1502.2 378.3 L 1495.8 384.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="1499.0" y="403.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">XML .jmx</text>
+    <text x="58" y="436.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Built-In 5% Rogue Wanderer Cohort</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="423.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 423.8 L 562.7 427.0 L 568.8 420.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="445.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">-rogue-rate</text>
+    <g><circle cx="719.0" cy="431.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 427.8 L 722.2 434.2 M 722.2 427.8 L 715.8 434.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="431.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 845.8 427.8 L 852.2 434.2 M 852.2 427.8 L 845.8 434.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="979.0" cy="431.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 975.8 427.8 L 982.2 434.2 M 982.2 427.8 L 975.8 434.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1109.0" cy="431.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1105.8 427.8 L 1112.2 434.2 M 1112.2 427.8 L 1105.8 434.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1239.0" cy="431.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1235.8 427.8 L 1242.2 434.2 M 1242.2 427.8 L 1235.8 434.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1369.0" cy="431.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1365.8 427.8 L 1372.2 434.2 M 1372.2 427.8 L 1365.8 434.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1499.0" cy="431.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1495.8 427.8 L 1502.2 434.2 M 1502.2 427.8 L 1495.8 434.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="58" y="478.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Per-Visitor RFC 6265 Cookie Jar by Default</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="465.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 465.8 L 562.7 469.0 L 568.8 462.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="487.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">InspectingJar</text>
+    <g><circle cx="719.0" cy="473.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 469.8 L 722.2 476.2 M 722.2 469.8 L 715.8 476.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="473.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 845.8 469.8 L 852.2 476.2 M 852.2 469.8 L 845.8 476.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="979.0" cy="465.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 979.0 457.1 A 8.4 8.4 0 0 0 979.0 473.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="979.0" y="487.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">Manual</text>
+    <g><circle cx="1109.0" cy="473.0" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 1104.6 473.3 L 1107.7 476.5 L 1113.8 469.7" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <g><circle cx="1239.0" cy="473.0" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 1234.6 473.3 L 1237.7 476.5 L 1243.8 469.7" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <g><circle cx="1369.0" cy="473.0" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 1364.6 473.3 L 1367.7 476.5 L 1373.8 469.7" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <g><circle cx="1499.0" cy="465.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 1499.0 457.1 A 8.4 8.4 0 0 0 1499.0 473.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="1499.0" y="487.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">Cookie Mgr</text>
+    <text x="58" y="520.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Automatic 200 OK Blank &amp; Soft-Error Checks</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="507.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 507.8 L 562.7 511.0 L 568.8 504.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="529.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">not-blank</text>
+    <g><circle cx="719.0" cy="515.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 511.8 L 722.2 518.2 M 722.2 511.8 L 715.8 518.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="515.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 845.8 511.8 L 852.2 518.2 M 852.2 511.8 L 845.8 518.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="979.0" cy="515.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 975.8 511.8 L 982.2 518.2 M 982.2 511.8 L 975.8 518.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1109.0" cy="515.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1105.8 511.8 L 1112.2 518.2 M 1112.2 511.8 L 1105.8 518.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1239.0" cy="515.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1235.8 511.8 L 1242.2 518.2 M 1242.2 511.8 L 1235.8 518.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1369.0" cy="515.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1365.8 511.8 L 1372.2 518.2 M 1372.2 511.8 L 1365.8 518.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1499.0" cy="515.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1495.8 511.8 L 1502.2 518.2 M 1502.2 511.8 L 1495.8 518.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="58" y="562.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Automatic Error Screenshots (Pure-Go CDP)</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="549.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 549.8 L 562.7 553.0 L 568.8 546.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="571.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">Zero Node</text>
+    <g><circle cx="719.0" cy="557.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 553.8 L 722.2 560.2 M 722.2 553.8 L 715.8 560.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="557.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 845.8 553.8 L 852.2 560.2 M 852.2 553.8 L 845.8 560.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="979.0" cy="557.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 975.8 553.8 L 982.2 560.2 M 982.2 553.8 L 975.8 560.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1109.0" cy="549.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 1109.0 541.1 A 8.4 8.4 0 0 0 1109.0 557.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="1109.0" y="571.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">k6/browser</text>
+    <g><circle cx="1239.0" cy="557.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1235.8 553.8 L 1242.2 560.2 M 1242.2 553.8 L 1235.8 560.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1369.0" cy="557.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1365.8 553.8 L 1372.2 560.2 M 1372.2 553.8 L 1365.8 560.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1499.0" cy="557.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1495.8 553.8 L 1502.2 560.2 M 1502.2 553.8 L 1495.8 560.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="58" y="604.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Real-Browser JS/Render Scouts (-scouts)</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="591.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 591.8 L 562.7 595.0 L 568.8 588.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="613.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">1–8 Scouts</text>
+    <g><circle cx="719.0" cy="599.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 595.8 L 722.2 602.2 M 722.2 595.8 L 715.8 602.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="599.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 845.8 595.8 L 852.2 602.2 M 852.2 595.8 L 845.8 602.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="979.0" cy="599.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 975.8 595.8 L 982.2 602.2 M 982.2 595.8 L 975.8 602.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1109.0" cy="591.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 1109.0 583.1 A 8.4 8.4 0 0 0 1109.0 599.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="1109.0" y="613.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">k6/browser</text>
+    <g><circle cx="1239.0" cy="599.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1235.8 595.8 L 1242.2 602.2 M 1242.2 595.8 L 1235.8 602.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1369.0" cy="599.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1365.8 595.8 L 1372.2 602.2 M 1372.2 595.8 L 1365.8 602.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1499.0" cy="599.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1495.8 595.8 L 1502.2 602.2 M 1502.2 595.8 L 1495.8 602.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="58" y="646.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Free Live Triage Portal &amp; -review Tags</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="633.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 633.8 L 562.7 637.0 L 568.8 630.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="655.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">4-Panel UI</text>
+    <g><circle cx="719.0" cy="641.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 637.8 L 722.2 644.2 M 722.2 637.8 L 715.8 644.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="641.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 845.8 637.8 L 852.2 644.2 M 852.2 637.8 L 845.8 644.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="979.0" cy="641.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 975.8 637.8 L 982.2 644.2 M 982.2 637.8 L 975.8 644.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1109.0" cy="633.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 1109.0 625.1 A 8.4 8.4 0 0 0 1109.0 641.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="1109.0" y="655.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">Basic UI</text>
+    <g><circle cx="1239.0" cy="633.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1235.8 630.3 L 1242.2 636.7 M 1242.2 630.3 L 1235.8 636.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="1239.0" y="655.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">Enterprise</text>
+    <g><circle cx="1369.0" cy="633.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 1369.0 625.1 A 8.4 8.4 0 0 0 1369.0 641.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="1369.0" y="655.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">Metrics UI</text>
+    <g><circle cx="1499.0" cy="633.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1495.8 630.3 L 1502.2 636.7 M 1502.2 630.3 L 1495.8 636.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="1499.0" y="655.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">GUI unsafe</text>
+    <text x="58" y="688.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Built-In HTML + GitHub MD + JSON Reports</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="675.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 675.8 L 562.7 679.0 L 568.8 672.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="697.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">All 3 + imgs</text>
+    <g><circle cx="719.0" cy="683.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 679.8 L 722.2 686.2 M 722.2 679.8 L 715.8 686.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="675.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 849.0 667.1 A 8.4 8.4 0 0 0 849.0 683.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="849.0" y="697.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">JSON only</text>
+    <g><circle cx="979.0" cy="675.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 979.0 667.1 A 8.4 8.4 0 0 0 979.0 683.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="979.0" y="697.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">No shots</text>
+    <g><circle cx="1109.0" cy="675.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 1109.0 667.1 A 8.4 8.4 0 0 0 1109.0 683.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="1109.0" y="697.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">Custom JS</text>
+    <g><circle cx="1239.0" cy="675.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 1239.0 667.1 A 8.4 8.4 0 0 0 1239.0 683.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="1239.0" y="697.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">HTML only</text>
+    <g><circle cx="1369.0" cy="675.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 1369.0 667.1 A 8.4 8.4 0 0 0 1369.0 683.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="1369.0" y="697.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">HTML / CSV</text>
+    <g><circle cx="1499.0" cy="675.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 1499.0 667.1 A 8.4 8.4 0 0 0 1499.0 683.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="1499.0" y="697.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">HTML / JTL</text>
+    <text x="58" y="730.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Built-In CLI Baseline Diff (lemmings compare)</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="717.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 717.8 L 562.7 721.0 L 568.8 714.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="739.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">Exit 2 diff</text>
+    <g><circle cx="719.0" cy="725.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 721.8 L 722.2 728.2 M 722.2 721.8 L 715.8 728.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="725.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 845.8 721.8 L 852.2 728.2 M 852.2 721.8 L 845.8 728.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="979.0" cy="725.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 975.8 721.8 L 982.2 728.2 M 982.2 721.8 L 975.8 728.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1109.0" cy="717.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1105.8 714.3 L 1112.2 720.7 M 1112.2 714.3 L 1105.8 720.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="1109.0" y="739.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">Cloud paid</text>
+    <g><circle cx="1239.0" cy="717.5" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1235.8 714.3 L 1242.2 720.7 M 1242.2 714.3 L 1235.8 720.7" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="1239.0" y="739.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" fill="#9ea4d4">Enterprise</text>
+    <g><circle cx="1369.0" cy="725.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1365.8 721.8 L 1372.2 728.2 M 1372.2 721.8 L 1365.8 728.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1499.0" cy="725.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1495.8 721.8 L 1502.2 728.2 M 1502.2 721.8 L 1495.8 728.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="58" y="772.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Deterministic CI Gates (Failure / p95 / Plan)</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="759.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 759.8 L 562.7 763.0 L 568.8 756.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="781.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">Exit 2</text>
+    <g><circle cx="719.0" cy="767.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 763.8 L 722.2 770.2 M 722.2 763.8 L 715.8 770.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="767.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 845.8 763.8 L 852.2 770.2 M 852.2 763.8 L 845.8 770.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="979.0" cy="759.5" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 974.6 759.8 L 977.7 763.0 L 983.8 756.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="979.0" y="781.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#a4e8cb">In C#</text>
+    <g><circle cx="1109.0" cy="759.5" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 1104.6 759.8 L 1107.7 763.0 L 1113.8 756.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="1109.0" y="781.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#a4e8cb">Exit 99</text>
+    <g><circle cx="1239.0" cy="759.5" r="8.8" fill="#72f1b8" fill-opacity="0.14" stroke="#72f1b8" stroke-width="1.2"/><path d="M 1234.6 759.8 L 1237.7 763.0 L 1243.8 756.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="1239.0" y="781.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#a4e8cb">In DSL</text>
+    <g><circle cx="1369.0" cy="759.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 1369.0 751.1 A 8.4 8.4 0 0 0 1369.0 767.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="1369.0" y="781.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">Custom hook</text>
+    <g><circle cx="1499.0" cy="759.5" r="8.4" fill="#fede5d" fill-opacity="0.12" stroke="#fede5d" stroke-opacity="0.88" stroke-width="1.35"/><path d="M 1499.0 751.1 A 8.4 8.4 0 0 0 1499.0 767.9 Z" fill="#fede5d" fill-opacity="0.85"/></g>
+    <text x="1499.0" y="781.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="600" fill="#fede5d">CI plugin</text>
+    <text x="58" y="814.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Native Virtual Waiting Room Protocol</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="801.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 801.8 L 562.7 805.0 L 568.8 798.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="823.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">Concert</text>
+    <g><circle cx="719.0" cy="809.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 805.8 L 722.2 812.2 M 722.2 805.8 L 715.8 812.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="809.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 845.8 805.8 L 852.2 812.2 M 852.2 805.8 L 845.8 812.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="979.0" cy="809.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 975.8 805.8 L 982.2 812.2 M 982.2 805.8 L 975.8 812.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1109.0" cy="809.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1105.8 805.8 L 1112.2 812.2 M 1112.2 805.8 L 1105.8 812.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1239.0" cy="809.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1235.8 805.8 L 1242.2 812.2 M 1242.2 805.8 L 1235.8 812.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1369.0" cy="809.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1365.8 805.8 L 1372.2 812.2 M 1372.2 805.8 L 1365.8 812.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1499.0" cy="809.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1495.8 805.8 L 1502.2 812.2 M 1502.2 805.8 L 1495.8 812.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="58" y="856.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">Security Audited (SEC-01–SEC-10, SBOM)</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="843.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 843.8 L 562.7 847.0 L 568.8 840.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="865.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">SSRF + Scrub</text>
+    <g><circle cx="719.0" cy="851.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 847.8 L 722.2 854.2 M 722.2 847.8 L 715.8 854.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="851.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 845.8 847.8 L 852.2 854.2 M 852.2 847.8 L 845.8 854.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="979.0" cy="851.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 975.8 847.8 L 982.2 854.2 M 982.2 847.8 L 975.8 854.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1109.0" cy="851.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1105.8 847.8 L 1112.2 854.2 M 1112.2 847.8 L 1105.8 854.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1239.0" cy="851.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1235.8 847.8 L 1242.2 854.2 M 1242.2 847.8 L 1235.8 854.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1369.0" cy="851.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1365.8 847.8 L 1372.2 854.2 M 1372.2 847.8 L 1365.8 854.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1499.0" cy="851.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1495.8 847.8 L 1502.2 854.2 M 1502.2 847.8 L 1495.8 854.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <text x="58" y="898.0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13.5" font-weight="600" fill="#ece6fa">AI Coding Agent Skill Runbook (SKILL.md)</text>
+    <g filter="url(#glowGreen)"><circle cx="564.0" cy="885.5" r="9.4" fill="#72f1b8" fill-opacity="0.24" stroke="#72f1b8" stroke-width="1.6"/><path d="M 559.6 885.8 L 562.7 889.0 L 568.8 882.2" fill="none" stroke="#72f1b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="564.0" y="907.5" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="9.5" font-weight="700" fill="#72f1b8">10 Personas</text>
+    <g><circle cx="719.0" cy="893.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 715.8 889.8 L 722.2 896.2 M 722.2 889.8 L 715.8 896.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="849.0" cy="893.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 845.8 889.8 L 852.2 896.2 M 852.2 889.8 L 845.8 896.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="979.0" cy="893.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 975.8 889.8 L 982.2 896.2 M 982.2 889.8 L 975.8 896.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1109.0" cy="893.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1105.8 889.8 L 1112.2 896.2 M 1112.2 889.8 L 1105.8 896.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1239.0" cy="893.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1235.8 889.8 L 1242.2 896.2 M 1242.2 889.8 L 1235.8 896.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1369.0" cy="893.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1365.8 889.8 L 1372.2 896.2 M 1372.2 889.8 L 1365.8 896.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+    <g><circle cx="1499.0" cy="893.0" r="8.0" fill="#fe4450" fill-opacity="0.10" stroke="#fe4450" stroke-opacity="0.45" stroke-width="1.1"/><path d="M 1495.8 889.8 L 1502.2 896.2 M 1502.2 889.8 L 1495.8 896.2" fill="none" stroke="#fe4450" stroke-opacity="0.88" stroke-width="1.85" stroke-linecap="round"/></g>
+
+    <!-- Native Score Summary Row -->
+    <text x="58" y="943" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13" font-weight="800" letter-spacing="1.8" fill="#fede5d">NATIVE SCORE</text>
+    <text x="58" y="963" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#848bbd">Out of 17 native capabilities (partial / bolted-on shown below)</text>
+
+    <rect x="508.0" y="922" width="112" height="32" rx="16" fill="#183834" stroke="#72f1b8" stroke-width="1.6"/>
+    <text x="564.0" y="944" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="900" fill="#72f1b8" filter="url(#glowGreen)">17 / 17</text>
+    <text x="564.0" y="970" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="700" fill="#36f9f6">100% native</text>
+    <rect x="683.0" y="924" width="72" height="27" rx="13.5" fill="#1d1727" stroke="#848bbd" stroke-opacity="0.32" stroke-width="1"/>
+    <text x="719.0" y="942" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700" fill="#9ea4d4">2 / 17</text>
+    <text x="719.0" y="969" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="600" fill="#5b5f8c">0 partial</text>
+    <rect x="813.0" y="924" width="72" height="27" rx="13.5" fill="#1d1727" stroke="#848bbd" stroke-opacity="0.32" stroke-width="1"/>
+    <text x="849.0" y="942" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700" fill="#ece6fa">3 / 17</text>
+    <text x="849.0" y="969" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="600" fill="#fede5d">+1 partial</text>
+    <rect x="943.0" y="924" width="72" height="27" rx="13.5" fill="#1d1727" stroke="#848bbd" stroke-opacity="0.32" stroke-width="1"/>
+    <text x="979.0" y="942" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700" fill="#9ea4d4">2 / 17</text>
+    <text x="979.0" y="969" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="600" fill="#fede5d">+2 partial</text>
+    <rect x="1073.0" y="924" width="72" height="27" rx="13.5" fill="#1d1727" stroke="#848bbd" stroke-opacity="0.32" stroke-width="1"/>
+    <text x="1109.0" y="942" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700" fill="#ece6fa">4 / 17</text>
+    <text x="1109.0" y="969" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="600" fill="#fede5d">+4 partial</text>
+    <rect x="1203.0" y="924" width="72" height="27" rx="13.5" fill="#1d1727" stroke="#848bbd" stroke-opacity="0.32" stroke-width="1"/>
+    <text x="1239.0" y="942" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700" fill="#ece6fa">3 / 17</text>
+    <text x="1239.0" y="969" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="600" fill="#fede5d">+2 partial</text>
+    <rect x="1333.0" y="924" width="72" height="27" rx="13.5" fill="#1d1727" stroke="#848bbd" stroke-opacity="0.32" stroke-width="1"/>
+    <text x="1369.0" y="942" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700" fill="#9ea4d4">2 / 17</text>
+    <text x="1369.0" y="969" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="600" fill="#fede5d">+4 partial</text>
+    <rect x="1463.0" y="924" width="72" height="27" rx="13.5" fill="#1d1727" stroke="#848bbd" stroke-opacity="0.32" stroke-width="1"/>
+    <text x="1499.0" y="942" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700" fill="#9ea4d4">2 / 17</text>
+    <text x="1499.0" y="969" text-anchor="middle" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="600" fill="#fede5d">+3 partial</text>
+  </g>
+
+  <!-- Outer border -->
+  <rect x="36" y="132" width="1528" height="850" rx="16" fill="none" stroke="#848bbd" stroke-opacity="0.35" stroke-width="1.2"/>
+
+  <!-- ══ FOOTER: REAL VERIFIED RUNS + INSTALL CTA ════════════════════════ -->
+  <g>
+    <rect x="36" y="998" width="956" height="62" rx="12" fill="#241f34" stroke="#36f9f6" stroke-opacity="0.32" stroke-width="1"/>
+    <text x="56" y="1022" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="11" font-weight="800" letter-spacing="1.8" fill="#36f9f6">VERIFIED REAL RUNS (396 STATEFUL VISITORS · 3m0s · 0 DROPPED ARTIFACTS)</text>
+    <text x="56" y="1044" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" fill="#ece6fa"><tspan fill="#72f1b8" font-weight="700">counthis.app</tspan> 10,831 visits · 100% rescued · 185.4ms p95<tspan dx="12" fill="#5b5f8c">│</tspan><tspan dx="12" fill="#ff7edb" font-weight="700">toktail.app</tspan> 1,093 queued · 12 CDP screenshots · 186.2ms p95</text>
+
+    <rect x="1008" y="998" width="556" height="62" rx="12" fill="#2a1f3d" stroke="#ff7edb" stroke-opacity="0.55" stroke-width="1.2"/>
+    <text x="1028" y="1022" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="11" font-weight="800" letter-spacing="1.6" fill="#fede5d">TRY IN 60 SECONDS<tspan dx="10" fill="#848bbd">·</tspan><tspan dx="10">★ STAR ON GITHUB</tspan></text>
+    <text x="1028" y="1044" font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="700" fill="#f7f1ff">go install github.com/andreimerlescu/lemmings/v2/cmd/lemmings@latest</text>
+  </g>
+
+  <!-- Subtle technical footnote -->
+  <text x="40" y="1083" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="10.5" fill="#747aa8">
+    *Locust single processes hit Python's 1-core GIL; --processes -1 forks a master + worker processes across cores on Linux/macOS (unsupported on Windows). Partial/bolted-on cells never inflate the native / 17 score.
+  </text>
+</svg>

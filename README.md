@@ -147,6 +147,19 @@ Full end-user guides live in [`docs/`](docs/), alongside a root-level agent skil
 - **[Prometheus Observability](docs/prometheus-observability.md)** — all 24 metrics, cardinality protection, and PromQL queries.
 - **[Architecture](docs/architecture.md)** — DDD bounded contexts (`cmd/lemmings` + 12 `internal/*` packages), package DAG, exact bounds, and backpressure pipeline.
 - **[Security Posture & Audit Report](docs/security.md)** — threat model, dial-time SSRF guard, RFC 6265 cookie isolation, integrated security audit (`SEC-01`–`SEC-10`), and Chromium sandboxing.
+- **[AI Agent Index (`llms.txt`)](llms.txt)** — machine-readable summary and sitemap of Lemmings capabilities, benchmarks, and guides for LLMs and coding agents.
+
+### Comparisons & Migration Guides
+
+Evaluating Lemmings or migrating from another load tester? See the **[Master 8-Tool Comparison Hub](docs/comparisons/README.md)** or jump straight to a side-by-side breakdown with verified real-run data, flag/script translations, and pitfalls solved out of the box:
+
+- [Lemmings vs Apache Benchmark (`ab`)](docs/comparisons/lemmings-vs-ab.md)
+- [Lemmings vs Bombardier](docs/comparisons/lemmings-vs-bombardier.md)
+- [Lemmings vs NBomber](docs/comparisons/lemmings-vs-nbomber.md)
+- [Lemmings vs Grafana k6](docs/comparisons/lemmings-vs-k6.md)
+- [Lemmings vs Gatling](docs/comparisons/lemmings-vs-gatling.md)
+- [Lemmings vs Locust](docs/comparisons/lemmings-vs-locust.md)
+- [Lemmings vs Apache JMeter](docs/comparisons/lemmings-vs-jmeter.md)
 
 ---
 

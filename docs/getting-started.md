@@ -149,3 +149,4 @@ Lemmings uses deterministic exit codes for CI pipelines and automation:
 - [Admin Portal Guide](dashboard-guide.md) — live gallery, 4-panel inspector, triage tags, and `-review` hold mode.
 - [Reports, Delivery & CI Gates](reports-and-ci-gates.md) — HTML/Markdown/JSON formats, `PlanReport`, S3/SMTP delivery, and `lemmings compare`.
 - [CLI Reference](cli-reference.md) — every flag, alias, default, and environment variable.
+- [Tool Comparisons & Migration Guides](comparisons/README.md) — side-by-side comparisons and migration walkthroughs for `ab`, Bombardier, NBomber, k6, Gatling, Locust, and JMeter.
