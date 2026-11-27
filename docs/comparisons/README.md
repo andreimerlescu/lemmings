@@ -28,25 +28,30 @@ Pick the tool you are currently using or evaluating to see full `✅`/`❌` matr
 
 ## Master 8-Tool Capability Matrix
 
+**Legend:** ✅ **Native / Built-In** (counts toward Native Score `/ 17`) · 🟡 **Partial / Bolted-On** (requires plugins, multi-process flags, manual scripting, or subset of formats — counted separately so the `/ 17` denominator stays strictly native) · ❌ **Not Supported**
+
 | Capability | **Lemmings** | `ab` | Bombardier | NBomber | k6 | Gatling | Locust | JMeter |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Free Permissive Commercial License** | ✅ *(Apache-2.0)* | ✅ | ✅ *(MIT)* | ❌ *(Paid org)* | ❌ *(AGPL-3.0)* | ✅ *(OSS only)* | ✅ *(MIT)* | ✅ |
+| **Free Permissive Commercial License** | ✅ *(Apache-2.0)* | ✅ | ✅ *(MIT)* | ❌ *(Paid org)* | ❌ *(AGPL-3.0)* | 🟡 *(OSS only)* | ✅ *(MIT)* | ✅ |
 | **Single Zero-Runtime Binary** | ✅ *(20–23 MB Go)* | ✅ *(C/APR)* | ✅ *(Go)* | ❌ *(.NET)* | ✅ *(Go+Goja)* | ❌ *(JVM)* | ❌ *(Python)* | ❌ *(JVM)* |
-| **Multi-Core Native Concurrency (1 Process)** | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ *(GIL)* | ✅ *(OS threads)* |
+| **Multi-Core CPU Scaling** | ✅ *(Goroutines)* | ❌ *(1 thread)* | ✅ *(Goroutines)* | ✅ *(.NET async)* | ✅ *(Go)* | ✅ *(JVM/Netty)* | 🟡 *(`--processes`\*)* | ✅ *(OS threads)* |
 | **Zero-Code Site Crawl & Link Navigation** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Git-Friendly Strict YAML Multi-Persona Plans** | ✅ | ❌ | ❌ | ❌ *(C#/F#)* | ❌ *(JS)* | ❌ *(Java/Scala)* | ❌ *(Python)* | ❌ *(XML `.jmx`)* |
+| **Declarative Strict YAML Multi-Persona Plans** | ✅ *(up to 100)* | ❌ | ❌ | ❌ *(C#/F#)* | ❌ *(JS)* | ❌ *(Java/Scala)* | ❌ *(Python)* | ❌ *(XML `.jmx`)* |
 | **Built-In `5%` Rogue Wanderer Cohort** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Per-Visitor RFC 6265 Cookie Jar by Default** | ✅ | ❌ | ❌ | ❌ *(manual)* | ✅ | ✅ | ✅ | ❌ *(manual)* |
+| **Per-Visitor RFC 6265 Cookie Jar by Default** | ✅ | ❌ | ❌ | 🟡 *(manual)* | ✅ | ✅ | ✅ | 🟡 *(Cookie Mgr)* |
 | **Automatic `200 OK` Blank & Soft-Error Checks** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **Automatic Error Screenshots (Pure-Go CDP)** | ✅ | ❌ | ❌ | ❌ | ❌ *(manual JS)* | ❌ | ❌ | ❌ |
-| **Real-Browser JS/Render Scouts (`-scouts`)** | ✅ | ❌ | ❌ | ❌ | ❌ *(manual JS)* | ❌ | ❌ | ❌ |
-| **Free Live Triage Portal & `-review` Tags** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ *(Enterprise)* | ❌ *(no triage)* | ❌ *(GUI unsafe)* |
-| **Built-In HTML + GitHub MD + JSON Reports** | ✅ | ❌ | ❌ | ✅ *(no shots)* | ❌ *(custom JS)* | ✅ *(HTML only)* | ✅ *(HTML/CSV)* | ✅ *(HTML/JTL)* |
+| **Automatic Error Screenshots (Pure-Go CDP)** | ✅ | ❌ | ❌ | ❌ | 🟡 *(`k6/browser`)* | ❌ | ❌ | ❌ |
+| **Real-Browser JS/Render Scouts (`-scouts`)** | ✅ | ❌ | ❌ | ❌ | 🟡 *(`k6/browser`)* | ❌ | ❌ | ❌ |
+| **Free Live Triage Portal & `-review` Tags** | ✅ | ❌ | ❌ | ❌ | 🟡 *(basic UI)* | ❌ *(Enterprise)* | 🟡 *(metrics UI)* | ❌ *(GUI unsafe)* |
+| **Built-In HTML + GitHub MD + JSON Reports** | ✅ *(all 3 + imgs)* | ❌ | 🟡 *(JSON only)* | 🟡 *(no shots)* | 🟡 *(custom JS)* | 🟡 *(HTML only)* | 🟡 *(HTML/CSV)* | 🟡 *(HTML/JTL)* |
 | **Built-In CLI Baseline Diff (`compare`)** | ✅ | ❌ | ❌ | ❌ | ❌ *(Cloud)* | ❌ *(Enterprise)* | ❌ | ❌ |
-| **Deterministic CI Gates (`exit 2`)** | ✅ | ❌ | ❌ | ✅ *(in C#)* | ✅ *(exit 99)* | ✅ *(in DSL)* | ❌ *(custom)* | ❌ *(exits 0)* |
+| **Deterministic CI Gates (Failure / p95 / Plan)** | ✅ *(exit 2)* | ❌ | ❌ | ✅ *(in C#)* | ✅ *(exit 99)* | ✅ *(in DSL)* | 🟡 *(custom hook)* | 🟡 *(CI plugin)* |
 | **Native Virtual Waiting Room Protocol** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Security Audited (`SEC-01`–`SEC-10`, SBOM)** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **AI Coding Agent Skill Runbook (`SKILL.md`)** | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Native Score *(+ partial shown separately)*** | **17 / 17** *(0 partial)* | **2 / 17** *(0 partial)* | **3 / 17** *(+1 partial)* | **2 / 17** *(+2 partial)* | **4 / 17** *(+4 partial)* | **3 / 17** *(+2 partial)* | **2 / 17** *(+4 partial)* | **2 / 17** *(+3 partial)* |
+
+<sub>\*Per Locust's official docs, each Python process is limited to 1 CPU core by the GIL; `locust --processes -1` spawns a master + worker OS processes across cores via `fork()` on Linux/macOS (not supported on Windows).</sub>
 
 ---
 
