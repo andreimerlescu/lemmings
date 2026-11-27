@@ -10,7 +10,7 @@
 
 | Quick Decision Summary | **Lemmings (`v2.0.1`)** | **Locust** |
 | --- | --- | --- |
-| **Concurrency & Runtime** | Compiled Go goroutines across all CPU cores — single `20–23 MB` binary, zero runtime dependencies | Python interpreter + `gevent` (bound to 1 CPU core per process by the GIL; needs `--master`/`--worker` processes to scale) |
+| **Concurrency & Runtime** | Compiled Go goroutines across all CPU cores in one process — single `20–23 MB` binary, zero runtime dependencies | Python + `gevent` (1 core per process due to GIL; scales across cores on Linux/macOS via `--processes -1` multi-process `fork()`, not supported on Windows) |
 | **Test Authoring** | Zero-code `-crawl` mode + strict `KnownFields(true)` multi-persona YAML (`-plan`) | Imperative Python `locustfile.py` + `virtualenv` / `pip` dependencies |
 | **When Something Breaks** | Automatic CDP screenshot + JS console + cookie jar + parsed error body + 4-panel Triage Modal (`Bug`/`Flaky`/`Expected`/`Ignored`) | Exception/status string counted in Locust's Failures tab (zero screenshots, zero JS logs, zero cookie inspector) |
 | **Install in 10 Seconds** | `go install github.com/andreimerlescu/lemmings/v2/cmd/lemmings@latest` | `python3 -m venv .venv && pip install locust` |
@@ -23,7 +23,7 @@
 | --- | :---: | :---: |
 | Permissive open-source license | ✅ (Apache-2.0) | ✅ (MIT) |
 | Single zero-dependency binary (no Python / venv / pip drift) | ✅ (`20–23 MB` Go binary) | ❌ (requires Python 3.9+ & pip packages) |
-| Native multi-core CPU scaling from one process | ✅ (Go goroutine scheduler) | ❌ (1 core per process due to Python GIL; requires `--master`/`--worker`) |
+| Multi-core CPU scaling | ✅ (native Go goroutine scheduler in 1 process across all OSes) | 🟡 (1 core/process GIL; scales across cores via `--processes -1` `fork()` master+workers on Linux/macOS only — unsupported on Windows) |
 | Zero-script automatic site crawl & organic link navigation | ✅ (`-crawl`, `-navigation links`) | ❌ (must write `locustfile.py` for every route) |
 | Strict schema-validated YAML plans (`-dry-run` pre-flight) | ✅ (`KnownFields(true)` up to 100 personas) | ❌ (untyped Python runtime errors discovered mid-test) |
 | Automatic `5%` rogue wanderer cohort (`-rogue-rate`) | ✅ | ❌ |
@@ -64,7 +64,7 @@ Locust's biggest real-world surprise is hitting **100% CPU on a single core** wi
 | Dimension | Lemmings (`v2.0.1`) | Locust |
 | --- | --- | --- |
 | **Distribution & CI Speed** | Single `20–23 MB` static Go binary; zero `pip install` or `venv` setup | Python interpreter + `pip install locust` (plus C extensions like `gevent`/`greenlet`/`msgpack`/`zope`) |
-| **Multi-Core Efficiency** | True OS-thread M:N goroutine scheduling across every core in one process | Single-core Python GIL per process; requires `--processes -1` or `--master`/`--worker` orchestration |
+| **Multi-Core Efficiency** | True OS-thread M:N goroutine scheduling across every core in one process (Linux, macOS, Windows) | Single-core Python GIL per process; `locust --processes -1` forks 1 master + N worker processes across cores on Linux/macOS (unsupported on Windows; manual `--master`/`--worker` otherwise) |
 | **Web UI Security** | Loopback `127.0.0.1` only, 256-bit boot token in `#fragment`, HMAC-SHA256 cookie, strict hash CSP, CSRF guard, auth rate limiter (`SEC-05`) | `:8089` binds openly unless configured; no built-in auth by default |
 | **Browser Forensics** | Built-in zero-Node pure-Go CDP screenshot & JS console capture + `-scouts` | None built in (would require bolting on Playwright/Selenium Python processes) |
 
@@ -206,8 +206,8 @@ lemmings \
 ## Locust Gotchas & Pitfalls — Solved Out of the Box by Lemmings
 
 1. **The Python GIL & `HttpUser` CPU Bottleneck ("Why Is My Load Generator at 100% CPU?")**
-   - **Locust pitfall:** Default `HttpUser` uses Python's `requests` library inside one OS process capped to 1 CPU core. Even modest concurrency triggers Locust's infamous `CPU usage above 90%! This may constrain your throughput and may even give inconsistent response time measurements` warning—forcing rewrites to `FastHttpUser` (which subtly alters cookie/TLS/API semantics) and multi-process `--master`/`--worker` orchestration.
-   - **How Lemmings solves it:** Compiled Go goroutines use every CPU core in a single static binary with zero GIL and zero `FastHttpUser` rewrite traps.
+   - **Locust pitfall:** Each Locust OS process is bound to 1 CPU core by Python's GIL, and default `HttpUser` (`requests`) saturates a core quickly—triggering Locust's `CPU usage above 90%` warning. Scaling across cores requires switching to `FastHttpUser` (which alters cookie/TLS/API semantics) and spawning multi-process workers via `--processes -1` (which uses `fork()`, so it is **not supported on Windows**, and splits execution into a non-user-running master + N worker processes) or manual `--master`/`--worker` orchestration.
+   - **How Lemmings solves it:** Compiled Go goroutines saturate every CPU core natively from a single static binary across Linux, macOS, and Windows—with zero GIL, zero multi-process `fork()` overhead, and zero `FastHttpUser` rewrite traps.
 2. **Metrics-Only Web UI with Zero Visual Error Forensics**
    - **Locust pitfall:** Locust's Web UI shows request rate charts and exception counts, but when `/checkout` returns `503` or a `200 OK` broken React page, you have zero screenshot, zero JS console output, zero cookie jar table, and zero parsed error body.
    - **How Lemmings solves it:** Streams live 4-part Chrome CDP Error Forensics cards directly into the Admin Portal, lets you zoom screenshots and inspect cookie health (`InspectingJar`) & JS console errors, and persists `Bug`/`Flaky`/`Expected`/`Ignored` tags into final reports via `-review`.

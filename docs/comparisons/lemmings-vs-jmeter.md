@@ -33,7 +33,8 @@
 | Real-browser Scouts (`-scouts N`) for client-side JS/render crashes | ✅ | ❌ (WebDriver Sampler plugin is heavy & fragile) |
 | Safe live web dashboard & error triage *during* load runs | ✅ (160-sprite capped Admin Portal + `-review`) | ❌ (official docs warn: **never run GUI mode for load tests**) |
 | Self-contained HTML (inline screenshots), GitHub Markdown & JSON reports | ✅ (all 3 + `.artifacts/` built-in) | ✅ (multi-file HTML dashboard via `-e -o`, no Markdown, no screenshots) |
-| Built-in CI pass/fail gates (`exit 2`) & `lemmings compare` diffs | ✅ (CLI flags + `lemmings compare`) | ❌ (JMeter CLI exits `0` even on 100% errors without third-party wrappers/Taurus) |
+| CI pass/fail pipeline gates | ✅ (native CLI flags, `exit 2`) | 🟡 (bolted on via assertions + Jenkins/CI plugin or Taurus; bare CLI exits `0`) |
+| Built-in CLI baseline regression diff (`lemmings compare`) | ✅ (`lemmings compare`, `exit 2`) | ❌ (requires custom `.jtl` diff scripts or external dashboards) |
 | Native virtual waiting-room protocol (Concert queue separation) | ✅ | ❌ |
 | Opt-in same-origin static asset tier (`-assets`, isolated from page SLOs) | ✅ | ✅ ("Retrieve All Embedded Resources", skews sampler time) |
 | Built-in Prometheus `/metrics` scrape exporter (`24` metrics) | ✅ (`-observe`, zero plugins) | ❌ (requires Backend Listener / Prometheus plugin JAR) |
@@ -65,7 +66,7 @@ JMeter's thread-per-user JVM model was designed in an era before Go goroutines, 
 | --- | --- | --- |
 | **Concurrency Model** | Lightweight Go goroutines (few KB stack each); `32 KiB` fixed-size 4096-bin histogram | 1 OS thread per virtual user (~512 KB–1 MB stack + JVM object overhead each) |
 | **Safe Live Inspection** | Scale-proof Admin Portal caps stage at `160` sprites & batches SSE at `5 fps`—identical browser CPU for 10 or 100,000 lemmings | JMeter Swing GUI freezes/OOMs under load; CLI `-n` mode gives only plain stdout summary lines |
-| **CI Pipeline Exit Codes** | Deterministic: `0` pass, `1` config/plan error, `2` SLO gate or `compare` regression breach, `130` interrupted | JMeter CLI exits **`0`** even when 100% of HTTP samplers fail unless wrapped in Taurus/Groovy/custom parsers |
+| **CI Pipeline Exit Codes** | Deterministic: `0` pass, `1` config/plan error, `2` SLO gate or `compare` regression breach, `130` interrupted | Bare JMeter CLI exits **`0`** even on 100% errors; failing a build requires assertions + a Jenkins Performance Plugin, Taurus, or custom `.jtl` parser |
 | **Report Footprint** | Single self-contained HTML + GitHub-ready `.md` + lean `.json` (`schema 2.0`) | Large raw `.jtl` CSV + multi-file HTML directory requiring static web serving |
 
 ### Scale-Proof Live Triage vs. "Don't Use GUI Mode for Load Testing"
@@ -184,9 +185,9 @@ lemmings \
 1. **The Unreviewable `.jmx` XML Merge-Conflict Nightmare**
    - **JMeter pitfall:** Opening a `.jmx` file in the JMeter GUI and clicking one checkbox often reorders XML tags across hundreds of lines—making Git code reviews miserable and causing constant merge conflicts across teammates.
    - **How Lemmings solves it:** Strict, concise YAML (`KnownFields(true)`) that supports either a single `plans:` bundle or a **directory of modular YAML files** (`-plan ./plans/` loaded in lexicographic order like `01-anonymous.yaml`, `02-checkout.yaml`) so teams own personas independently with zero merge conflicts.
-2. **CLI Mode Always Exits `0` Even on 100% Error Outages**
-   - **JMeter pitfall:** Running `jmeter -n -t test.jmx` in GitHub Actions or GitLab CI exits `0` even if 100% of requests failed with HTTP `500`—forcing teams to install Taurus (`bzt`), Jenkins plugins, or fragile `awk`/Python `.jtl` parsers just to fail a broken build.
-   - **How Lemmings solves it:** Built-in CI gates (`-max-failure-rate`, `-p95-budget`, `-min-plan-pass-rate`, `-min-queue-held`, `-max-queue-wait`) return deterministic exit code `2` natively, alongside `lemmings compare` for automated release regression gating.
+2. **Bare CLI Exits `0` Without Bolted-On Pipeline Plugins**
+   - **JMeter pitfall:** You can gate a pipeline with JMeter assertions plus a Jenkins Performance Plugin fail-build step or Taurus (`bzt`), but bare `jmeter -n -t test.jmx` exits `0` even if 100% of requests return HTTP `500`—forcing extra plugins or fragile `.jtl` parsers in GitHub Actions and GitLab CI.
+   - **How Lemmings solves it:** Native CLI CI gates (`-max-failure-rate`, `-p95-budget`, `-min-plan-pass-rate`, `-min-queue-held`, `-max-queue-wait`) return deterministic exit code `2` out of the box with zero plugins, alongside `lemmings compare` for automated release regression gating.
 3. **Forgetting to Add an HTTP Cookie Manager Silently Breaks Sessions**
    - **JMeter pitfall:** By default, JMeter Thread Groups discard `Set-Cookie` headers unless you explicitly remember to add an `HTTP Cookie Manager` element—silently breaking login flows and generating misleading `401`/`302` loops.
    - **How Lemmings solves it:** Every lemming carries an RFC 6265-compliant `InspectingJar` automatically from request #1, with cookie health and HMAC fingerprints recorded in every forensic artifact.
