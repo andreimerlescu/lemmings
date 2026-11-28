@@ -28,8 +28,9 @@
 body { background:var(--bg); color:var(--text); font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
 main { max-width:1160px; margin:0 auto; padding:0 20px 48px; }
 a { color:var(--cyan); }
-code,.mono { font-family:var(--mono); font-size:.9em; }
+code,.mono { font-family:var(--mono); font-size:.9em; overflow-wrap:anywhere; }
 .muted { color:var(--muted); }
+.nowrap { white-space:nowrap; }
 .flip { position:absolute; opacity:0; pointer-events:none; }
 .flip-label { position:absolute; top:14px; right:16px; z-index:2; cursor:pointer; font-size:12px; letter-spacing:.08em;
   text-transform:uppercase; color:#fff; background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.35); border-radius:999px; padding:5px 12px; }
@@ -44,12 +45,13 @@ code,.mono { font-family:var(--mono); font-size:.9em; }
 @keyframes drive { to { background-position:0 32px; } }
 .hero h1 { position:relative; font-size:clamp(40px,8vw,78px); letter-spacing:.12em; font-weight:800; color:#fff;
   text-shadow:var(--glow-pink); font-style:italic; }
-.hero .sub { position:relative; color:#fff; opacity:.92; margin-top:4px; font-size:14px; }
+.hero .sub { position:relative; max-width:820px; margin:6px auto 0; color:#fff; opacity:.95; font-size:14px; text-shadow:0 1px 6px rgba(20,10,40,.45); overflow-wrap:anywhere; }
 .hero .sub a { color:#fff; }
 .hero-pad { height:150px; }
 
 .verdict { margin:-40px auto 24px; position:relative; background:var(--surface); border:1px solid var(--line); border-radius:16px;
-  padding:24px 28px; display:grid; grid-template-columns:auto 1fr; gap:8px 28px; align-items:center; box-shadow:0 18px 50px rgba(20,10,40,.25); }
+  padding:24px 28px; display:grid; grid-template-columns:auto minmax(0,1fr); gap:8px 28px; align-items:center; box-shadow:0 18px 50px rgba(20,10,40,.25); }
+.verdict > * { min-width:0; }
 .verdict .score { font-size:64px; font-weight:800; line-height:1; color:var(--green); text-shadow:var(--glow-green); font-variant-numeric:tabular-nums; }
 .verdict.warn .score { color:var(--yellow); text-shadow:var(--glow-yellow); } .verdict.bad .score { color:var(--red); text-shadow:var(--glow-red); }
 .verdict .score small { display:block; font-size:12px; letter-spacing:.2em; text-transform:uppercase; color:var(--muted); text-shadow:none; margin-top:6px; }
@@ -61,31 +63,52 @@ code,.mono { font-family:var(--mono); font-size:.9em; }
 .integrity-banner strong.banner-title { color:var(--red); display:block; font-size:13px; letter-spacing:.08em; text-transform:uppercase; margin-bottom:4px; }
 .integrity-banner ul { margin:6px 0 0 18px; font-size:14px; }
 
-.kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:28px; }
-@media (max-width:760px) { .kpis { grid-template-columns:repeat(2,1fr); } }
-.kpi { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; }
+.kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:28px; }
+@media (max-width:760px) { .kpis { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+.kpi { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; min-width:0; overflow-wrap:break-word; }
 .kpi span { display:block; font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
 .kpi strong { display:block; font-size:24px; margin-top:4px; font-variant-numeric:tabular-nums; }
-.kpi em { font-style:normal; font-size:12px; color:var(--muted); }
+.kpi em { display:block; font-style:normal; font-size:12px; color:var(--muted); margin-top:2px; }
 h2.section { font-size:13px; letter-spacing:.2em; text-transform:uppercase; color:var(--pink); margin:34px 0 12px; }
-.card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px; }
-.grid-2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:16px; }
-.scroll { overflow-x:auto; }
+.card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px; min-width:0; }
+.grid-2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr)); gap:16px; }
+.grid-2 > div { display:flex; flex-direction:column; min-width:0; }
+.grid-2 > div > .card { flex:1; }
+.scroll { overflow-x:auto; max-width:100%; }
 table { width:100%; border-collapse:collapse; font-size:14px; font-variant-numeric:tabular-nums; }
 th { text-align:left; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--line); }
 td { padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
 tr:last-child td { border-bottom:none; }
 td.num,th.num { text-align:right; white-space:nowrap; }
 td.url { font-family:var(--mono); font-size:13px; overflow-wrap:anywhere; }
-.bar { height:6px; border-radius:3px; background:var(--pink); opacity:.8; min-width:2px; }
-.chip { display:inline-block; font-family:var(--mono); font-size:12px; font-weight:700; padding:1px 7px; border-radius:6px; border:1px solid currentColor; }
+.sub-note { display:inline-block; margin-top:2px; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; font-size:12px; color:var(--muted); overflow-wrap:break-word; }
+.bar-track { height:6px; border-radius:3px; background:var(--surface-2); overflow:hidden; margin-top:8px; }
+.bar { height:100%; border-radius:3px; background:var(--pink); opacity:.85; min-width:3px; }
+.bar-col { width:45%; min-width:80px; }
+.hit-bar { width:84px; min-width:72px; }
+table.kv { table-layout:fixed; width:100%; }
+table.kv td:first-child { width:44%; color:var(--muted); overflow-wrap:break-word; padding-left:0; }
+table.kv td:last-child { width:56%; text-align:right; white-space:normal; overflow-wrap:anywhere; padding-right:0; }
+table.kv-left td:first-child { width:34%; }
+table.kv-left td:last-child { width:66%; text-align:left; }
+table.cause-table { table-layout:fixed; width:100%; }
+table.cause-table th:last-child,table.cause-table td:last-child { width:84px; }
+table.cause-table td:first-child { overflow-wrap:anywhere; }
+.plan-table th,.plan-table td,.paths-table th,.paths-table td { padding:7px 8px; }
+.plan-table td.step-name { min-width:140px; overflow-wrap:break-word; }
+.plan-table td.url { min-width:170px; }
+.plan-table td.fail-col { min-width:100px; overflow-wrap:anywhere; }
+.paths-table td.url { min-width:240px; }
+.tag-list { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:4px; margin-top:5px; }
+.tag-item { display:inline-block; font-family:var(--mono); font-size:11.5px; line-height:1.35; padding:1px 7px; border-radius:6px; background:var(--surface-2); border:1px solid var(--line); color:var(--text); max-width:100%; overflow-wrap:anywhere; }
+.chip { display:inline-block; font-family:var(--mono); font-size:12px; font-weight:700; padding:1px 7px; border-radius:6px; border:1px solid currentColor; white-space:nowrap; }
 .c2xx { color:var(--green); } .c3xx { color:var(--cyan); } .c4xx { color:var(--yellow); } .c5xx { color:var(--red); } .cunknown { color:var(--purple); }
 .m-get,.m-head,.m-options { color:var(--cyan); } .m-post { color:var(--pink); } .m-put,.m-patch { color:var(--yellow); } .m-delete { color:var(--red); }
 .fail-text { color:var(--red); } .warn-text { color:var(--yellow); } .pass-text { color:var(--green); }
 .persona-card { margin-bottom:16px; }
 .persona-card:last-child { margin-bottom:0; }
 .persona-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 14px; margin-bottom:12px; }
-.persona-head h3 { font-size:17px; }
+.persona-head h3 { font-size:17px; overflow-wrap:anywhere; }
 .persona-head .meta { color:var(--muted); font-size:13px; }
 tr.failed td { background:rgba(254,68,80,.07); }
 
@@ -101,22 +124,26 @@ tr.failed td { background:rgba(254,68,80,.07); }
 .legend i { display:inline-block; width:18px; height:3px; border-radius:2px; vertical-align:middle; margin-right:6px; }
 
 .lives { display:grid; gap:16px; }
-.life summary { display:flex; flex-wrap:wrap; gap:6px 14px; align-items:baseline; cursor:pointer; list-style:none; }
+.lives > * { min-width:0; }
+.life summary { position:relative; display:flex; flex-wrap:wrap; gap:6px 14px; align-items:baseline; cursor:pointer; list-style:none; padding-right:26px; }
+.life summary > * { min-width:0; max-width:100%; overflow-wrap:break-word; }
 .life summary::-webkit-details-marker { display:none; }
-.life summary::after { content:"＋"; margin-left:auto; color:var(--muted); } .life[open] summary::after { content:"－"; }
+.life summary::after { content:"＋"; position:absolute; right:0; top:2px; color:var(--muted); } .life[open] summary::after { content:"－"; }
 .life[open] summary { margin-bottom:14px; }
-.steps .page-title { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; font-size:13px; }
-.life h3 { font-size:18px; } .life h3 span { color:var(--pink); }
+.steps .page-title { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; font-size:13px; overflow-wrap:break-word; }
+.life h3 { font-size:18px; overflow-wrap:anywhere; } .life h3 span { color:var(--pink); }
 .life .tag { font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--cyan); }
 .life .meta { color:var(--muted); font-size:13px; }
 .steps td { padding:5px 8px; }
-.steps td.bar-cell { width:30%; }
-.steps .why { color:var(--red); font-size:12px; }
+.steps td.url { min-width:200px; }
+.steps td.bar-cell { width:26%; min-width:90px; }
+.steps .why { color:var(--red); font-size:12px; overflow-wrap:break-word; }
 
 /* ── error forensics & screenshots ──────────────────────────────────────── */
-.pill { display:inline-block; font-size:11px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; padding:2px 8px; border-radius:999px; border:1px solid currentColor; }
+.pill { display:inline-block; font-size:11px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; padding:2px 8px; border-radius:999px; border:1px solid currentColor; max-width:100%; overflow-wrap:anywhere; }
 .rev-unreviewed { color:var(--muted); } .rev-bug { color:var(--red); } .rev-flaky { color:var(--yellow); } .rev-expected { color:var(--cyan); } .rev-ignored { color:var(--purple); }
-.forensic-grid { display:grid; grid-template-columns:minmax(280px,1.1fr) 1fr; gap:16px; margin-top:10px; }
+.forensic-grid { display:grid; grid-template-columns:minmax(280px,1.1fr) minmax(0,1fr); gap:16px; margin-top:10px; }
+.forensic-grid > * { min-width:0; }
 @media (max-width:860px) { .forensic-grid { grid-template-columns:1fr; } }
 .shot-box { background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:10px; }
 .shot-box img { display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--line); }
@@ -141,7 +168,7 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
   <div class="floor" aria-hidden="true"></div>
   <h1>LEMMINGS</h1>
   <p class="sub">
-    <a href="{{.Config.Hit}}">{{.Config.Hit}}</a> · {{.GeneratedAt.Format "2006-01-02 15:04 MST"}} · {{round .Duration}}{{if .Plan}} · plan <strong>{{with planNames .Plan}}{{.}}{{else}}enabled{{end}}</strong>{{end}}
+    <a href="{{.Config.Hit}}">{{.Config.Hit}}</a> · {{.GeneratedAt.Format "2006-01-02 15:04 MST"}} · {{round .Duration}}{{if .Plan}} · plan {{with planSummary .Plan}}<strong{{with planNames $.Plan}} title="{{.}}"{{end}}>{{.}}</strong>{{else}}<strong>enabled</strong>{{end}}{{end}}
   </p>
   <div class="hero-pad"></div>
 </header>
@@ -196,12 +223,12 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
     <span class="meta">{{formatInt .Passed}} / {{formatInt .Lemmings}} passed ({{pct100 .PassRate}}) · {{.TotalSteps}} step{{if ne .TotalSteps 1}}s{{end}}{{if .QueueHeld}} · queued {{formatInt .QueueHeld}} ({{formatInt .QueueAdmitted}} admitted{{if .QueueDied}}, {{formatInt .QueueDied}} died{{end}}, p95 wait {{round .QueueP95Wait}}){{end}}</span>
   </div>
   {{if .Steps}}
-  <div class="scroll"><table>
+  <div class="scroll"><table class="plan-table">
     <tr><th class="num">#</th><th>step</th><th>method</th><th>path</th><th class="num">hits</th><th class="num">passed</th><th class="num">failed</th><th class="num">p50</th><th class="num">p95</th><th class="num">p99</th><th>top failure</th></tr>
     {{range .Steps}}<tr{{if .Failed}} class="failed"{{end}}>
       <td class="num muted">{{.Index}}</td>
-      <td><strong>{{.Name}}</strong></td>
-      <td><span class="chip m-{{methodClass .Method}}">{{.Method}}</span></td>
+      <td class="step-name"><strong>{{.Name}}</strong></td>
+      <td class="nowrap"><span class="chip m-{{methodClass .Method}}">{{.Method}}</span></td>
       <td class="url">{{.Path}}</td>
       <td class="num">{{formatInt .Hits}}</td>
       <td class="num c2xx">{{formatInt .Passed}}</td>
@@ -209,7 +236,7 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
       <td class="num">{{if .Hits}}{{ms .P50}}{{else}}<span class="muted">—</span>{{end}}</td>
       <td class="num">{{if .Hits}}{{ms .P95}}{{else}}<span class="muted">—</span>{{end}}</td>
       <td class="num">{{if .Hits}}{{ms .P99}}{{else}}<span class="muted">—</span>{{end}}</td>
-      <td>{{if .TopFailure}}<span class="fail-text">{{.TopFailure}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+      <td class="fail-col">{{if .TopFailure}}<span class="fail-text">{{.TopFailure}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
     </tr>{{end}}
   </table></div>
   {{end}}
@@ -234,15 +261,15 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
   <div>
     <h2 class="section">Response codes</h2>
     <div class="card"><table>
-      <tr><th>status</th><th class="num">count</th><th></th></tr>
-      {{range .StatusCodes}}<tr><td><span class="chip c{{statusClass (atoi .Label)}}">{{.Label}}</span></td><td class="num">{{formatInt .Count}}</td><td style="width:45%"><div class="bar" style="width:{{width .Share}}"></div></td></tr>
+      <tr><th>status</th><th class="num">count</th><th class="bar-col"></th></tr>
+      {{range .StatusCodes}}<tr><td class="nowrap"><span class="chip c{{statusClass (atoi .Label)}}">{{.Label}}</span></td><td class="num">{{formatInt .Count}}</td><td class="bar-col"><div class="bar-track"><div class="bar" style="width:{{width .Share}}"></div></div></td></tr>
       {{else}}<tr><td colspan="3" class="muted">No visits were recorded.</td></tr>{{end}}
     </table></div>
   </div>
   <div>
     <h2 class="section">What went wrong</h2>
     <div class="card">
-      {{if or .ErrorKinds .FailedChecks}}<table>
+      {{if or .ErrorKinds .FailedChecks}}<table class="cause-table">
         <tr><th>cause</th><th class="num">count</th></tr>
         {{range .ErrorKinds}}<tr><td>error: <code>{{.Label}}</code></td><td class="num">{{formatInt .Count}}</td></tr>{{end}}
         {{range .FailedChecks}}<tr><td>check: <code>{{.Label}}</code></td><td class="num">{{formatInt .Count}}</td></tr>{{end}}
@@ -288,7 +315,7 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
         {{end}}
 
         <div class="subhead">Extracted error page body ({{$a.ErrorBody.Format}})</div>
-        <table>
+        <table class="kv kv-left">
           <tr><td>summary</td><td><strong>{{$a.ErrorBody.Summary}}</strong></td></tr>
           {{if $a.ErrorBody.Title}}<tr><td>title</td><td>{{$a.ErrorBody.Title}}</td></tr>{{end}}
           {{if $a.ErrorBody.ErrorCode}}<tr><td>error code</td><td><code>{{$a.ErrorBody.ErrorCode}}</code></td></tr>{{end}}
@@ -301,7 +328,7 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
 
       <div>
         <div class="subhead">Session state &amp; lemming identity</div>
-        <table>
+        <table class="kv kv-left">
           <tr><td>lemming</td><td><strong>#{{$a.Session.LemmingNumber}}</strong> · {{$a.Session.LemmingName}} (<code>{{shortID $a.Session.LemmingID}}</code>)</td></tr>
           <tr><td>location</td><td>terrain {{$a.Session.Terrain}}, pack {{$a.Session.Pack}} · source: {{$a.Session.Source}}</td></tr>
           <tr><td>persona</td><td>{{$a.Session.Persona}} · {{lang $a.Session.Language}}</td></tr>
@@ -329,7 +356,7 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
         <div class="scroll"><table>
           <tr><th>level</th><th>message</th></tr>
           {{range $a.Console}}<tr>
-            <td class="lvl-{{.Level}}">{{upper .Level}}</td>
+            <td class="lvl-{{.Level}} nowrap">{{upper .Level}}</td>
             <td><code>{{.Text}}</code>{{if .SourceURL}}<br><span class="muted mono">{{.SourceURL}}{{if .Line}}:{{.Line}}{{end}}</span>{{end}}{{if .StackTrace}}<pre class="excerpt">{{.StackTrace}}</pre>{{end}}</td>
           </tr>{{end}}
         </table></div>
@@ -412,10 +439,10 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
     <div class="scroll"><table class="steps">
       {{range .Steps}}<tr{{if .Failed}} class="failed"{{end}}>
         <td class="num muted">{{.Seq}}</td>
-        <td><span class="chip m-{{methodClass .Method}}">{{if .Method}}{{.Method}}{{else}}GET{{end}}</span></td>
+        <td class="nowrap"><span class="chip m-{{methodClass .Method}}">{{if .Method}}{{.Method}}{{else}}GET{{end}}</span></td>
         <td class="url">{{if .Step}}<strong>{{.Step}}</strong> {{end}}{{.Path}}{{if .Title}}<br><span class="muted page-title">{{.Title}}</span>{{end}}{{if .Why}}<br><span class="why">{{.Why}}</span>{{end}}</td>
-        <td>{{if .Status}}<span class="chip c{{statusClass .Status}}">{{.Status}}</span>{{else}}<span class="chip cunknown">—</span>{{end}}</td>
-        <td class="bar-cell"><div class="bar" style="width:{{width .Bar}};{{if .Failed}}background:var(--red){{end}}"></div></td>
+        <td class="nowrap">{{if .Status}}<span class="chip c{{statusClass .Status}}">{{.Status}}</span>{{else}}<span class="chip cunknown">—</span>{{end}}</td>
+        <td class="bar-cell"><div class="bar-track"><div class="bar" style="width:{{width .Bar}};{{if .Failed}}background:var(--red){{end}}"></div></div></td>
         <td class="num">{{float1 .Millis}} ms{{if .QueuedMS}}<br><span class="muted">queued {{float1 .QueuedMS}} ms</span>{{end}}</td>
       </tr>{{end}}
     </table></div>
@@ -426,11 +453,11 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
 {{end}}
 
 <h2 class="section">Per-path breakdown</h2>
-<div class="card scroll"><table>
-  <tr><th>path</th><th class="num">hits</th><th></th><th class="num">p50</th><th class="num">p95</th><th class="num">p99</th><th class="num">2xx</th><th class="num">3xx</th><th class="num">4xx</th><th class="num">5xx</th><th class="num">failed</th><th class="num">bytes</th></tr>
+<div class="card scroll"><table class="paths-table">
+  <tr><th>path</th><th class="num">hits</th><th class="hit-bar"></th><th class="num">p50</th><th class="num">p95</th><th class="num">p99</th><th class="num">2xx</th><th class="num">3xx</th><th class="num">4xx</th><th class="num">5xx</th><th class="num">failed</th><th class="num">bytes</th></tr>
   {{range .Paths}}<tr>
-    <td class="url">{{.URL}}</td><td class="num">{{formatInt .Hits}}</td><td style="width:90px"><div class="bar" style="width:{{width .HitShare}}"></div></td>
-    <td class="num">{{ms .P50}}{{if .ColdHits}}<br><span class="muted">{{if .WarmP50}}warm {{ms .WarmP50}} · {{end}}setup {{ms .SetupP50}} ({{formatInt .ColdHits}} cold)</span>{{end}}</td><td class="num">{{ms .P95}}</td><td class="num">{{ms .P99}}</td>
+    <td class="url">{{.URL}}{{if .ColdHits}}<br><span class="sub-note">{{if .WarmP50}}warm p50 {{ms .WarmP50}} · {{end}}setup {{ms .SetupP50}} ({{formatInt .ColdHits}} cold)</span>{{end}}</td><td class="num">{{formatInt .Hits}}</td><td class="hit-bar"><div class="bar-track"><div class="bar" style="width:{{width .HitShare}}"></div></div></td>
+    <td class="num">{{ms .P50}}</td><td class="num">{{ms .P95}}</td><td class="num">{{ms .P99}}</td>
     <td class="num c2xx">{{formatInt .XX2}}</td><td class="num c3xx">{{formatInt .XX3}}</td><td class="num c4xx">{{formatInt .XX4}}</td><td class="num c5xx">{{formatInt .XX5}}</td>
     <td class="num{{if .Failed}} fail-text{{end}}">{{formatInt .Failed}}</td><td class="num muted">{{.Bytes}}</td>
   </tr>{{end}}
@@ -439,31 +466,31 @@ footer { color:var(--muted); font-size:13px; text-align:center; margin-top:40px;
 <div class="grid-2">
   <div>
     <h2 class="section">Configuration</h2>
-    <div class="card"><table>
-      <tr><td>terrain × pack</td><td class="num">{{formatInt .Config.Terrain}} × {{formatInt .Config.Pack}} = {{formatInt .TotalLemmings}}</td></tr>
-      <tr><td>limit</td><td class="num">{{.Config.Limit}}</td></tr>
-      <tr><td>until · ramp</td><td class="num">{{.Config.Until}} · {{.Config.Ramp}} ({{.Config.RampShape}})</td></tr>
-      <tr><td>think time</td><td class="num">{{.Config.ThinkMin}} – {{.Config.ThinkMax}}</td></tr>
-      <tr><td>navigation</td><td class="num">{{if .Plan}}plan{{with planNames .Plan}} “{{.}}”{{end}}{{else}}{{.Config.Navigation}}{{end}}</td></tr>
-      {{if .Plan}}<tr><td>rogue rate</td><td class="num">{{pct .Plan.RogueRate}}</td></tr>{{end}}
-      <tr><td>assets</td><td class="num">{{if .Config.Assets}}enabled ({{.Config.AssetsPerPage}}/page){{else}}disabled{{end}}</td></tr>
-      <tr><td>forensics capture</td><td class="num">{{.Forensics.Stats.Mode}}{{if .Forensics.Stats.Browser}} ({{.Forensics.Stats.Browser}}){{end}}</td></tr>
-      <tr><td>browser scouts</td><td class="num">{{.Config.Scouts}}</td></tr>
+    <div class="card"><table class="kv">
+      <tr><td>terrain × pack</td><td>{{formatInt .Config.Terrain}} × {{formatInt .Config.Pack}} = {{formatInt .TotalLemmings}}</td></tr>
+      <tr><td>limit</td><td>{{.Config.Limit}}</td></tr>
+      <tr><td>until · ramp</td><td>{{.Config.Until}} · {{.Config.Ramp}} ({{.Config.RampShape}})</td></tr>
+      <tr><td>think time</td><td>{{.Config.ThinkMin}} – {{.Config.ThinkMax}}</td></tr>
+      <tr><td>navigation</td><td>{{if .Plan}}plan{{if .Plan.Personas}}{{if gt (len .Plan.Personas) 1}} <span class="muted">({{len .Plan.Personas}} personas)</span>{{end}}<div class="tag-list">{{range .Plan.Personas}}{{if .Name}}<span class="tag-item">{{.Name}}</span>{{end}}{{end}}</div>{{end}}{{else}}{{.Config.Navigation}}{{end}}</td></tr>
+      {{if .Plan}}<tr><td>rogue rate</td><td>{{pct .Plan.RogueRate}}</td></tr>{{end}}
+      <tr><td>assets</td><td>{{if .Config.Assets}}enabled ({{.Config.AssetsPerPage}}/page){{else}}disabled{{end}}</td></tr>
+      <tr><td>forensics capture</td><td>{{.Forensics.Stats.Mode}}{{if .Forensics.Stats.Browser}} ({{.Forensics.Stats.Browser}}){{end}}</td></tr>
+      <tr><td>browser scouts</td><td>{{.Config.Scouts}}</td></tr>
     </table></div>
   </div>
   <div>
     <h2 class="section">Evidence</h2>
-    <div class="card"><table>
-      <tr><td>schema version</td><td class="num">{{.SchemaVersion}}</td></tr>
+    <div class="card"><table class="kv">
+      <tr><td>schema version</td><td>{{.SchemaVersion}}</td></tr>
       <tr><td>percentiles</td><td>{{.PercentileMethod}}</td></tr>
-      <tr><td>lemmings started</td><td class="num">{{formatInt .LemmingsStarted}}</td></tr>
-      <tr><td>lemmings completed</td><td class="num">{{formatInt .LemmingsCompleted}}</td></tr>
-      <tr><td>lemmings never started</td><td class="num">{{formatInt .LemmingsUnborn}}</td></tr>
-      <tr><td>checksum changes</td><td class="num">{{formatInt .ChecksumChanges}}{{if not .Config.StrictChecksum}} <span class="muted">(informational)</span>{{end}}</td></tr>
-      <tr><td>forensics deduped / dropped</td><td class="num">{{formatInt .Forensics.Stats.Deduplicated}} deduped · {{formatInt .Forensics.Stats.DroppedQueue}} queue · {{formatInt .Forensics.Stats.DroppedCap}} cap</td></tr>
-      <tr><td>life records dropped</td><td class="num{{if .DroppedLogs}} warn-text{{end}}">{{formatInt .DroppedLogs}}</td></tr>
+      <tr><td>lemmings started</td><td>{{formatInt .LemmingsStarted}}</td></tr>
+      <tr><td>lemmings completed</td><td>{{formatInt .LemmingsCompleted}}</td></tr>
+      <tr><td>lemmings never started</td><td>{{formatInt .LemmingsUnborn}}</td></tr>
+      <tr><td>checksum changes</td><td>{{formatInt .ChecksumChanges}}{{if not .Config.StrictChecksum}} <span class="muted">(informational)</span>{{end}}</td></tr>
+      <tr><td>forensics deduped / dropped</td><td>{{formatInt .Forensics.Stats.Deduplicated}} deduped · {{formatInt .Forensics.Stats.DroppedQueue}} queue · {{formatInt .Forensics.Stats.DroppedCap}} cap</td></tr>
+      <tr><td>life records dropped</td><td{{if .DroppedLogs}} class="warn-text"{{end}}>{{formatInt .DroppedLogs}}</td></tr>
       {{if .TraceFile}}<tr><td>trace file</td><td><code>{{.TraceFile}}</code><br>{{formatInt .TraceWritten}} written{{if .TraceDropped}}, <span class="warn-text">{{formatInt .TraceDropped}} dropped</span>{{end}}{{if .TraceError}}<br><span class="fail-text">{{.TraceError}}</span>{{end}}</td></tr>{{end}}
-      {{range .ExitReasons}}<tr><td>left by {{.Label}}</td><td class="num">{{formatInt .Count}}</td></tr>{{end}}
+      {{range .ExitReasons}}<tr><td>left by {{.Label}}</td><td>{{formatInt .Count}}</td></tr>{{end}}
     </table></div>
   </div>
 </div>

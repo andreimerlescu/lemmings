@@ -1760,3 +1760,180 @@ func TestRenderData_PlanExecutionFormatsAndSEC10NoSecretLeak(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanSummary_Formatting(t *testing.T) {
+	tests := []struct {
+		name string
+		in   *PlanReport
+		want string
+	}{
+		{name: "nil plan", in: nil, want: ""},
+		{name: "empty personas", in: &PlanReport{}, want: ""},
+		{name: "blank names ignored", in: &PlanReport{Personas: []PersonaReport{{Name: ""}, {Name: ""}}}, want: ""},
+		{name: "single persona", in: &PlanReport{Personas: []PersonaReport{{Name: "buyer"}}}, want: "buyer"},
+		{name: "three personas inline", in: &PlanReport{Personas: []PersonaReport{{Name: "a"}, {Name: "b"}, {Name: "c"}}}, want: "a, b, c"},
+		{name: "four personas summarized", in: &PlanReport{Personas: []PersonaReport{{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}}}, want: "4 personas"},
+		{name: "ten personas ignores blanks", in: &PlanReport{Personas: []PersonaReport{
+			{Name: "p1"}, {Name: ""}, {Name: "p2"}, {Name: "p3"}, {Name: "p4"},
+		}}, want: "4 personas"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := planSummary(tt.in); got != tt.want {
+				t.Errorf("planSummary(%+v) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderHTML_LayoutOverflowSafetyAndMultiPersonaFormatting(t *testing.T) {
+	personaNames := []string{
+		"future-premium-explorer",
+		"ancient-free-explorer",
+		"press-reader",
+		"manifesto-and-legal",
+		"newsletter-subscriber",
+		"telemetry-api-client",
+		"seo-and-agent-crawler",
+		"admin-auth-guard-prober",
+		"dead-link-404-and-health",
+		"looping-reader",
+	}
+	personas := make([]PersonaReport, 0, len(personaNames))
+	for i, name := range personaNames {
+		personas = append(personas, PersonaReport{
+			Name:       name,
+			Weight:     10,
+			TotalSteps: 1,
+			Lemmings:   int64(i + 1),
+			Passed:     int64(i + 1),
+			PassRate:   100,
+			Steps: []PlanStepReport{{
+				Index:  1,
+				Name:   "step-" + name,
+				Method: "GET",
+				Path:   "/projects/" + name,
+				Hits:   1,
+				Passed: 1,
+				P50:    time.Millisecond,
+				P95:    2 * time.Millisecond,
+				P99:    3 * time.Millisecond,
+			}},
+		})
+	}
+
+	d := Data{
+		SchemaVersion: SchemaVersion,
+		Version:       "2.0.1",
+		GeneratedAt:   time.Date(2026, 11, 28, 4, 25, 2, 0, time.UTC),
+		Duration:      55 * time.Second,
+		Config: swarm.Config{
+			Hit:           "http://127.0.0.1:8080/",
+			Terrain:       6,
+			Pack:          10,
+			Limit:         60,
+			Until:         45 * time.Second,
+			Ramp:          10 * time.Second,
+			RampShape:     "fibonacci",
+			ThinkMin:      300 * time.Millisecond,
+			ThinkMax:      1200 * time.Millisecond,
+			Assets:        true,
+			AssetsPerPage: 12,
+		},
+		TotalLemmings:     60,
+		LemmingsStarted:   60,
+		LemmingsCompleted: 60,
+		Sessions:          60,
+		Rescued:           60,
+		RescuedPercent:    100,
+		PercentileMethod:  "exact (nearest rank)",
+		Plan: &PlanReport{
+			RogueRate:    0.05,
+			PlanLemmings: 57,
+			PlanPassed:   57,
+			PlanPassRate: 100,
+			Personas:     personas,
+		},
+		StatusCodes: []CountRow{{Label: "200", Count: 532, Share: 1.0}},
+		Paths: []PathReport{
+			{
+				URL:      "http://127.0.0.1:8080/",
+				Hits:     86,
+				Bytes:    "10.15 MB",
+				XX2:      86,
+				P50:      1700 * time.Microsecond,
+				P95:      5900 * time.Microsecond,
+				P99:      8200 * time.Microsecond,
+				ColdHits: 49,
+				SetupP50: 560 * time.Microsecond,
+				WarmP50:  1200 * time.Microsecond,
+				HitShare: 1.0,
+			},
+			{
+				URL:      "http://127.0.0.1:8080/projects/graphicle-namespace",
+				Hits:     1,
+				Bytes:    "81.63 KB",
+				XX2:      1,
+				P50:      2100 * time.Microsecond,
+				P95:      2100 * time.Microsecond,
+				P99:      2100 * time.Microsecond,
+				HitShare: 1.0 / 86.0,
+			},
+		},
+		TraceFile:    "/var/log/lemmings/very-long-trace-directory-name/visits-2026-11-28.jsonl",
+		TraceWritten: 532,
+		ExitReasons:  []CountRow{{Label: "plan-complete", Count: 57}, {Label: "lifespan", Count: 3}},
+		Forensics: ForensicsReport{
+			Stats: forensics.Stats{Mode: forensics.ModeCDPReplay, Browser: "Google Chrome"},
+		},
+	}
+
+	rendered, err := RenderData(d, "multi-persona", "127.0.0.1-8080")
+	if err != nil {
+		t.Fatalf("RenderData: %v", err)
+	}
+	html := rendered.HTML
+
+	// Hero summarizes >3 personas cleanly while preserving full list in title tooltip.
+	wantTitle := `title="` + strings.Join(personaNames, ", ") + `"`
+	if !strings.Contains(html, `<strong `+wantTitle+`>10 personas</strong>`) {
+		t.Errorf("hero subtitle missing summarized 10-persona label with full title tooltip")
+	}
+
+	// Configuration & Evidence use fixed KV tables without nowrap td.num on text values.
+	for _, want := range []string{
+		`table.kv { table-layout:fixed; width:100%; }`,
+		`<table class="kv">`,
+		`<table class="paths-table">`,
+		`<div class="tag-list">`,
+		`<span class="tag-item">future-premium-explorer</span>`,
+		`<span class="tag-item">looping-reader</span>`,
+		`<div class="bar-track"><div class="bar"`,
+		`<td class="url">http://127.0.0.1:8080/<br><span class="sub-note">warm p50 1.2 ms · setup 0.56 ms (49 cold)</span></td>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("rendered HTML missing expected formatting markup %q", want)
+		}
+	}
+
+	// Cold/warm note must NOT remain inside the nowrap p50 numeric cell.
+	if strings.Contains(html, `<td class="num">1.7 ms<br>`) {
+		t.Errorf("cold/warm timing note must not live inside nowrap p50 td.num cell")
+	}
+
+	// Configuration navigation cell must NOT use nowrap td.num.
+	if strings.Contains(html, `<tr><td>navigation</td><td class="num">`) {
+		t.Errorf("Configuration navigation cell must not use nowrap td.num")
+	}
+
+	// Verify XSS escaping in hero title attribute and Configuration tag items.
+	const xssName = `evil"><script>alert(1)</script>`
+	d.Plan.Personas[0].Name = xssName
+	escapedOut, err := RenderData(d, "multi-persona-xss", "127.0.0.1-8080")
+	if err != nil {
+		t.Fatalf("RenderData (XSS): %v", err)
+	}
+	if strings.Contains(escapedOut.HTML, xssName) {
+		t.Fatal("XSS payload in persona name appeared unescaped in rendered HTML")
+	}
+}
