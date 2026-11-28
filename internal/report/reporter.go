@@ -1869,9 +1869,39 @@ var templateFuncs = map[string]any{
 	"mdCell":      mdCell,
 	"mdFence":     mdFence,
 	"planNames":   planNames,
+	"planSummary": planSummary,
 	"methodClass": methodClass,
 }
 
+const maxHeroPlanNames = 3
+
+// planNames returns a comma-separated list of all non-empty persona names in pr.
+//
+// # Parameters
+//
+//   - pr: Optional plan execution summary. A nil pointer or empty Personas slice
+//     returns "". The function reads pr without mutating it.
+//
+// # Returns
+//
+// A comma-separated string of non-empty persona names in slice order, or "" if
+// none are present.
+//
+// # Example
+//
+//	names := planNames(&PlanReport{
+//		Personas: []PersonaReport{{Name: "buyer"}, {Name: "browser"}},
+//	})
+//	// names == "buyer, browser"
+//
+// # Used By
+//
+// Generated from repository symbol references; do not edit these lines.
+//
+//   - internal/report/reporter.go:1871 (function value)
+//
+// Scope: current module, including tests; build configuration: darwin/arm64,
+// default tags. Also invoked by name inside report.html.tmpl and report.md.tmpl.
 func planNames(pr *PlanReport) string {
 	if pr == nil || len(pr.Personas) == 0 {
 		return ""
@@ -1881,6 +1911,58 @@ func planNames(pr *PlanReport) string {
 		if p.Name != "" {
 			names = append(names, p.Name)
 		}
+	}
+	return strings.Join(names, ", ")
+}
+
+// planSummary returns a compact plan label for constrained header regions such
+// as the HTML report hero subtitle. Up to maxHeroPlanNames non-empty persona
+// names are joined inline; larger suites are summarized as "<N> personas" so
+// the header remains readable while full persona lists appear in the body.
+//
+// # Parameters
+//
+//   - pr: Optional plan execution summary. A nil pointer or slice with no
+//     non-empty persona names returns "". The function reads pr without mutating it.
+//
+// # Returns
+//
+// The comma-separated persona names when at most maxHeroPlanNames are present,
+// "<N> personas" when more than maxHeroPlanNames are present, or "" when none.
+//
+// # Example
+//
+//	summary := planSummary(&PlanReport{
+//		Personas: []PersonaReport{{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}},
+//	})
+//	// summary == "4 personas"
+//
+// # Used By
+//
+// Generated from repository symbol references; do not edit these lines.
+//
+//   - internal/report/report_test.go:1782 (direct call)
+//   - internal/report/reporter.go:1872 (function value)
+//
+// Scope: current module, including tests; build configuration: darwin/arm64,
+// default tags. Also invoked by name inside report.html.tmpl.
+func planSummary(pr *PlanReport) string {
+	if pr == nil || len(pr.Personas) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(pr.Personas))
+	for _, p := range pr.Personas {
+		if p.Name != "" {
+			names = append(names, p.Name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	// Summarize larger persona suites so multi-persona runs do not wrap into
+	// multi-line paragraphs over the hero banner.
+	if len(names) > maxHeroPlanNames {
+		return fmt.Sprintf("%d personas", len(names))
 	}
 	return strings.Join(names, ", ")
 }
